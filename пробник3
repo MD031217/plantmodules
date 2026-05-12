@@ -59,273 +59,211 @@ bool timeSynced = false;
 
 // ==================== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ====================
 String formatTime(time_t t, bool showSeconds = false) {
-if (!timeSynced || t < 1700000000) {
-if (bootTime == 0) bootTime = millis() / 1000;
-unsigned long uptime = (millis() / 1000) - bootTime;
-int days = uptime / 86400;
-int hours = (uptime % 86400) / 3600;
-int mins = (uptime % 3600) / 60;
-int secs = uptime % 60;
-char buf[32];
-if (days > 0) sprintf(buf, "UP %dd %02d:%02d", days, hours, mins);
-else if (showSeconds) sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
-else sprintf(buf, "UP %02d:%02d", hours, mins);
-return String(buf);
-}
-struct tm timeinfo;
-if (localtime_r(&t, &timeinfo)) {
-char buf[20];
-if (showSeconds) strftime(buf, sizeof(buf), "%d.%m %H:%M:%S", &timeinfo);
-else strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
-return String(buf);
-}
-return "??.?? ??:??";
+  if (!timeSynced || t < 1700000000) {
+    if (bootTime == 0) bootTime = millis() / 1000;
+    unsigned long uptime = (millis() / 1000) - bootTime;
+    int days = uptime / 86400;
+    int hours = (uptime % 86400) / 3600;
+    int mins = (uptime % 3600) / 60;
+    int secs = uptime % 60;
+    char buf[32];
+    if (days > 0) sprintf(buf, "UP %dd %02d:%02d", days, hours, mins);
+    else if (showSeconds) sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
+    else sprintf(buf, "UP %02d:%02d", hours, mins);
+    return String(buf);
+  }
+  struct tm timeinfo;
+  if (localtime_r(&t, &timeinfo)) {
+    char buf[20];
+    if (showSeconds) strftime(buf, sizeof(buf), "%d.%m %H:%M:%S", &timeinfo);
+    else strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+    return String(buf);
+  }
+  return "??.?? ??:??";
 }
 
 // ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
 void initDB() {
-Serial.println("=== Инициализация SQLite БД ===");
-if (!LittleFS.exists("/")) {
-Serial.println("Ошибка: LittleFS не смонтирован!");
-return;
-}
-sqlite3_initialize();
-const char* dbPath = DB_FILE;
-Serial.printf("Попытка открытия БД: %s\n", dbPath);
-rc = sqlite3_open(dbPath, &db);
-if (rc != SQLITE_OK) {
-Serial.printf("Ошибка открытия БД: %d\n", rc);
-Serial.printf("Сообщение: %s\n", sqlite3_errmsg(db));
-db = nullptr;
-return;
-}
-Serial.println("БД успешно открыта");
-String sql = "CREATE TABLE IF NOT EXISTS SensorLog ("
-"ID INTEGER PRIMARY KEY AUTOINCREMENT, "
-"ts INTEGER NOT NULL, "
-"time TEXT, "
-"temp REAL, "
-"hum REAL, "
-"soil REAL, "
-"pressure REAL);";
-Serial.println("Создание таблицы SensorLog...");
-rc = sqlite3_exec(db, sql.c_str(), NULL, NULL, &zErrMsg);
-if (rc != SQLITE_OK) {
-Serial.printf("Ошибка создания таблицы: %s\n", zErrMsg);
-sqlite3_free(zErrMsg);
-} else {
-Serial.println("Таблица создана/проверена");
-}
-testDBWrite();
+  Serial.println("=== Инициализация SQLite БД ===");
+  if (!LittleFS.exists("/")) { Serial.println("Ошибка: LittleFS не смонтирован!"); return; }
+  sqlite3_initialize();
+  rc = sqlite3_open(DB_FILE, &db);
+  if (rc != SQLITE_OK) { Serial.printf("Ошибка БД: %d\n", rc); db = nullptr; return; }
+  Serial.println("БД открыта");
+  String sql = "CREATE TABLE IF NOT EXISTS SensorLog (ID INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, time TEXT, temp REAL, hum REAL, soil REAL, pressure REAL);";
+  rc = sqlite3_exec(db, sql.c_str(), NULL, NULL, &zErrMsg);
+  if (rc != SQLITE_OK) { Serial.printf("Ошибка таблицы: %s\n", zErrMsg); sqlite3_free(zErrMsg); }
+  testDBWrite();
 }
 
 void testDBWrite() {
-if (!db) return;
-String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
-rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
-if (rc == SQLITE_OK) {
-sqlite3_bind_int(res, 1, (int)time(nullptr));
-sqlite3_bind_text(res, 2, "TEST", -1, SQLITE_TRANSIENT);
-sqlite3_bind_double(res, 3, 25.0);
-sqlite3_bind_double(res, 4, 50.0);
-sqlite3_bind_double(res, 5, 75.0);
-sqlite3_bind_double(res, 6, 760.0);
-rc = sqlite3_step(res);
-if (rc == SQLITE_DONE) {
-Serial.println("Тестовая запись успешно добавлена");
-} else {
-Serial.printf("Ошибка тестовой записи: %d\n", rc);
-}
-sqlite3_finalize(res);
-sqlite3_exec(db, "DELETE FROM SensorLog WHERE time='TEST';", NULL, NULL, NULL);
-} else {
-Serial.printf("Ошибка подготовки тестового запроса: %s\n", sqlite3_errmsg(db));
-}
+  if (!db) return;
+  String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
+  rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_int(res, 1, (int)time(nullptr));
+    sqlite3_bind_text(res, 2, "TEST", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(res, 3, 25.0); sqlite3_bind_double(res, 4, 50.0);
+    sqlite3_bind_double(res, 5, 75.0); sqlite3_bind_double(res, 6, 760.0);
+    rc = sqlite3_step(res);
+    if (rc == SQLITE_DONE) Serial.println("Тестовая запись добавлена");
+    sqlite3_finalize(res);
+    sqlite3_exec(db, "DELETE FROM SensorLog WHERE time='TEST';", NULL, NULL, NULL);
+  }
 }
 
 // ==================== ЗАПИСЬ В БАЗУ ДАННЫХ ====================
 void logToDB(int soil, int hum, int temp, int press) {
-if (!db) {
-Serial.println("БД недоступна, запись пропущена");
-return;
-}
-time_t now = time(nullptr);
-String timeStr = formatTime(now, true);
-String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
-rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
-if (rc == SQLITE_OK) {
-sqlite3_bind_int(res, 1, (int)now);
-sqlite3_bind_text(res, 2, timeStr.c_str(), timeStr.length(), SQLITE_TRANSIENT);
-sqlite3_bind_double(res, 3, temp);
-sqlite3_bind_double(res, 4, hum);
-sqlite3_bind_double(res, 5, soil);
-sqlite3_bind_double(res, 6, press);
-rc = sqlite3_step(res);
-if (rc != SQLITE_DONE) {
-Serial.printf("Ошибка записи в БД: %d\n", rc);
-}
-sqlite3_finalize(res);
-} else {
-Serial.printf("Ошибка подготовки запроса: %s\n", sqlite3_errmsg(db));
-}
+  if (!db) return;
+  time_t now = time(nullptr);
+  String timeStr = formatTime(now, true);
+  String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
+  rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_int(res, 1, (int)now);
+    sqlite3_bind_text(res, 2, timeStr.c_str(), timeStr.length(), SQLITE_TRANSIENT);
+    sqlite3_bind_double(res, 3, temp); sqlite3_bind_double(res, 4, hum);
+    sqlite3_bind_double(res, 5, soil); sqlite3_bind_double(res, 6, press);
+    rc = sqlite3_step(res);
+    sqlite3_finalize(res);
+  }
 }
 
 // ==================== ЧТЕНИЕ ИЗ БАЗЫ ДАННЫХ ====================
 String readHistoryFromDB(int periodSeconds, int limitCount, time_t customStart = 0, time_t customEnd = 0) {
-if (!db) return "[]";
-DynamicJsonDocument doc(32768);
-JsonArray arr = doc.to<JsonArray>();
-String sql = "SELECT ts, time, temp, hum, soil, pressure FROM SensorLog";
-if (periodSeconds > 0) {
-time_t now = time(nullptr);
-time_t cutoff = now - periodSeconds;
-sql += " WHERE ts >= " + String(cutoff);
-} else if (customStart > 0 && customEnd > 0) {
-sql += " WHERE ts >= " + String(customStart) + " AND ts <= " + String(customEnd);
-}
-sql += " ORDER BY ts ASC";
-if (limitCount > 0) {
-sql += " LIMIT " + String(limitCount);
-}
-rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
-if (rc == SQLITE_OK) {
-int count = 0;
-while (sqlite3_step(res) == SQLITE_ROW) {
-JsonObject entry = arr.createNestedObject();
-entry["ts"] = sqlite3_column_int(res, 0);
-const char* t = (const char*)sqlite3_column_text(res, 1);
-entry["time"] = t ? String(t) : "";
-entry["temp"] = sqlite3_column_double(res, 2);
-entry["hum"] = sqlite3_column_double(res, 3);
-entry["soil"] = sqlite3_column_double(res, 4);
-entry["pressure"] = sqlite3_column_double(res, 5);
-count++;
-}
-sqlite3_finalize(res);
-Serial.printf("Прочитано %d записей из БД\n", count);
-} else {
-Serial.printf("Ошибка чтения из БД: %s\n", sqlite3_errmsg(db));
-}
-String out;
-serializeJson(arr, out);
-return out;
-}
-void clearDB() {
-if (db) {
-sqlite3_exec(db, "DELETE FROM SensorLog;", NULL, NULL, &zErrMsg);
-sqlite3_free(zErrMsg);
-Serial.println("БД очищена");
-}
+  if (!db) return "[]";
+  DynamicJsonDocument doc(32768);
+  JsonArray arr = doc.to<JsonArray>();
+  String sql = "SELECT ts, time, temp, hum, soil, pressure FROM SensorLog";
+  if (periodSeconds > 0) { sql += " WHERE ts >= " + String(time(nullptr) - periodSeconds); }
+  else if (customStart > 0 && customEnd > 0) { sql += " WHERE ts >= " + String(customStart) + " AND ts <= " + String(customEnd); }
+  sql += " ORDER BY ts ASC";
+  if (limitCount > 0) sql += " LIMIT " + String(limitCount);
+  
+  rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    while (sqlite3_step(res) == SQLITE_ROW) {
+      JsonObject entry = arr.createNestedObject();
+      entry["ts"] = sqlite3_column_int(res, 0);
+      const char* t = (const char*)sqlite3_column_text(res, 1);
+      entry["time"] = t ? String(t) : "";
+      entry["temp"] = sqlite3_column_double(res, 2);
+      entry["hum"] = sqlite3_column_double(res, 3);
+      entry["soil"] = sqlite3_column_double(res, 4);
+      entry["pressure"] = sqlite3_column_double(res, 5);
+    }
+    sqlite3_finalize(res);
+  }
+  String out; serializeJson(arr, out); return out;
 }
 
-// ==================== ДОБАВЛЕНО: ОБРАБОТЧИКИ АВТОРИЗАЦИИ И РАСТЕНИЙ ====================
+void clearDB() {
+  if (db) { sqlite3_exec(db, "DELETE FROM SensorLog;", NULL, NULL, &zErrMsg); sqlite3_free(zErrMsg); }
+}
+
+// ==================== ИСПРАВЛЕНО: АВТОРИЗАЦИЯ И РАСТЕНИЯ (ArduinoJson v7) ====================
 void preSeedPlants() {
   if (LittleFS.exists(PLANTS_FILE)) return;
   DynamicJsonDocument doc(4096);
   JsonArray arr = doc.to<JsonArray>();
-  JsonObject m = arr.add<JsonObject>();
-  m["name"] = "Monstera"; m["displayName"] = "Монстера"; m["temp"] = JsonArray(); m["temp"].add(20); m["temp"].add(25);
-  m["hum"] = JsonArray(); m["hum"].add(60); m["hum"].add(80); m["soil"] = JsonArray(); m["soil"].add(40); m["soil"].add(70);
-  m["press"] = JsonArray(); m["press"].add(740); m["press"].add(770);
-  JsonObject c = arr.add<JsonObject>();
-  c["name"] = "Cactus"; c["displayName"] = "Кактус"; c["temp"] = JsonArray(); c["temp"].add(20); c["temp"].add(30);
-  c["hum"] = JsonArray(); c["hum"].add(20); c["hum"].add(40); c["soil"] = JsonArray(); c["soil"].add(10); c["soil"].add(30);
-  c["press"] = JsonArray(); c["press"].add(740); c["press"].add(770);
-  File f = LittleFS.open(PLANTS_FILE, "w");
-  serializeJson(arr, f);
-  f.close();
+
+  JsonObject m = arr.createNestedObject();
+  m["name"] = "Monstera"; m["displayName"] = "Монстера";
+  JsonArray t1 = m["temp"].to<JsonArray>(); t1.add(20); t1.add(25);
+  JsonArray h1 = m["hum"].to<JsonArray>(); h1.add(60); h1.add(80);
+  JsonArray s1 = m["soil"].to<JsonArray>(); s1.add(40); s1.add(70);
+  JsonArray p1 = m["press"].to<JsonArray>(); p1.add(740); p1.add(770);
+
+  JsonObject c = arr.createNestedObject();
+  c["name"] = "Cactus"; c["displayName"] = "Кактус";
+  JsonArray t2 = c["temp"].to<JsonArray>(); t2.add(20); t2.add(30);
+  JsonArray h2 = c["hum"].to<JsonArray>(); h2.add(20); h2.add(40);
+  JsonArray s2 = c["soil"].to<JsonArray>(); s2.add(10); s2.add(30);
+  JsonArray p2 = c["press"].to<JsonArray>(); p2.add(740); p2.add(770);
+
+  File f = LittleFS.open(PLANTS_FILE, "w"); serializeJson(arr, f); f.close();
 }
 
 void handleAuthRegister() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "Method not allowed"); return; }
-  String json = server.arg("plain");
   DynamicJsonDocument doc(256);
-  DeserializationError err = deserializeJson(doc, json);
-  if (err || !doc["username"] || !doc["password"]) { server.send(400, "text/plain", "Invalid data"); return; }
-  String u = doc["username"].as<String>();
-  String p = doc["password"].as<String>();
-
-  File f = LittleFS.open(USERS_FILE, "r");
+  if (deserializeJson(doc, server.arg("plain")) || !doc["username"] || !doc["password"]) { server.send(400, "text/plain", "Invalid"); return; }
+  String u = doc["username"].as<String>(), p = doc["password"].as<String>();
+  
   DynamicJsonDocument usersDoc(1024);
+  File f = LittleFS.open(USERS_FILE, "r");
   if (f) { deserializeJson(usersDoc, f); f.close(); } else { usersDoc["users"] = JsonArray(); }
-
-  for (JsonObject usr : usersDoc["users"].as<JsonArray>()) {
-    if (usr["username"].as<String>() == u) { server.send(409, "text/plain", "User exists"); return; }
-  }
-  JsonObject newUser = usersDoc["users"].as<JsonArray>().add<JsonObject>();
-  newUser["username"] = u; newUser["password"] = p;
-  f = LittleFS.open(USERS_FILE, "w");
-  serializeJson(usersDoc, f); f.close();
+  
+  JsonArray users = usersDoc["users"].as<JsonArray>();
+  for (JsonObject usr : users) if (usr["username"].as<String>() == u) { server.send(409, "text/plain", "Exists"); return; }
+  
+  JsonObject nu = users.add<JsonObject>(); nu["username"] = u; nu["password"] = p;
+  f = LittleFS.open(USERS_FILE, "w"); serializeJson(usersDoc, f); f.close();
   server.send(200, "text/plain", "OK");
 }
 
 void handleAuthLogin() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "Method not allowed"); return; }
-  String json = server.arg("plain");
   DynamicJsonDocument doc(256);
-  if (deserializeJson(doc, json)) { server.send(400, "text/plain", "Invalid"); return; }
-  String u = doc["username"].as<String>();
-  String p = doc["password"].as<String>();
+  if (deserializeJson(doc, server.arg("plain"))) { server.send(400, "text/plain", "Invalid"); return; }
+  String u = doc["username"].as<String>(), p = doc["password"].as<String>();
+  
   File f = LittleFS.open(USERS_FILE, "r");
-  if (!f) { server.send(401, "text/plain", "Unauthorized"); return; }
-  DynamicJsonDocument usersDoc(1024);
-  deserializeJson(usersDoc, f); f.close();
+  if (!f) { server.send(401, "text/plain", "No users"); return; }
+  DynamicJsonDocument usersDoc(1024); deserializeJson(usersDoc, f); f.close();
+  
   for (JsonObject usr : usersDoc["users"].as<JsonArray>()) {
-    if (usr["username"].as<String>() == u && usr["password"].as<String>() == p) {
-      server.send(200, "text/plain", "OK"); return;
-    }
+    if (usr["username"].as<String>() == u && usr["password"].as<String>() == p) { server.send(200, "text/plain", "OK"); return; }
   }
   server.send(401, "text/plain", "Bad credentials");
-}
-
-void handleAuthStatus() {
-  server.send(200, "application/json", "{\"logged\": false}"); // Клиент сам хранит сессию, сервер отдаёт статус
 }
 
 void handlePlantsLoad() {
   preSeedPlants();
   if (!LittleFS.exists(PLANTS_FILE)) { server.send(200, "application/json", "[]"); return; }
   File f = LittleFS.open(PLANTS_FILE, "r");
-  String out = f.readString(); f.close();
+  DynamicJsonDocument doc(4096);
+  if (f) { deserializeJson(doc, f); f.close(); }
+  String out; serializeJson(doc, out);
   server.send(200, "application/json", out);
 }
 
 void handlePlantsSave() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "Method not allowed"); return; }
-  String json = server.arg("plain");
-  DynamicJsonDocument doc(512);
-  if (deserializeJson(doc, json)) { server.send(400, "text/plain", "Invalid"); return; }
-  
-  File f = LittleFS.open(PLANTS_FILE, "r");
+  DynamicJsonDocument newPlantDoc(512);
+  if (deserializeJson(newPlantDoc, server.arg("plain"))) { server.send(400, "text/plain", "Invalid JSON"); return; }
+  String newName = newPlantDoc["name"].as<String>();
+  if (newName.isEmpty()) { server.send(400, "text/plain", "Missing name"); return; }
+
   DynamicJsonDocument plantsDoc(4096);
-  JsonArray arr;
-  if (f) { arr = plantsDoc.set(deserializeJson(plantsDoc, f) ? doc.to<JsonArray>() : f); f.close(); }
-  else { arr = plantsDoc.to<JsonArray>(); }
+  File f = LittleFS.open(PLANTS_FILE, "r");
+  if (f) { deserializeJson(plantsDoc, f); f.close(); }
   
-  // Проверка на дубликаты имени
-  for (JsonObject p : arr) {
-    if (p["name"].as<String>() == doc["name"].as<String>()) { server.send(409, "text/plain", "Plant name taken"); return; }
-  }
-  arr.add(doc);
+  JsonArray arr = plantsDoc.as<JsonArray>();
+  if (!arr) arr = plantsDoc.to<JsonArray>();
+
+  for (JsonObject p : arr) if (p["name"].as<String>() == newName) { server.send(409, "text/plain", "Name taken"); return; }
+
+  arr.add(newPlantDoc.as<JsonObject>());
   f = LittleFS.open(PLANTS_FILE, "w");
-  serializeJson(arr, f); f.close();
-  server.send(200, "text/plain", "OK");
+  if (f) { serializeJson(arr, f); f.close(); server.send(200, "text/plain", "OK"); }
+  else server.send(500, "text/plain", "File error");
 }
 
 void handlePlantsDelete() {
   if (server.method() != HTTP_DELETE) { server.send(405, "text/plain", "Method not allowed"); return; }
   String name = server.arg("name");
-  File f = LittleFS.open(PLANTS_FILE, "r");
   DynamicJsonDocument plantsDoc(4096);
+  File f = LittleFS.open(PLANTS_FILE, "r");
   JsonArray arr = plantsDoc.to<JsonArray>();
-  if (f) { deserializeJson(plantsDoc, f); f.close(); }
+  if (f) { deserializeJson(plantsDoc, f); f.close(); arr = plantsDoc.as<JsonArray>(); }
+  if (!arr) arr = plantsDoc.to<JsonArray>();
+
+  DynamicJsonDocument filtered(4096);
+  JsonArray newArr = filtered.to<JsonArray>();
+  for (JsonObject p : arr) if (p["name"].as<String>() != name) newArr.add(p);
   
-  JsonArray newArr = plantsDoc.add<JsonArray>(); // temporary
-  for (JsonObject p : arr) {
-    if (p["name"].as<String>() != name) newArr.add(p);
-  }
-  f = LittleFS.open(PLANTS_FILE, "w");
-  serializeJson(newArr, f); f.close();
+  f = LittleFS.open(PLANTS_FILE, "w"); if (f) { serializeJson(filtered, f); f.close(); }
   server.send(200, "text/plain", "OK");
 }
 // ===============================================================================
@@ -351,36 +289,16 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 --border: #334155; --shadow: 0 4px 20px rgba(0,0,0,0.4);
 --primary: #22c55e; --primary-dark: #16a34a; --accent: #60a5fa;
 }
-body {
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-background: var(--bg); color: var(--text);
-transition: background 0.3s ease, color 0.3s ease;
-min-height: 100vh; line-height: 1.5;
-}
-.theme-toggle {
-position: fixed; top: 12px; right: 12px; z-index: 100;
-width: 40px; height: 40px; border: none; border-radius: 12px;
-background: var(--card); box-shadow: var(--shadow);
-cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
-transition: transform 0.2s, background 0.3s ease, color 0.3s ease;
-color: var(--text);
-}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); transition: background 0.3s ease, color 0.3s ease; min-height: 100vh; line-height: 1.5; }
+.theme-toggle { position: fixed; top: 12px; right: 12px; z-index: 100; width: 40px; height: 40px; border: none; border-radius: 12px; background: var(--card); box-shadow: var(--shadow); cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: transform 0.2s, background 0.3s ease, color 0.3s ease; color: var(--text); }
 .theme-toggle:active { transform: scale(0.95); }
-header {
-padding: 16px 20px; text-align: center;
-font-size: 18px; font-weight: 600; color: var(--primary);
-background: var(--card); box-shadow: var(--shadow);
-position: sticky; top: 0; z-index: 50;
-display: flex; align-items: center; justify-content: center; gap: 8px;
-transition: background 0.3s ease;
-}
+header { padding: 16px 20px; text-align: center; font-size: 18px; font-weight: 600; color: var(--primary); background: var(--card); box-shadow: var(--shadow); position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.3s ease; }
 header .status { font-size: 12px; color: var(--text2); font-weight: 400; }
 header .sync-status { font-size: 10px; color: var(--success); margin-left: 4px; }
 header .sync-status.error { color: var(--danger); }
 header .action-btn { font-size: 12px; color: var(--text2); border-bottom: 1px dashed var(--text2); cursor: pointer; transition: color 0.2s; margin-left: 8px; }
 header .action-btn:hover { color: var(--primary); border-color: var(--primary); }
 header .logout-btn { color: var(--danger); border-color: var(--danger); }
-header .logout-btn:hover { color: var(--danger); border-color: var(--danger); background: rgba(239,68,68,0.05); }
 .tabs { display: flex; justify-content: center; gap: 6px; padding: 10px; background: var(--card); border-bottom: 1px solid var(--border); position: sticky; top: 56px; z-index: 45; transition: background 0.3s ease; }
 .tab { padding: 8px 16px; border: none; background: transparent; color: var(--text2); cursor: pointer; border-radius: 10px; font-size: 14px; font-weight: 500; transition: all 0.2s; }
 .tab:hover { background: rgba(16,185,129,0.1); color: var(--primary); }
@@ -437,15 +355,8 @@ canvas { width: 100%; height: 100%; display: block; }
 .y-axis-label { position: absolute; left: 5px; top: 50%; transform: translateY(-50%) rotate(-90deg); font-size: 11px; font-weight: 600; color: var(--text); pointer-events: none; white-space: nowrap; letter-spacing: 1px; }
 .y-axis-values { position: absolute; left: 15px; top: 0; bottom: 40px; display: flex; flex-direction: column; justify-content: space-between; padding: 25px 0; pointer-events: none; }
 .y-axis-value { font-size: 10px; color: var(--text2); text-align: right; font-family: 'Courier New', monospace; }
-@media (max-width: 500px) {
-.metrics-grid { grid-template-columns: 1fr; }
-.history-header, .chart-header { flex-direction: column; align-items: flex-start; }
-.filter-group, .chart-filters { width: 100%; justify-content: center; }
-.history-values { flex-direction: column; gap: 4px; }
-.history-time { min-width: 95px; font-size: 12px; }
-}
+@media (max-width: 500px) { .metrics-grid { grid-template-columns: 1fr; } .history-header, .chart-header { flex-direction: column; align-items: flex-start; } .filter-group, .chart-filters { width: 100%; justify-content: center; } .history-values { flex-direction: column; gap: 4px; } .history-time { min-width: 95px; font-size: 12px; } }
 
-/* === АВТОРИЗАЦИЯ И РАСТЕНИЯ === */
 .overlay { position: fixed; inset: 0; z-index: 9999; background: var(--bg); display: none; align-items: center; justify-content: center; padding: 20px; }
 .overlay-card { background: var(--card); padding: 24px; border-radius: 20px; box-shadow: var(--shadow); max-width: 600px; width: 100%; border: 1px solid var(--border); }
 .overlay h2 { text-align: center; color: var(--primary); margin-bottom: 16px; }
@@ -478,7 +389,6 @@ canvas { width: 100%; height: 100%; display: block; }
 </head>
 <body>
 
-<!-- === АВТОРИЗАЦИЯ === -->
 <div id="authView" class="overlay">
   <div class="overlay-card">
     <h2 id="authTitle">Вход</h2>
@@ -490,7 +400,6 @@ canvas { width: 100%; height: 100%; display: block; }
   </div>
 </div>
 
-<!-- === ВЫБОР РАСТЕНИЯ === -->
 <div id="plantView" class="overlay">
   <div class="overlay-card">
     <h2>Выберите растение</h2>
@@ -568,161 +477,127 @@ canvas { width: 100%; height: 100%; display: block; }
 </div></div></div>
 </div>
 <script>
-let chartData = [];
-let currentHistoryPeriod = 0, currentHistoryLimit = 20, currentChartPeriod = 0, currentChartLimit = 20;
-let visibleMetrics = { temp: true, hum: true, soil: true, pressure: true };
-let currentChartMode = 'all', serverTimeOffset = 0, historyCustomStart = 0, historyCustomEnd = 0, chartCustomStart = 0, chartCustomEnd = 0;
-const UPDATE_INTERVAL = 10000;
-let plantConfig = null;
+let chartData=[], currentHistoryPeriod=0, currentHistoryLimit=20, currentChartPeriod=0, currentChartLimit=20;
+let visibleMetrics={temp:true,hum:true,soil:true,pressure:true}, currentChartMode='all', serverTimeOffset=0;
+let historyCustomStart=0,historyCustomEnd=0,chartCustomStart=0,chartCustomEnd=0;
+const UPDATE_INTERVAL=10000; let plantConfig=null;
 
-document.addEventListener('DOMContentLoaded', () => {
-  initTheme(); initTabs(); initHistoryFilters(); initChartFilters(); initLegend(); initClearButton();
-  initHistoryCustomRange(); initChartCustomRange(); initChart();
-  checkAuth();
-  document.getElementById('authBtn').addEventListener('click', handleAuthAction);
-  document.getElementById('authToggle').addEventListener('click', toggleAuthMode);
-  document.getElementById('savePlantBtn').addEventListener('click', saveCustomPlant);
-  document.getElementById('changePlantBtn').addEventListener('click', showPlantView);
-  document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+document.addEventListener('DOMContentLoaded',()=>{
+  initTheme();initTabs();initHistoryFilters();initChartFilters();initLegend();initClearButton();
+  initHistoryCustomRange();initChartCustomRange();initChart();checkAuth();
+  document.getElementById('authBtn').addEventListener('click',handleAuthAction);
+  document.getElementById('authToggle').addEventListener('click',toggleAuthMode);
+  document.getElementById('savePlantBtn').addEventListener('click',saveCustomPlant);
+  document.getElementById('changePlantBtn').addEventListener('click',showPlantView);
+  document.getElementById('logoutBtn').addEventListener('click',handleLogout);
 });
 
-// === АВТОРИЗАЦИЯ ===
-let isRegisterMode = false;
-function checkAuth() {
-  if (sessionStorage.getItem('logged') === 'true') {
-    document.getElementById('authView').style.display = 'none';
-    document.getElementById('changePlantBtn').style.display = 'inline';
-    document.getElementById('logoutBtn').style.display = 'inline';
+let isRegisterMode=false;
+function checkAuth(){
+  if(sessionStorage.getItem('logged')==='true'){
+    document.getElementById('authView').style.display='none';
+    document.getElementById('changePlantBtn').style.display='inline';
+    document.getElementById('logoutBtn').style.display='inline';
     loadPlants();
-  } else {
-    document.getElementById('authView').style.display = 'flex';
-  }
+  }else document.getElementById('authView').style.display='flex';
 }
-function toggleAuthMode() {
-  isRegisterMode = !isRegisterMode;
-  document.getElementById('authTitle').textContent = isRegisterMode ? 'Регистрация' : 'Вход';
-  document.getElementById('authBtn').textContent = isRegisterMode ? 'Зарегистрироваться' : 'Войти';
-  document.getElementById('authToggle').textContent = isRegisterMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться';
-  document.getElementById('authError').textContent = '';
+function toggleAuthMode(){
+  isRegisterMode=!isRegisterMode;
+  document.getElementById('authTitle').textContent=isRegisterMode?'Регистрация':'Вход';
+  document.getElementById('authBtn').textContent=isRegisterMode?'Зарегистрироваться':'Войти';
+  document.getElementById('authToggle').textContent=isRegisterMode?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться';
+  document.getElementById('authError').textContent='';
 }
-async function handleAuthAction() {
-  const u = document.getElementById('authUser').value.trim();
-  const p = document.getElementById('authPass').value;
-  const errEl = document.getElementById('authError');
-  if (!u || !p) { errEl.textContent = 'Заполните все поля'; return; }
-  errEl.textContent = 'Проверка...';
-  const btn = document.getElementById('authBtn'); btn.disabled = true;
-  try {
-    const res = await fetch(isRegisterMode ? '/auth/register' : '/auth/login', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({username:u, password:p})
-    });
-    if (res.ok) {
-      sessionStorage.setItem('logged', 'true');
-      sessionStorage.setItem('user', u);
-      checkAuth();
-    } else { errEl.textContent = res.status === 409 ? 'Имя занято' : 'Неверные данные'; }
-  } catch(e) { errEl.textContent = 'Ошибка сети'; }
-  finally { btn.disabled = false; }
+async function handleAuthAction(){
+  const u=document.getElementById('authUser').value.trim(),p=document.getElementById('authPass').value;
+  const errEl=document.getElementById('authError');
+  if(!u||!p){errEl.textContent='Заполните все поля';return;}
+  errEl.textContent='Проверка...';const btn=document.getElementById('authBtn');btn.disabled=true;
+  try{
+    const res=await fetch(isRegisterMode?'/auth/register':'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    if(res.ok){sessionStorage.setItem('logged','true');sessionStorage.setItem('user',u);checkAuth();}
+    else errEl.textContent=res.status===409?'Имя занято':'Неверные данные';
+  }catch(e){errEl.textContent='Ошибка сети';}finally{btn.disabled=false;}
 }
-function handleLogout() { sessionStorage.removeItem('logged'); sessionStorage.removeItem('user'); plantConfig = null; location.reload(); }
+function handleLogout(){sessionStorage.removeItem('logged');sessionStorage.removeItem('user');plantConfig=null;location.reload();}
 
-// === РАСТЕНИЯ ===
-function showPlantView() { document.getElementById('plantView').style.display = 'flex'; loadPlants(); }
-async function loadPlants() {
-  const grid = document.getElementById('plantGrid');
-  grid.innerHTML = '<div class="loading">Загрузка...</div>';
-  try {
-    const res = await fetch('/plants/load');
-    const plants = await res.json();
-    grid.innerHTML = '';
-    if (plants.length === 0) { grid.innerHTML = '<div class="history-empty">Нет сохранённых растений</div>'; return; }
-    plants.forEach(p => {
-      const div = document.createElement('div');
-      div.className = 'plant-card' + (plantConfig && plantConfig.name === p.name ? ' selected' : '');
-      div.dataset.name = p.name;
-      div.innerHTML = `<strong>${p.displayName || p.name}</strong><span>T: ${p.temp[0]}-${p.temp[1]} | H: ${p.hum[0]}-${p.hum[1]}</span>${p.name !== 'Monstera' && p.name !== 'Cactus' ? '<button class="del-btn" title="Удалить">Удалить</button>' : ''}`;
-      div.addEventListener('click', (e) => { if(e.target.classList.contains('del-btn')) return; selectPlant(p); });
-      div.querySelector('.del-btn')?.addEventListener('click', (e) => { e.stopPropagation(); deletePlant(p.name, div); });
+function showPlantView(){document.getElementById('plantView').style.display='flex';loadPlants();}
+async function loadPlants(){
+  const grid=document.getElementById('plantGrid');grid.innerHTML='<div class="loading">Загрузка...</div>';
+  try{
+    const res=await fetch('/plants/load');const plants=await res.json();grid.innerHTML='';
+    if(!plants.length){grid.innerHTML='<div class="history-empty">Нет сохранённых растений</div>';return;}
+    plants.forEach(p=>{
+      const div=document.createElement('div');
+      div.className='plant-card'+(plantConfig&&plantConfig.name===p.name?' selected':'');
+      div.dataset.name=p.name;
+      div.innerHTML=`<strong>${p.displayName||p.name}</strong><span>T:${p.temp[0]}-${p.temp[1]}|H:${p.hum[0]}-${p.hum[1]}</span>${p.name!=='Monstera'&&p.name!=='Cactus'?'<button class="del-btn">Удалить</button>':''}`;
+      div.addEventListener('click',(e)=>{if(e.target.classList.contains('del-btn'))return;selectPlant(p);});
+      div.querySelector('.del-btn')?.addEventListener('click',(e)=>{e.stopPropagation();deletePlant(p.name,div);});
       grid.appendChild(div);
     });
-  } catch(e) { grid.innerHTML = '<div class="history-empty">Ошибка</div>'; }
+  }catch(e){grid.innerHTML='<div class="history-empty">Ошибка</div>';}
 }
-function selectPlant(p) {
-  document.querySelectorAll('.plant-card').forEach(c => c.classList.remove('selected'));
-  const target = document.querySelector(`.plant-card[data-name="${p.name}"]`);
-  if(target) target.classList.add('selected');
-  plantConfig = p;
-  localStorage.setItem('selectedPlant', JSON.stringify(p));
-  document.getElementById('plantView').style.display = 'none';
-  loadData();
+function selectPlant(p){
+  document.querySelectorAll('.plant-card').forEach(c=>c.classList.remove('selected'));
+  const target=document.querySelector(`.plant-card[data-name="${p.name}"]`);
+  if(target)target.classList.add('selected');
+  plantConfig=p;localStorage.setItem('selectedPlant',JSON.stringify(p));
+  document.getElementById('plantView').style.display='none';loadData();
 }
-async function deletePlant(name, el) {
-  if(!confirm('Удалить растение "' + name + '"?')) return;
-  try { await fetch('/plants/delete?name='+encodeURIComponent(name), {method:'DELETE'}); el.remove(); if(plantConfig?.name === name) plantConfig = null; }
-  catch(e) { alert('Ошибка удаления'); }
+async function deletePlant(name,el){
+  if(!confirm('Удалить "'+name+'"?'))return;
+  try{await fetch('/plants/delete?name='+encodeURIComponent(name),{method:'DELETE'});el.remove();if(plantConfig?.name===name)plantConfig=null;}
+  catch(e){alert('Ошибка удаления');}
 }
-async function saveCustomPlant() {
-  const v = id => { let x = parseFloat(document.getElementById(id).value); return isNaN(x) ? null : x; };
-  const tMin=v('custTempMin'), tMax=v('custTempMax');
-  const hMin=v('custHumMin'), hMax=v('custHumMax');
-  const sMin=v('custSoilMin'), sMax=v('custSoilMax');
-  const pMin=v('custPresMin'), pMax=v('custPresMax');
-  const err = document.getElementById('plantError');
-  
-  // Валидация: только температура может быть < 0
-  if (tMin === null || tMax === null) { err.textContent = 'Укажите температуру'; return; }
-  if (tMin >= tMax) { err.textContent = 'Температура: мин < макс'; return; }
-  [hMin, hMax, sMin, sMax, pMin, pMax].forEach((val, i) => {
-    const names = ['Влажность','Влажность почвы','Давление'];
-    if (val === null) { err.textContent = `Укажите ${names[Math.floor(i/2)]}`; throw 'stop'; }
-    if (val < 0) { err.textContent = `${names[Math.floor(i/2)]} не может быть отрицательной`; throw 'stop'; }
-  });
-  if (hMin >= hMax) { err.textContent = 'Влажность: мин < макс'; return; }
-  if (sMin >= sMax) { err.textContent = 'Почва: мин < макс'; return; }
-  if (pMin >= pMax) { err.textContent = 'Давление: мин < макс'; return; }
-
-  const name = document.getElementById('custName').value.trim().replace(/[^a-zA-Zа-яА-Я0-9\s_-]/g, '');
-  if (!name) { err.textContent = 'Введите название'; return; }
-
-  const btn = document.getElementById('savePlantBtn'); btn.disabled = true; err.textContent = '';
-  const cfg = { name, displayName: name, temp:[tMin,tMax], hum:[hMin,hMax], soil:[sMin,sMax], press:[pMin,pMax] };
-  try {
-    const res = await fetch('/plants/save', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg) });
-    if (res.ok) selectPlant(cfg); else err.textContent = res.status === 409 ? 'Имя занято' : 'Ошибка сохранения';
-  } catch(e) { err.textContent = 'Ошибка сети'; }
-  finally { btn.disabled = false; }
+async function saveCustomPlant(){
+  const v=id=>{let x=parseFloat(document.getElementById(id).value);return isNaN(x)?null:x;};
+  const tMin=v('custTempMin'),tMax=v('custTempMax'),hMin=v('custHumMin'),hMax=v('custHumMax');
+  const sMin=v('custSoilMin'),sMax=v('custSoilMax'),pMin=v('custPresMin'),pMax=v('custPresMax');
+  const err=document.getElementById('plantError');
+  if(tMin===null||tMax===null){err.textContent='Укажите температуру';return;}
+  if(tMin>=tMax){err.textContent='Температура: мин < макс';return;}
+  try{[hMin,hMax,sMin,sMax,pMin,pMax].forEach((val,i)=>{
+    const names=['Влажность','Влажность почвы','Давление'];
+    if(val===null){err.textContent=`Укажите ${names[Math.floor(i/2)]}`;throw'stop';}
+    if(val<0){err.textContent=`${names[Math.floor(i/2)]} не может быть отрицательной`;throw'stop';}
+  });}catch(e){if(e==='stop')return;}
+  if(hMin>=hMax){err.textContent='Влажность: мин < макс';return;}
+  if(sMin>=sMax){err.textContent='Почва: мин < макс';return;}
+  if(pMin>=pMax){err.textContent='Давление: мин < макс';return;}
+  const name=document.getElementById('custName').value.trim().replace(/[^a-zA-Zа-яА-Я0-9\s_-]/g,'');
+  if(!name){err.textContent='Введите название';return;}
+  const btn=document.getElementById('savePlantBtn');btn.disabled=true;err.textContent='';
+  const cfg={name,displayName:name,temp:[tMin,tMax],hum:[hMin,hMax],soil:[sMin,sMax],press:[pMin,pMax]};
+  try{const res=await fetch('/plants/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    if(res.ok)selectPlant(cfg);else err.textContent=res.status===409?'Имя занято':'Ошибка сохранения';
+  }catch(e){err.textContent='Ошибка сети';}finally{btn.disabled=false;}
 }
 
-// === ОСНОВНАЯ ЛОГИКА (без изменений в логике) ===
-async function syncTimeWithServer() { try{const res=await fetch('/time?t='+Date.now());const s=await res.text();const now=new Date();if(s&&!s.startsWith('UP')){const p=s.split(' ');if(p.length>=2){const[d,t]=p;const[day,m,y]=d.split('.');const[h,mi,sc]=t.split(':');const sd=new Date('20'+y+'-'+m+'-'+day+'T'+h+':'+mi+':'+sc);serverTimeOffset=sd.getTime()-now.getTime();document.getElementById('timeStatus').textContent=s;document.getElementById('syncStatus').className='sync-status';}}else{document.getElementById('syncStatus').className='sync-status error';}}catch(e){document.getElementById('syncStatus').className='sync-status error';}}
-function initTheme() { const s=localStorage.getItem('theme'); if(s==='dark') document.documentElement.setAttribute('data-theme','dark'); document.getElementById('themeBtn').addEventListener('click',()=>{const h=document.documentElement;const d=h.getAttribute('data-theme')==='dark';if(d){h.removeAttribute('data-theme');localStorage.setItem('theme','light');}else{h.setAttribute('data-theme','dark');localStorage.setItem('theme','dark');}if(document.getElementById('tab-charts').classList.contains('active'))drawChart();}); }
-function initTabs() { document.querySelectorAll('.tab').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.content').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById('tab-'+b.dataset.tab).classList.add('active');if(b.dataset.tab==='charts')setTimeout(drawChart,100);});}); }
-function initHistoryFilters() { document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(x=>x.classList.remove('active'));b.classList.add('active');currentHistoryPeriod=parseInt(b.dataset.period);currentHistoryLimit=parseInt(b.dataset.limit);historyCustomStart=0;historyCustomEnd=0;document.getElementById('historyCustomRange').style.display='none';loadHistory();});}); }
-function initChartFilters() { document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(x=>x.classList.remove('active'));b.classList.add('active');currentChartPeriod=parseInt(b.dataset.period);currentChartLimit=parseInt(b.dataset.limit);chartCustomStart=0;chartCustomEnd=0;document.getElementById('chartCustomRange').style.display='none';loadChartData();});}); }
-function initHistoryCustomRange() { document.getElementById('historyDateBtn').addEventListener('click',()=>{document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b=>b.classList.remove('active'));document.getElementById('historyDateBtn').classList.add('active');document.getElementById('historyCustomRange').style.display='flex';const n=new Date();n.setMinutes(n.getMinutes()-n.getTimezoneOffset());document.getElementById('historyEndDate').value=n.toISOString().slice(0,16);const y=new Date(n.getTime()-24*60*60*1000);document.getElementById('historyStartDate').value=y.toISOString().slice(0,16);}); document.getElementById('historyApplyBtn').addEventListener('click',()=>{const s=document.getElementById('historyStartDate').value,e=document.getElementById('historyEndDate').value;if(s&&e){historyCustomStart=Math.floor(new Date(s).getTime()/1000);historyCustomEnd=Math.floor(new Date(e).getTime()/1000);currentHistoryPeriod=0;currentHistoryLimit=0;loadHistory();document.getElementById('historyCustomRange').style.display='none';}}); document.getElementById('historyCancelBtn').addEventListener('click',()=>{document.getElementById('historyCustomRange').style.display='none';document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b=>b.classList.remove('active'));document.querySelector('.history-panel .filter-btn[data-period="0"]').classList.add('active');currentHistoryPeriod=0;currentHistoryLimit=20;historyCustomStart=0;historyCustomEnd=0;loadHistory();}); }
-function initChartCustomRange() { document.getElementById('chartDateBtn').addEventListener('click',()=>{document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b=>b.classList.remove('active'));document.getElementById('chartDateBtn').classList.add('active');document.getElementById('chartCustomRange').style.display='flex';const n=new Date();n.setMinutes(n.getMinutes()-n.getTimezoneOffset());document.getElementById('chartEndDate').value=n.toISOString().slice(0,16);const y=new Date(n.getTime()-24*60*60*1000);document.getElementById('chartStartDate').value=y.toISOString().slice(0,16);}); document.getElementById('chartApplyBtn').addEventListener('click',()=>{const s=document.getElementById('chartStartDate').value,e=document.getElementById('chartEndDate').value;if(s&&e){chartCustomStart=Math.floor(new Date(s).getTime()/1000);chartCustomEnd=Math.floor(new Date(e).getTime()/1000);currentChartPeriod=0;currentChartLimit=0;loadChartData();document.getElementById('chartCustomRange').style.display='none';}}); document.getElementById('chartCancelBtn').addEventListener('click',()=>{document.getElementById('chartCustomRange').style.display='none';document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b=>b.classList.remove('active'));document.querySelector('.chart-panel .chart-filter[data-period="0"]').classList.add('active');currentChartPeriod=0;currentChartLimit=20;chartCustomStart=0;chartCustomEnd=0;loadChartData();}); }
-function initLegend() { document.querySelectorAll('.legend-item').forEach(i=>{i.addEventListener('click',()=>{document.querySelectorAll('.legend-item').forEach(x=>x.classList.remove('active'));i.classList.add('active');const m=i.dataset.metric;if(m==='all'){currentChartMode='all';visibleMetrics={temp:true,hum:true,soil:true,pressure:true};document.getElementById('chartModeIndicator').classList.remove('visible');document.getElementById('yAxisLabel').style.display='none';document.getElementById('yAxisValues').innerHTML='';}else{currentChartMode=m;visibleMetrics={temp:false,hum:false,soil:false,pressure:false};visibleMetrics[m]=true;document.getElementById('chartModeIndicator').classList.add('visible');const l={temp:'°C',hum:'%',soil:'%',pressure:'мм'};const el=document.getElementById('yAxisLabel');el.textContent=l[m]||'';el.style.color=getMetricStyle(m).color;el.style.display='block';}drawChart();});}); }
-function initClearButton() { document.getElementById('clearBtn').addEventListener('click', async()=>{if(!confirm('Удалить всю историю измерений?')) return;try{await fetch('/clear',{method:'POST'});loadHistory();if(document.getElementById('tab-charts').classList.contains('active'))loadChartData();}catch(e){alert('Ошибка при очистке');}}); }
-async function loadData() { await Promise.all([fetchMetrics(), loadHistory()]); if(document.getElementById('tab-charts').classList.contains('active')) await loadChartData(); }
-async function fetchMetrics() { try{const r=await fetch('/data?t='+Date.now());updateMetrics(await r.json());syncTimeWithServer();}catch(e){console.log('Ошибка загрузки показателей');} }
-
-function updateMetrics(d) {
-  const list = [{id:'temp',key:'temp',range:plantConfig?.temp},{id:'hum',key:'humidity',range:plantConfig?.hum},{id:'soil',key:'soil',range:plantConfig?.soil},{id:'pressure',key:'pressure',range:plantConfig?.press}];
-  list.forEach(m=>{const el=document.getElementById(m.id);const val=d[m.key];el.textContent=val??'--';const card=el.parentElement;card.classList.remove('metric-alert');el.classList.remove('value-red');if(plantConfig&&val!==null&&m.range){if(val<m.range[0]||val>m.range[1]){card.classList.add('metric-alert');el.classList.add('value-red');}}});
-}
-
-async function loadHistory() { const l=document.getElementById('historyList');l.innerHTML='<div class="loading">Загрузка...</div>';try{let u='/hist?period='+currentHistoryPeriod+'&limit='+currentHistoryLimit;if(historyCustomStart>0&&historyCustomEnd>0)u+='&start='+historyCustomStart+'&end='+historyCustomEnd;u+='&t='+Date.now();const r=await fetch(u);chartData=await r.json();renderHistory(chartData);}catch(e){l.innerHTML='<div class="history-empty">Ошибка загрузки</div>';}}
-function renderHistory(data) { const l=document.getElementById('historyList');if(!data||data.length===0){l.innerHTML='<div class="history-empty">Нет данных за выбранный период</div>';return;}let h='';data.slice().reverse().forEach(i=>{let t=i.time||'--:--:--';h+='<div class="history-item"><span class="history-time">'+t+'</span><div class="history-values"><span class="val-temp">T:'+(i.temp!=null?i.temp:'-')+'°C</span><span class="val-hum">H:'+(i.hum!=null?i.hum:'-')+'%</span><span class="val-soil">S:'+(i.soil!=null?i.soil:'-')+'%</span><span class="val-press">P:'+(i.pressure!=null?i.pressure:'-')+'мм</span></div></div>';});l.innerHTML=h;}
-async function loadChartData() { try{let u='/hist?period='+currentChartPeriod+'&limit='+currentChartLimit;if(chartCustomStart>0&&chartCustomEnd>0)u+='&start='+chartCustomStart+'&end='+chartCustomEnd;u+='&t='+Date.now();const r=await fetch(u);chartData=await r.json();drawChart();}catch(e){console.log('Ошибка загрузки графика');}}
+async function syncTimeWithServer(){try{const res=await fetch('/time?t='+Date.now());const s=await res.text();const now=new Date();if(s&&!s.startsWith('UP')){const p=s.split(' ');if(p.length>=2){const[d,t]=p;const[day,m,y]=d.split('.');const[h,mi,sc]=t.split(':');const sd=new Date('20'+y+'-'+m+'-'+day+'T'+h+':'+mi+':'+sc);serverTimeOffset=sd.getTime()-now.getTime();document.getElementById('timeStatus').textContent=s;document.getElementById('syncStatus').className='sync-status';}}else document.getElementById('syncStatus').className='sync-status error';}catch(e){document.getElementById('syncStatus').className='sync-status error';}}
+function initTheme(){const s=localStorage.getItem('theme');if(s==='dark')document.documentElement.setAttribute('data-theme','dark');document.getElementById('themeBtn').addEventListener('click',()=>{const h=document.documentElement;const d=h.getAttribute('data-theme')==='dark';if(d){h.removeAttribute('data-theme');localStorage.setItem('theme','light');}else{h.setAttribute('data-theme','dark');localStorage.setItem('theme','dark');}if(document.getElementById('tab-charts').classList.contains('active'))drawChart();});}
+function initTabs(){document.querySelectorAll('.tab').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.content').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById('tab-'+b.dataset.tab).classList.add('active');if(b.dataset.tab==='charts')setTimeout(drawChart,100);});});}
+function initHistoryFilters(){document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(x=>x.classList.remove('active'));b.classList.add('active');currentHistoryPeriod=parseInt(b.dataset.period);currentHistoryLimit=parseInt(b.dataset.limit);historyCustomStart=0;historyCustomEnd=0;document.getElementById('historyCustomRange').style.display='none';loadHistory();});});}
+function initChartFilters(){document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(x=>x.classList.remove('active'));b.classList.add('active');currentChartPeriod=parseInt(b.dataset.period);currentChartLimit=parseInt(b.dataset.limit);chartCustomStart=0;chartCustomEnd=0;document.getElementById('chartCustomRange').style.display='none';loadChartData();});});}
+function initHistoryCustomRange(){document.getElementById('historyDateBtn').addEventListener('click',()=>{document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b=>b.classList.remove('active'));document.getElementById('historyDateBtn').classList.add('active');document.getElementById('historyCustomRange').style.display='flex';const n=new Date();n.setMinutes(n.getMinutes()-n.getTimezoneOffset());document.getElementById('historyEndDate').value=n.toISOString().slice(0,16);document.getElementById('historyStartDate').value=new Date(n.getTime()-24*60*60*1000).toISOString().slice(0,16);});document.getElementById('historyApplyBtn').addEventListener('click',()=>{const s=document.getElementById('historyStartDate').value,e=document.getElementById('historyEndDate').value;if(s&&e){historyCustomStart=Math.floor(new Date(s).getTime()/1000);historyCustomEnd=Math.floor(new Date(e).getTime()/1000);currentHistoryPeriod=0;currentHistoryLimit=0;loadHistory();document.getElementById('historyCustomRange').style.display='none';}});document.getElementById('historyCancelBtn').addEventListener('click',()=>{document.getElementById('historyCustomRange').style.display='none';document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b=>b.classList.remove('active'));document.querySelector('.history-panel .filter-btn[data-period="0"]').classList.add('active');currentHistoryPeriod=0;currentHistoryLimit=20;historyCustomStart=0;historyCustomEnd=0;loadHistory();});}
+function initChartCustomRange(){document.getElementById('chartDateBtn').addEventListener('click',()=>{document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b=>b.classList.remove('active'));document.getElementById('chartDateBtn').classList.add('active');document.getElementById('chartCustomRange').style.display='flex';const n=new Date();n.setMinutes(n.getMinutes()-n.getTimezoneOffset());document.getElementById('chartEndDate').value=n.toISOString().slice(0,16);document.getElementById('chartStartDate').value=new Date(n.getTime()-24*60*60*1000).toISOString().slice(0,16);});document.getElementById('chartApplyBtn').addEventListener('click',()=>{const s=document.getElementById('chartStartDate').value,e=document.getElementById('chartEndDate').value;if(s&&e){chartCustomStart=Math.floor(new Date(s).getTime()/1000);chartCustomEnd=Math.floor(new Date(e).getTime()/1000);currentChartPeriod=0;currentChartLimit=0;loadChartData();document.getElementById('chartCustomRange').style.display='none';}});document.getElementById('chartCancelBtn').addEventListener('click',()=>{document.getElementById('chartCustomRange').style.display='none';document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b=>b.classList.remove('active'));document.querySelector('.chart-panel .chart-filter[data-period="0"]').classList.add('active');currentChartPeriod=0;currentChartLimit=20;chartCustomStart=0;chartCustomEnd=0;loadChartData();});}
+function initLegend(){document.querySelectorAll('.legend-item').forEach(i=>{i.addEventListener('click',()=>{document.querySelectorAll('.legend-item').forEach(x=>x.classList.remove('active'));i.classList.add('active');const m=i.dataset.metric;if(m==='all'){currentChartMode='all';visibleMetrics={temp:true,hum:true,soil:true,pressure:true};document.getElementById('chartModeIndicator').classList.remove('visible');document.getElementById('yAxisLabel').style.display='none';document.getElementById('yAxisValues').innerHTML='';}else{currentChartMode=m;visibleMetrics={temp:false,hum:false,soil:false,pressure:false};visibleMetrics[m]=true;document.getElementById('chartModeIndicator').classList.add('visible');const l={temp:'°C',hum:'%',soil:'%',pressure:'мм'};const el=document.getElementById('yAxisLabel');el.textContent=l[m]||'';el.style.color=getMetricStyle(m).color;el.style.display='block';}drawChart();});});}
+function initClearButton(){document.getElementById('clearBtn').addEventListener('click',async()=>{if(!confirm('Удалить всю историю?'))return;try{await fetch('/clear',{method:'POST'});loadHistory();if(document.getElementById('tab-charts').classList.contains('active'))loadChartData();}catch(e){alert('Ошибка');}});}
+async function loadData(){await Promise.all([fetchMetrics(),loadHistory()]);if(document.getElementById('tab-charts').classList.contains('active'))await loadChartData();}
+async function fetchMetrics(){try{const r=await fetch('/data?t='+Date.now());updateMetrics(await r.json());syncTimeWithServer();}catch(e){console.log('Ошибка');}}
+function updateMetrics(d){const list=[{id:'temp',key:'temp',range:plantConfig?.temp},{id:'hum',key:'humidity',range:plantConfig?.hum},{id:'soil',key:'soil',range:plantConfig?.soil},{id:'pressure',key:'pressure',range:plantConfig?.press}];list.forEach(m=>{const el=document.getElementById(m.id);const val=d[m.key];el.textContent=val??'--';const card=el.parentElement;card.classList.remove('metric-alert');el.classList.remove('value-red');if(plantConfig&&val!==null&&m.range&&(val<m.range[0]||val>m.range[1])){card.classList.add('metric-alert');el.classList.add('value-red');}});}
+async function loadHistory(){const l=document.getElementById('historyList');l.innerHTML='<div class="loading">Загрузка...</div>';try{let u='/hist?period='+currentHistoryPeriod+'&limit='+currentHistoryLimit;if(historyCustomStart>0&&historyCustomEnd>0)u+='&start='+historyCustomStart+'&end='+historyCustomEnd;u+='&t='+Date.now();chartData=await (await fetch(u)).json();renderHistory(chartData);}catch(e){l.innerHTML='<div class="history-empty">Ошибка</div>';}}
+function renderHistory(data){const l=document.getElementById('historyList');if(!data||!data.length){l.innerHTML='<div class="history-empty">Нет данных</div>';return;}let h='';data.slice().reverse().forEach(i=>{h+='<div class="history-item"><span class="history-time">'+(i.time||'--:--:--')+'</span><div class="history-values"><span class="val-temp">T:'+(i.temp!=null?i.temp:'-')+'°C</span><span class="val-hum">H:'+(i.hum!=null?i.hum:'-')+'%</span><span class="val-soil">S:'+(i.soil!=null?i.soil:'-')+'%</span><span class="val-press">P:'+(i.pressure!=null?i.pressure:'-')+'мм</span></div></div>';});l.innerHTML=h;}
+async function loadChartData(){try{let u='/hist?period='+currentChartPeriod+'&limit='+currentChartLimit;if(chartCustomStart>0&&chartCustomEnd>0)u+='&start='+chartCustomStart+'&end='+chartCustomEnd;u+='&t='+Date.now();chartData=await (await fetch(u)).json();drawChart();}catch(e){console.log('Ошибка графика');}}
 let chartCtx,chartCanvas;function initChart(){chartCanvas=document.getElementById('chart');chartCtx=chartCanvas.getContext('2d');chartCanvas.addEventListener('mousemove',handleChartHover);chartCanvas.addEventListener('mouseleave',hideTooltip);chartCanvas.addEventListener('touchmove',(e)=>{e.preventDefault();handleChartHover(e);},{passive:false});window.addEventListener('resize',()=>{if(document.getElementById('tab-charts').classList.contains('active'))drawChart();});}
-function drawChart(){if(!chartCtx||!chartData||chartData.length<2){drawEmptyChart();return;}const dpr=window.devicePixelRatio||1;const rect=chartCanvas.getBoundingClientRect();chartCanvas.width=rect.width*dpr;chartCanvas.height=rect.height*dpr;chartCtx.scale(dpr,dpr);const W=rect.width,H=rect.height;const P={t:25,r:40,b:40,l:45};const cW=W-P.l-P.r,cH=H-P.t-P.b;chartCtx.clearRect(0,0,W,H);const active=currentChartMode==='all'?Object.keys(visibleMetrics).filter(k=>visibleMetrics[k]):[currentChartMode];if(active.length===0){drawEmptyChart();return;}const ranges=calculateRanges(chartData,active);drawGrid(P,cW,cH,ranges,W,H,active);drawYAxisValues(P,cH,ranges,active);const lines={};active.forEach(k=>{lines[k]=drawLine(chartData,k,ranges[k],P,cW,cH,getMetricStyle(k));});chartCanvas._lines=lines;chartCanvas._params={P,cW,cH,ranges,active};}
+function drawChart(){if(!chartCtx||!chartData||chartData.length<2){drawEmptyChart();return;}const dpr=window.devicePixelRatio||1;const rect=chartCanvas.getBoundingClientRect();chartCanvas.width=rect.width*dpr;chartCanvas.height=rect.height*dpr;chartCtx.scale(dpr,dpr);const W=rect.width,H=rect.height,P={t:25,r:40,b:40,l:45},cW=W-P.l-P.r,cH=H-P.t-P.b;chartCtx.clearRect(0,0,W,H);const active=currentChartMode==='all'?Object.keys(visibleMetrics).filter(k=>visibleMetrics[k]):[currentChartMode];if(!active.length){drawEmptyChart();return;}const ranges=calculateRanges(chartData,active);drawGrid(P,cW,cH,ranges,W,H,active);drawYAxisValues(P,cH,ranges,active);const lines={};active.forEach(k=>{lines[k]=drawLine(chartData,k,ranges[k],P,cW,cH,getMetricStyle(k));});chartCanvas._lines=lines;chartCanvas._params={P,cW,cH,ranges,active};}
 function calculateRanges(data,active){const ranges={};const info={temp:{key:'temp',defaultMin:10,defaultMax:35},hum:{key:'hum',defaultMin:0,defaultMax:100},soil:{key:'soil',defaultMin:0,defaultMax:100},pressure:{key:'pressure',defaultMin:740,defaultMax:770}};active.forEach(m=>{const i=info[m];let mn=Infinity,mx=-Infinity;data.forEach(d=>{const v=d[i.key];if(v!=null){mn=Math.min(mn,v);mx=Math.max(mx,v);}});if(mn===Infinity){mn=i.defaultMin;mx=i.defaultMax;}if(mn===mx){mn-=1;mx+=1;}const p=(mx-mn)*0.1;ranges[m]={min:mn-p,max:mx+p,key:i.key};});return ranges;}
 function getMetricStyle(k){const s={temp:{color:'#ef4444',width:2.5},hum:{color:'#3b82f6',width:2.5},soil:{color:'#22c55e',width:2.5},pressure:{color:'#a855f7',width:2,dash:[5,3]}};return s[k]||{color:'#6b7280',width:2};}
-function drawGrid(P,cW,cH,ranges,W,H,active){const ctx=chartCtx;const gc=getComputedStyle(document.body).getPropertyValue('--border').trim();const tc=getComputedStyle(document.body).getPropertyValue('--text2').trim();const tp=getComputedStyle(document.body).getPropertyValue('--text').trim();ctx.strokeStyle=gc;ctx.lineWidth=1;ctx.font='10px sans-serif';ctx.fillStyle=tc;ctx.textAlign='right';for(let i=0;i<=4;i++){const y=P.t+(cH/4)*i;ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(W-P.r,y);ctx.stroke();}ctx.textAlign='center';ctx.fillStyle=tc;const step=Math.max(1,Math.floor(chartData.length/6));for(let i=0;i<chartData.length;i+=step){const x=P.l+(cW/Math.max(1,chartData.length-1))*i;const ts=chartData[i].time||'';const tp=ts.split(' ');const to=tp.length>1?tp[1]:ts;const[hh,mm]=to.split(':');const lbl=hh&&mm?hh+':'+mm:to;ctx.fillText(lbl,x,P.t+cH+18);}ctx.fillStyle=tp;ctx.fillText('Время',W/2,H-5);ctx.strokeStyle=gc;ctx.beginPath();ctx.moveTo(P.l,P.t+cH);ctx.lineTo(W-P.r,P.t+cH);ctx.stroke();}
-function drawYAxisValues(P,cH,ranges,active){const c=document.getElementById('yAxisValues');const l=document.getElementById('yAxisLabel');if(!c||active.length===0){if(c)c.innerHTML='';return;}if(currentChartMode==='all'){c.innerHTML='';l.style.display='none';return;}const f=active[0];const r=ranges[f];let h='';for(let i=0;i<=4;i++){const v=Math.round(r.max-(r.max-r.min)*(i/4));h+='<div class="y-axis-value">'+v+'</div>';}c.innerHTML=h;}
+function drawGrid(P,cW,cH,ranges,W,H,active){const ctx=chartCtx;const gc=getComputedStyle(document.body).getPropertyValue('--border').trim();const tc=getComputedStyle(document.body).getPropertyValue('--text2').trim();const tp=getComputedStyle(document.body).getPropertyValue('--text').trim();ctx.strokeStyle=gc;ctx.lineWidth=1;ctx.font='10px sans-serif';ctx.fillStyle=tc;ctx.textAlign='right';for(let i=0;i<=4;i++){const y=P.t+(cH/4)*i;ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(W-P.r,y);ctx.stroke();}ctx.textAlign='center';ctx.fillStyle=tc;const step=Math.max(1,Math.floor(chartData.length/6));for(let i=0;i<chartData.length;i+=step){const x=P.l+(cW/Math.max(1,chartData.length-1))*i;const ts=chartData[i].time||'';const tp=ts.split(' ');const to=tp.length>1?tp[1]:ts;const[hh,mm]=to.split(':');ctx.fillText(hh&&mm?hh+':'+mm:to,x,P.t+cH+18);}ctx.fillStyle=tp;ctx.fillText('Время',W/2,H-5);ctx.strokeStyle=gc;ctx.beginPath();ctx.moveTo(P.l,P.t+cH);ctx.lineTo(W-P.r,P.t+cH);ctx.stroke();}
+function drawYAxisValues(P,cH,ranges,active){const c=document.getElementById('yAxisValues');const l=document.getElementById('yAxisLabel');if(!c||!active.length){if(c)c.innerHTML='';return;}if(currentChartMode==='all'){c.innerHTML='';l.style.display='none';return;}const f=active[0],r=ranges[f];let h='';for(let i=0;i<=4;i++)h+='<div class="y-axis-value">'+Math.round(r.max-(r.max-r.min)*(i/4))+'</div>';c.innerHTML=h;}
 function drawLine(data,key,range,P,cW,cH,style){const ctx=chartCtx;ctx.strokeStyle=style.color;ctx.lineWidth=style.width;ctx.lineCap='round';ctx.lineJoin='round';if(style.dash)ctx.setLineDash(style.dash);const pts=[];const n=Math.max(1,data.length-1);data.forEach((d,i)=>{const v=d[range.key];if(v==null)return;const x=P.l+(cW/n)*i;const y=P.t+cH-((v-range.min)/(range.max-range.min))*cH;pts.push({x,y,val:v,time:d.time});});if(pts.length>1){ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);for(let i=0;i<pts.length-1;i++){const p0=pts[Math.max(0,i-1)],p1=pts[i],p2=pts[i+1],p3=pts[Math.min(pts.length-1,i+2)];ctx.bezierCurveTo(p1.x+(p2.x-p0.x)*0.1,p1.y+(p2.y-p0.y)*0.1,p2.x-(p3.x-p1.x)*0.1,p2.y-(p3.y-p1.y)*0.1,p2.x,p2.y);}ctx.stroke();}ctx.setLineDash([]);return pts;}
 function drawEmptyChart(){const ctx=chartCtx;const rect=chartCanvas.getBoundingClientRect();ctx.clearRect(0,0,rect.width,rect.height);ctx.fillStyle=getComputedStyle(document.body).getPropertyValue('--text2').trim();ctx.font='14px sans-serif';ctx.textAlign='center';ctx.fillText('Выберите период для отображения графика',rect.width/2,rect.height/2);}
-function handleChartHover(e){e.preventDefault();if(!chartCanvas._lines||!chartCanvas._params)return;const rect=chartCanvas.getBoundingClientRect();const mx=(e.clientX||(e.touches&&e.touches[0].clientX))-rect.left;const my=(e.clientY||(e.touches&&e.touches[0].clientY))-rect.top;const{P}=chartCanvas._params;let closest=null,minD=30;Object.entries(chartCanvas._lines).forEach(([k,pts])=>{pts.forEach(p=>{const d=Math.hypot(p.x-mx,p.y-my);if(d<minD){minD=d;closest={...p,key:k,color:getMetricStyle(k).color};}});});const tt=document.getElementById('tooltip');if(closest&&minD<30){let h='<div class="tooltip-time">'+(closest.time||'')+'</div>';const idx=chartData.findIndex(d=>d.time===closest.time);if(idx>=0){const d=chartData[idx];const ms=[{k:'temp',l:'Темп:',u:'°C',c:'#ef4444'},{k:'hum',l:'Влаж:',u:'%',c:'#3b82f6'},{k:'soil',l:'Почва:',u:'%',c:'#22c55e'},{k:'pressure',l:'Давл:',u:'мм',c:'#a855f7'}];ms.forEach(m=>{const show=currentChartMode==='all'?visibleMetrics[m.k]:(m.k===currentChartMode);if(d[m.k]!=null&&show)h+='<div class="tooltip-row"><span><span class="tooltip-color" style="background:'+m.c+'"></span>'+m.l+'</span><strong>'+d[m.k]+m.u+'</strong></div>';});}tt.innerHTML=h;tt.classList.add('visible');const tx=mx+15>rect.width-220?mx-230:mx+15;const ty=Math.max(10,Math.min(rect.height-150,my-60));tt.style.left=tx+'px';tt.style.top=ty+'px';chartCtx.save();chartCtx.strokeStyle=closest.color;chartCtx.lineWidth=1;chartCtx.setLineDash([4,4]);chartCtx.beginPath();chartCtx.moveTo(closest.x,P.t);chartCtx.lineTo(closest.x,P.t+chartCanvas._params.cH);chartCtx.stroke();chartCtx.restore();}else{tt.classList.remove('visible');}}
+function handleChartHover(e){e.preventDefault();if(!chartCanvas._lines||!chartCanvas._params)return;const rect=chartCanvas.getBoundingClientRect();const mx=(e.clientX||(e.touches&&e.touches[0].clientX))-rect.left;const my=(e.clientY||(e.touches&&e.touches[0].clientY))-rect.top;const{P}=chartCanvas._params;let closest=null,minD=30;Object.entries(chartCanvas._lines).forEach(([k,pts])=>{pts.forEach(p=>{const d=Math.hypot(p.x-mx,p.y-my);if(d<minD){minD=d;closest={...p,key:k,color:getMetricStyle(k).color};}});});const tt=document.getElementById('tooltip');if(closest&&minD<30){let h='<div class="tooltip-time">'+(closest.time||'')+'</div>';const idx=chartData.findIndex(d=>d.time===closest.time);if(idx>=0){const d=chartData[idx];[{k:'temp',l:'Темп:',u:'°C',c:'#ef4444'},{k:'hum',l:'Влаж:',u:'%',c:'#3b82f6'},{k:'soil',l:'Почва:',u:'%',c:'#22c55e'},{k:'pressure',l:'Давл:',u:'мм',c:'#a855f7'}].forEach(m=>{const show=currentChartMode==='all'?visibleMetrics[m.k]:(m.k===currentChartMode);if(d[m.k]!=null&&show)h+='<div class="tooltip-row"><span><span class="tooltip-color" style="background:'+m.c+'"></span>'+m.l+'</span><strong>'+d[m.k]+m.u+'</strong></div>';});}tt.innerHTML=h;tt.classList.add('visible');const tx=mx+15>rect.width-220?mx-230:mx+15;const ty=Math.max(10,Math.min(rect.height-150,my-60));tt.style.left=tx+'px';tt.style.top=ty+'px';chartCtx.save();chartCtx.strokeStyle=closest.color;chartCtx.lineWidth=1;chartCtx.setLineDash([4,4]);chartCtx.beginPath();chartCtx.moveTo(closest.x,P.t);chartCtx.lineTo(closest.x,P.t+chartCanvas._params.cH);chartCtx.stroke();chartCtx.restore();}else tt.classList.remove('visible');}
 function hideTooltip(){document.getElementById('tooltip').classList.remove('visible');if(chartCanvas._params)drawChart();}
 function startAutoUpdate(){setInterval(async()=>{await fetchMetrics();if(document.getElementById('tab-main').classList.contains('active'))await loadHistory();if(document.getElementById('tab-charts').classList.contains('active'))await loadChartData();},UPDATE_INTERVAL);}
 </script>
@@ -732,172 +607,80 @@ function startAutoUpdate(){setInterval(async()=>{await fetchMetrics();if(documen
 
 // ====================== ВЕБ-ОБРАБОТЧИКИ ======================
 void handleHist() {
-int p = server.hasArg("period") ? server.arg("period").toInt() : 0;
-int limit = server.hasArg("limit") ? server.arg("limit").toInt() : 0;
-time_t start = server.hasArg("start") ? server.arg("start").toInt() : 0;
-time_t end = server.hasArg("end") ? server.arg("end").toInt() : 0;
-server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-server.send(200, "application/json", readHistoryFromDB(p, limit, start, end));
+  int p = server.hasArg("period") ? server.arg("period").toInt() : 0;
+  int limit = server.hasArg("limit") ? server.arg("limit").toInt() : 0;
+  time_t start = server.hasArg("start") ? server.arg("start").toInt() : 0;
+  time_t end = server.hasArg("end") ? server.arg("end").toInt() : 0;
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "application/json", readHistoryFromDB(p, limit, start, end));
 }
 void handleData() {
-DynamicJsonDocument doc(128);
-doc["temp"] = currentTemp;
-doc["humidity"] = currentHum;
-doc["soil"] = currentSoil;
-doc["pressure"] = currentPres;
-String out;
-serializeJson(doc, out);
-server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-server.send(200, "application/json", out);
+  DynamicJsonDocument doc(128);
+  doc["temp"] = currentTemp; doc["humidity"] = currentHum; doc["soil"] = currentSoil; doc["pressure"] = currentPres;
+  String out; serializeJson(doc, out);
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "application/json", out);
 }
 void handleTime() {
-time_t now = time(nullptr);
-String timeStr = formatTime(now, true);
-server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-server.send(200, "text/plain", timeStr);
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "text/plain", formatTime(time(nullptr), true));
 }
-void handleRoot() {
-server.send(200, "text/html", INDEX_HTML);
-}
-void handleClear() {
-clearDB();
-server.send(200, "text/plain", "OK");
-}
-void handleNotFound() {
-handleRoot();
-}
+void handleRoot() { server.send(200, "text/html", INDEX_HTML); }
+void handleClear() { clearDB(); server.send(200, "text/plain", "OK"); }
+void handleNotFound() { handleRoot(); }
 
 // ====================== E-PAPER И ДАТЧИКИ ======================
 void updateEpaper(int soil, int hum, int temp, int press) {
-paint.Clear(UNCOLORED);
-sprintf(strData, "%d", soil);
-paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
-epd.SetFrameMemoryPartial(paint.GetImage(), 150, 116, 56, 24);
-paint.Clear(UNCOLORED);
-sprintf(strData, "%d", hum);
-paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
-epd.SetFrameMemoryPartial(paint.GetImage(), 150, 60, 56, 24);
-paint.Clear(UNCOLORED);
-sprintf(strData, "%d", temp);
-paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
-epd.SetFrameMemoryPartial(paint.GetImage(), 20, 60, 56, 24);
-paint.Clear(UNCOLORED);
-sprintf(strData, "%d", press);
-paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
-epd.SetFrameMemoryPartial(paint.GetImage(), 20, 116, 56, 24);
-epd.DisplayPartFrame();
+  paint.Clear(UNCOLORED); sprintf(strData, "%d", soil); paint.DrawStringAt(0, 0, strData, &Font24, COLORED); epd.SetFrameMemoryPartial(paint.GetImage(), 150, 116, 56, 24);
+  paint.Clear(UNCOLORED); sprintf(strData, "%d", hum); paint.DrawStringAt(0, 0, strData, &Font24, COLORED); epd.SetFrameMemoryPartial(paint.GetImage(), 150, 60, 56, 24);
+  paint.Clear(UNCOLORED); sprintf(strData, "%d", temp); paint.DrawStringAt(0, 0, strData, &Font24, COLORED); epd.SetFrameMemoryPartial(paint.GetImage(), 20, 60, 56, 24);
+  paint.Clear(UNCOLORED); sprintf(strData, "%d", press); paint.DrawStringAt(0, 0, strData, &Font24, COLORED); epd.SetFrameMemoryPartial(paint.GetImage(), 20, 116, 56, 24);
+  epd.DisplayPartFrame();
 }
 void readAndLog() {
-int raw = analogRead(SOIL_PIN);
-int soil = 100 - (raw - 1200) / 19;
-soil = constrain(soil, 0, 100);
-float pressure_pa = 0, temp_c = 0, humidity_pct = 0;
-BME280::TempUnit tu(BME280::TempUnit_Celsius);
-BME280::PresUnit pu(BME280::PresUnit_Pa);
-bme.read(pressure_pa, temp_c, humidity_pct, tu, pu);
-currentSoil = soil;
-currentHum = round(humidity_pct);
-currentTemp = round(temp_c);
-currentPres = round(pressure_pa * 0.00750062);
-logToDB(currentSoil, currentHum, currentTemp, currentPres);
-updateEpaper(currentSoil, currentHum, currentTemp, currentPres);
+  int raw = analogRead(SOIL_PIN); int soil = 100 - (raw - 1200) / 19; soil = constrain(soil, 0, 100);
+  float pressure_pa = 0, temp_c = 0, humidity_pct = 0;
+  bme.read(pressure_pa, temp_c, humidity_pct, BME280::TempUnit_Celsius, BME280::PresUnit_Pa);
+  currentSoil = soil; currentHum = round(humidity_pct); currentTemp = round(temp_c); currentPres = round(pressure_pa * 0.00750062);
+  logToDB(currentSoil, currentHum, currentTemp, currentPres);
+  updateEpaper(currentSoil, currentHum, currentTemp, currentPres);
 }
 
 // ====================== SETUP ======================
 void setup() {
-Serial.begin(SERIAL_BAUD);
-delay(800);
-Serial.println("ESP32-C3 Sensor Module Starting...");
-WiFi.setHostname(MDNS_NAME);
-WiFi.begin(STA_SSID, STA_PASS);
-Serial.print("Connecting to WiFi");
-int attempts = 15;
-while (attempts-- && WiFi.status() != WL_CONNECTED) {
-delay(500);
-Serial.print(".");
-}
-if (WiFi.status() != WL_CONNECTED) {
-Serial.println("\nWiFi failed, starting AP mode");
-WiFi.mode(WIFI_AP);
-WiFi.softAPConfig(ap_ip, ap_ip, ap_mask);
-WiFi.softAP(AP_SSID, AP_PASS);
-Serial.println("AP: " + String(AP_SSID) + " | Pass: " + String(AP_PASS));
-} else {
-Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
-}
-if (MDNS.begin(MDNS_NAME)) {
-Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
-}
-configTime(5 * 3600, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
-Serial.print("Syncing time");
-for (int i = 0; i < 40; i++) {
-time_t now = time(nullptr);
-if (now >= 1700000000) {
-timeSynced = true;
-Serial.println("\nTime: " + formatTime(now, true));
-break;
-}
-delay(300);
-Serial.print(".");
-}
-if (!timeSynced) {
-Serial.println("\nTime sync timeout, using uptime");
-bootTime = millis() / 1000;
-}
-if (!LittleFS.begin(true)) {
-Serial.println("LittleFS mount failed!");
-while (true) delay(100);
-}
-Serial.println("LittleFS ready");
-initDB();
-preSeedPlants();
-SPI.begin();
-while (!bme.begin()) {
-Serial.println("BME280 not found, retrying...");
-delay(1000);
-}
-Serial.println("BME280 initialized");
-epd.LDirInit();
-epd.Clear();
-paint.SetWidth(56);
-paint.SetHeight(24);
-epd.DisplayPartBaseImage(IMAGE_DATA);
-Serial.println("E-Paper ready");
-readAndLog();
-lastLogTime = millis();
+  Serial.begin(SERIAL_BAUD); delay(800); Serial.println("ESP32-C3 Starting...");
+  WiFi.setHostname(MDNS_NAME); WiFi.begin(STA_SSID, STA_PASS);
+  int attempts = 15; while (attempts-- && WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  if (WiFi.status() != WL_CONNECTED) { WiFi.mode(WIFI_AP); WiFi.softAPConfig(ap_ip, ap_ip, ap_mask); WiFi.softAP(AP_SSID, AP_PASS); Serial.println("AP Started"); }
+  else Serial.println("WiFi Connected: " + WiFi.localIP().toString());
+  
+  if (MDNS.begin(MDNS_NAME)) Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
+  configTime(5 * 3600, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+  for (int i = 0; i < 40; i++) { if (time(nullptr) >= 1700000000) { timeSynced = true; Serial.println("Time synced"); break; } delay(300); }
+  if (!timeSynced) bootTime = millis() / 1000;
 
-// Маршруты
-server.on("/auth/register", HTTP_POST, handleAuthRegister);
-server.on("/auth/login", HTTP_POST, handleAuthLogin);
-server.on("/auth/status", handleAuthStatus);
-server.on("/plants/load", handlePlantsLoad);
-server.on("/plants/save", HTTP_POST, handlePlantsSave);
-server.on("/plants/delete", HTTP_DELETE, handlePlantsDelete);
+  if (!LittleFS.begin(true)) { Serial.println("LittleFS failed!"); while (true) delay(100); }
+  initDB(); preSeedPlants(); SPI.begin();
+  while (!bme.begin()) { delay(1000); }
+  epd.LDirInit(); epd.Clear(); paint.SetWidth(56); paint.SetHeight(24); epd.DisplayPartBaseImage(IMAGE_DATA);
+  readAndLog(); lastLogTime = millis();
 
-server.on("/", handleRoot);
-server.on("/data", handleData);
-server.on("/hist", handleHist);
-server.on("/time", handleTime);
-server.on("/clear", HTTP_POST, handleClear);
-server.onNotFound(handleNotFound);
-server.begin();
-Serial.println("Web server started");
-ArduinoOTA.setHostname("SensorC3");
-ArduinoOTA.onStart([]() {
-epd.Sleep();
-Serial.println("OTA update started");
-});
-ArduinoOTA.begin();
-Serial.println("\nSystem ready! Access via http://" +
-(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.10.1"));
+  // Маршруты
+  server.on("/auth/register", HTTP_POST, handleAuthRegister);
+  server.on("/auth/login", HTTP_POST, handleAuthLogin);
+  server.on("/plants/load", handlePlantsLoad);
+  server.on("/plants/save", HTTP_POST, handlePlantsSave);
+  server.on("/plants/delete", HTTP_DELETE, handlePlantsDelete);
+  server.on("/", handleRoot); server.on("/data", handleData); server.on("/hist", handleHist);
+  server.on("/time", handleTime); server.on("/clear", HTTP_POST, handleClear);
+  server.onNotFound(handleNotFound); server.begin(); Serial.println("Server started");
+
+  ArduinoOTA.setHostname("SensorC3"); ArduinoOTA.onStart([]() { epd.Sleep(); }); ArduinoOTA.begin();
+  Serial.println("Ready!");
 }
 
 // ====================== LOOP ======================
 void loop() {
-server.handleClient();
-ArduinoOTA.handle();
-if (millis() - lastLogTime >= 15000UL) {
-readAndLog();
-lastLogTime = millis();
-}
+  server.handleClient(); ArduinoOTA.handle();
+  if (millis() - lastLogTime >= 15000UL) { readAndLog(); lastLogTime = millis(); }
 }
