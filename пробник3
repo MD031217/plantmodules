@@ -14,8 +14,7 @@
 #include "epdpaint.h"
 
 #define SERIAL_BAUD 115200
-#define PLANTS_FILE "/plants.json"
-#define USERS_FILE  "/users.json"
+// Файлы конфигурации удалены, всё хранится в БД
 
 // ==================== Wi-Fi НАСТРОЙКИ ====================
 #define STA_SSID "iPhone (Сергей)"
@@ -59,40 +58,89 @@ bool timeSynced = false;
 
 // ==================== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ====================
 String formatTime(time_t t, bool showSeconds = false) {
-  if (!timeSynced || t < 1700000000) {
-    if (bootTime == 0) bootTime = millis() / 1000;
-    unsigned long uptime = (millis() / 1000) - bootTime;
-    int days = uptime / 86400;
-    int hours = (uptime % 86400) / 3600;
-    int mins = (uptime % 3600) / 60;
-    int secs = uptime % 60;
-    char buf[32];
-    if (days > 0) sprintf(buf, "UP %dd %02d:%02d", days, hours, mins);
-    else if (showSeconds) sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
-    else sprintf(buf, "UP %02d:%02d", hours, mins);
-    return String(buf);
-  }
-  struct tm timeinfo;
-  if (localtime_r(&t, &timeinfo)) {
-    char buf[20];
-    if (showSeconds) strftime(buf, sizeof(buf), "%d.%m %H:%M:%S", &timeinfo);
-    else strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
-    return String(buf);
-  }
-  return "??.?? ??:??";
+if (!timeSynced || t < 1700000000) {
+if (bootTime == 0) bootTime = millis() / 1000;
+unsigned long uptime = (millis() / 1000) - bootTime;
+int days = uptime / 86400;
+int hours = (uptime % 86400) / 3600;
+int mins = (uptime % 3600) / 60;
+int secs = uptime % 60;
+char buf[32];
+if (days > 0) sprintf(buf, "UP %dd %02d:%02d", days, hours, mins);
+else if (showSeconds) sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
+else sprintf(buf, "UP %02d:%02d", hours, mins);
+return String(buf);
+}
+struct tm timeinfo;
+if (localtime_r(&t, &timeinfo)) {
+char buf[20];
+if (showSeconds) strftime(buf, sizeof(buf), "%d.%m %H:%M:%S", &timeinfo);
+else strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+return String(buf);
+}
+return "??.?? ??:??";
 }
 
 // ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
+void seedDefaultPlants() {
+  if (!db) return;
+  // Проверяем, есть ли уже растения
+  int count = 0;
+  sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM Plants;", -1, &res, NULL);
+  if (sqlite3_step(res) == SQLITE_ROW) count = sqlite3_column_int(res, 0);
+  sqlite3_finalize(res);
+  if (count > 0) return;
+
+  // Вставляем дефолтные растения
+  const char* ins = "INSERT INTO Plants (name, displayName, temp_min, temp_max, hum_min, hum_max, soil_min, soil_max, press_min, press_max) VALUES (?,?,?,?,?,?,?,?,?,?);";
+  sqlite3_prepare_v2(db, ins, -1, &res, NULL);
+  
+  // Монстера
+  sqlite3_bind_text(res, 1, "Monstera", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(res, 2, "Монстера", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_double(res, 3, 20); sqlite3_bind_double(res, 4, 25);
+  sqlite3_bind_double(res, 5, 60); sqlite3_bind_double(res, 6, 80);
+  sqlite3_bind_double(res, 7, 40); sqlite3_bind_double(res, 8, 70);
+  sqlite3_bind_double(res, 9, 740); sqlite3_bind_double(res, 10, 770);
+  sqlite3_step(res); sqlite3_reset(res);
+  
+  // Кактус
+  sqlite3_bind_text(res, 1, "Cactus", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(res, 2, "Кактус", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_double(res, 3, 20); sqlite3_bind_double(res, 4, 30);
+  sqlite3_bind_double(res, 5, 20); sqlite3_bind_double(res, 6, 40);
+  sqlite3_bind_double(res, 7, 10); sqlite3_bind_double(res, 8, 30);
+  sqlite3_bind_double(res, 9, 740); sqlite3_bind_double(res, 10, 770);
+  sqlite3_step(res); sqlite3_finalize(res);
+}
+
 void initDB() {
   Serial.println("=== Инициализация SQLite БД ===");
-  if (!LittleFS.exists("/")) { Serial.println("Ошибка: LittleFS не смонтирован!"); return; }
+  if (!LittleFS.exists("/")) {
+    Serial.println("Ошибка: LittleFS не смонтирован!");
+    return;
+  }
   sqlite3_initialize();
   rc = sqlite3_open(DB_FILE, &db);
-  if (rc != SQLITE_OK) { Serial.printf("Ошибка БД: %d\n", rc); db = nullptr; return; }
-  Serial.println("БД открыта");
-  String sql = "CREATE TABLE IF NOT EXISTS SensorLog (ID INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, time TEXT, temp REAL, hum REAL, soil REAL, pressure REAL);";
-  rc = sqlite3_exec(db, sql.c_str(), NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) { Serial.printf("Ошибка таблицы: %s\n", zErrMsg); sqlite3_free(zErrMsg); }
+  if (rc != SQLITE_OK) {
+    Serial.printf("Ошибка открытия БД: %d\n", rc);
+    db = nullptr; return;
+  }
+  Serial.println("БД успешно открыта");
+  
+  // Таблица логов
+  String sqlLog = "CREATE TABLE IF NOT EXISTS SensorLog (ID INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, time TEXT, temp REAL, hum REAL, soil REAL, pressure REAL);";
+  sqlite3_exec(db, sqlLog.c_str(), NULL, NULL, &zErrMsg);
+  
+  // Таблицы для авторизации и растений
+  String sqlUsers = "CREATE TABLE IF NOT EXISTS Users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL);";
+  sqlite3_exec(db, sqlUsers.c_str(), NULL, NULL, &zErrMsg);
+  
+  String sqlPlants = "CREATE TABLE IF NOT EXISTS Plants (name TEXT PRIMARY KEY, displayName TEXT, temp_min REAL, temp_max REAL, hum_min REAL, hum_max REAL, soil_min REAL, soil_max REAL, press_min REAL, press_max REAL);";
+  sqlite3_exec(db, sqlPlants.c_str(), NULL, NULL, &zErrMsg);
+  
+  Serial.println("Таблицы созданы/проверены");
+  seedDefaultPlants();
   testDBWrite();
 }
 
@@ -106,7 +154,6 @@ void testDBWrite() {
     sqlite3_bind_double(res, 3, 25.0); sqlite3_bind_double(res, 4, 50.0);
     sqlite3_bind_double(res, 5, 75.0); sqlite3_bind_double(res, 6, 760.0);
     rc = sqlite3_step(res);
-    if (rc == SQLITE_DONE) Serial.println("Тестовая запись добавлена");
     sqlite3_finalize(res);
     sqlite3_exec(db, "DELETE FROM SensorLog WHERE time='TEST';", NULL, NULL, NULL);
   }
@@ -124,8 +171,7 @@ void logToDB(int soil, int hum, int temp, int press) {
     sqlite3_bind_text(res, 2, timeStr.c_str(), timeStr.length(), SQLITE_TRANSIENT);
     sqlite3_bind_double(res, 3, temp); sqlite3_bind_double(res, 4, hum);
     sqlite3_bind_double(res, 5, soil); sqlite3_bind_double(res, 6, press);
-    rc = sqlite3_step(res);
-    sqlite3_finalize(res);
+    sqlite3_step(res); sqlite3_finalize(res);
   }
 }
 
@@ -135,8 +181,8 @@ String readHistoryFromDB(int periodSeconds, int limitCount, time_t customStart =
   DynamicJsonDocument doc(32768);
   JsonArray arr = doc.to<JsonArray>();
   String sql = "SELECT ts, time, temp, hum, soil, pressure FROM SensorLog";
-  if (periodSeconds > 0) { sql += " WHERE ts >= " + String(time(nullptr) - periodSeconds); }
-  else if (customStart > 0 && customEnd > 0) { sql += " WHERE ts >= " + String(customStart) + " AND ts <= " + String(customEnd); }
+  if (periodSeconds > 0) sql += " WHERE ts >= " + String(time(nullptr) - periodSeconds);
+  else if (customStart > 0 && customEnd > 0) sql += " WHERE ts >= " + String(customStart) + " AND ts <= " + String(customEnd);
   sql += " ORDER BY ts ASC";
   if (limitCount > 0) sql += " LIMIT " + String(limitCount);
   
@@ -161,45 +207,22 @@ void clearDB() {
   if (db) { sqlite3_exec(db, "DELETE FROM SensorLog;", NULL, NULL, &zErrMsg); sqlite3_free(zErrMsg); }
 }
 
-// ==================== ИСПРАВЛЕНО: АВТОРИЗАЦИЯ И РАСТЕНИЯ (ArduinoJson v7) ====================
-void preSeedPlants() {
-  if (LittleFS.exists(PLANTS_FILE)) return;
-  DynamicJsonDocument doc(4096);
-  JsonArray arr = doc.to<JsonArray>();
-
-  JsonObject m = arr.createNestedObject();
-  m["name"] = "Monstera"; m["displayName"] = "Монстера";
-  JsonArray t1 = m["temp"].to<JsonArray>(); t1.add(20); t1.add(25);
-  JsonArray h1 = m["hum"].to<JsonArray>(); h1.add(60); h1.add(80);
-  JsonArray s1 = m["soil"].to<JsonArray>(); s1.add(40); s1.add(70);
-  JsonArray p1 = m["press"].to<JsonArray>(); p1.add(740); p1.add(770);
-
-  JsonObject c = arr.createNestedObject();
-  c["name"] = "Cactus"; c["displayName"] = "Кактус";
-  JsonArray t2 = c["temp"].to<JsonArray>(); t2.add(20); t2.add(30);
-  JsonArray h2 = c["hum"].to<JsonArray>(); h2.add(20); h2.add(40);
-  JsonArray s2 = c["soil"].to<JsonArray>(); s2.add(10); s2.add(30);
-  JsonArray p2 = c["press"].to<JsonArray>(); p2.add(740); p2.add(770);
-
-  File f = LittleFS.open(PLANTS_FILE, "w"); serializeJson(arr, f); f.close();
-}
-
+// ==================== ДОБАВЛЕНО: ОБРАБОТЧИКИ АВТОРИЗАЦИИ И РАСТЕНИЙ (SQLite) ====================
 void handleAuthRegister() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "Method not allowed"); return; }
   DynamicJsonDocument doc(256);
   if (deserializeJson(doc, server.arg("plain")) || !doc["username"] || !doc["password"]) { server.send(400, "text/plain", "Invalid"); return; }
   String u = doc["username"].as<String>(), p = doc["password"].as<String>();
-  
-  DynamicJsonDocument usersDoc(1024);
-  File f = LittleFS.open(USERS_FILE, "r");
-  if (f) { deserializeJson(usersDoc, f); f.close(); } else { usersDoc["users"] = JsonArray(); }
-  
-  JsonArray users = usersDoc["users"].as<JsonArray>();
-  for (JsonObject usr : users) if (usr["username"].as<String>() == u) { server.send(409, "text/plain", "Exists"); return; }
-  
-  JsonObject nu = users.add<JsonObject>(); nu["username"] = u; nu["password"] = p;
-  f = LittleFS.open(USERS_FILE, "w"); serializeJson(usersDoc, f); f.close();
-  server.send(200, "text/plain", "OK");
+  const char* sql = "INSERT INTO Users (username, password) VALUES (?, ?);";
+  rc = sqlite3_prepare_v2(db, sql, -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_text(res, 1, u.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(res, 2, p.c_str(), -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(res); sqlite3_finalize(res);
+    if (rc == SQLITE_DONE) server.send(200, "text/plain", "OK");
+    else if (rc == SQLITE_CONSTRAINT) server.send(409, "text/plain", "User exists");
+    else server.send(500, "text/plain", "DB error");
+  } else server.send(500, "text/plain", "Prepare error");
 }
 
 void handleAuthLogin() {
@@ -207,63 +230,75 @@ void handleAuthLogin() {
   DynamicJsonDocument doc(256);
   if (deserializeJson(doc, server.arg("plain"))) { server.send(400, "text/plain", "Invalid"); return; }
   String u = doc["username"].as<String>(), p = doc["password"].as<String>();
-  
-  File f = LittleFS.open(USERS_FILE, "r");
-  if (!f) { server.send(401, "text/plain", "No users"); return; }
-  DynamicJsonDocument usersDoc(1024); deserializeJson(usersDoc, f); f.close();
-  
-  for (JsonObject usr : usersDoc["users"].as<JsonArray>()) {
-    if (usr["username"].as<String>() == u && usr["password"].as<String>() == p) { server.send(200, "text/plain", "OK"); return; }
-  }
-  server.send(401, "text/plain", "Bad credentials");
+  const char* sql = "SELECT password FROM Users WHERE username = ?;";
+  rc = sqlite3_prepare_v2(db, sql, -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_text(res, 1, u.c_str(), -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(res) == SQLITE_ROW) {
+      const char* storedP = (const char*)sqlite3_column_text(res, 0);
+      sqlite3_finalize(res);
+      server.send(String(storedP) == p ? 200 : 401, "text/plain", (String(storedP) == p ? "OK" : "Bad credentials"));
+    } else { sqlite3_finalize(res); server.send(401, "text/plain", "Bad credentials"); }
+  } else server.send(500, "text/plain", "Prepare error");
 }
 
 void handlePlantsLoad() {
-  preSeedPlants();
-  if (!LittleFS.exists(PLANTS_FILE)) { server.send(200, "application/json", "[]"); return; }
-  File f = LittleFS.open(PLANTS_FILE, "r");
+  if (!db) { server.send(200, "application/json", "[]"); return; }
   DynamicJsonDocument doc(4096);
-  if (f) { deserializeJson(doc, f); f.close(); }
-  String out; serializeJson(doc, out);
+  JsonArray arr = doc.to<JsonArray>();
+  const char* sql = "SELECT name, displayName, temp_min, temp_max, hum_min, hum_max, soil_min, soil_max, press_min, press_max FROM Plants;";
+  rc = sqlite3_prepare_v2(db, sql, -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    while (sqlite3_step(res) == SQLITE_ROW) {
+      JsonObject obj = arr.createNestedObject();
+      obj["name"] = (const char*)sqlite3_column_text(res, 0);
+      obj["displayName"] = (const char*)sqlite3_column_text(res, 1);
+      JsonArray t = obj["temp"].to<JsonArray>(); t.add(sqlite3_column_double(res, 2)); t.add(sqlite3_column_double(res, 3));
+      JsonArray h = obj["hum"].to<JsonArray>(); h.add(sqlite3_column_double(res, 4)); h.add(sqlite3_column_double(res, 5));
+      JsonArray s = obj["soil"].to<JsonArray>(); s.add(sqlite3_column_double(res, 6)); s.add(sqlite3_column_double(res, 7));
+      JsonArray pr = obj["press"].to<JsonArray>(); pr.add(sqlite3_column_double(res, 8)); pr.add(sqlite3_column_double(res, 9));
+    }
+    sqlite3_finalize(res);
+  }
+  String out; serializeJson(arr, out);
   server.send(200, "application/json", out);
 }
 
 void handlePlantsSave() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "Method not allowed"); return; }
-  DynamicJsonDocument newPlantDoc(512);
-  if (deserializeJson(newPlantDoc, server.arg("plain"))) { server.send(400, "text/plain", "Invalid JSON"); return; }
-  String newName = newPlantDoc["name"].as<String>();
-  if (newName.isEmpty()) { server.send(400, "text/plain", "Missing name"); return; }
-
-  DynamicJsonDocument plantsDoc(4096);
-  File f = LittleFS.open(PLANTS_FILE, "r");
-  if (f) { deserializeJson(plantsDoc, f); f.close(); }
-  
-  JsonArray arr = plantsDoc.as<JsonArray>();
-  if (!arr) arr = plantsDoc.to<JsonArray>();
-
-  for (JsonObject p : arr) if (p["name"].as<String>() == newName) { server.send(409, "text/plain", "Name taken"); return; }
-
-  arr.add(newPlantDoc.as<JsonObject>());
-  f = LittleFS.open(PLANTS_FILE, "w");
-  if (f) { serializeJson(arr, f); f.close(); server.send(200, "text/plain", "OK"); }
-  else server.send(500, "text/plain", "File error");
+  DynamicJsonDocument doc(512);
+  if (deserializeJson(doc, server.arg("plain")) || !doc["name"]) { server.send(400, "text/plain", "Invalid"); return; }
+  String name = doc["name"].as<String>();
+  String disp = doc["displayName"] ? doc["displayName"].as<String>() : name;
+  const char* sql = "INSERT INTO Plants (name, displayName, temp_min, temp_max, hum_min, hum_max, soil_min, soil_max, press_min, press_max) VALUES (?,?,?,?,?,?,?,?,?,?);";
+  rc = sqlite3_prepare_v2(db, sql, -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_text(res, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(res, 2, disp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(res, 3, doc["temp"][0].as<double>());
+    sqlite3_bind_double(res, 4, doc["temp"][1].as<double>());
+    sqlite3_bind_double(res, 5, doc["hum"][0].as<double>());
+    sqlite3_bind_double(res, 6, doc["hum"][1].as<double>());
+    sqlite3_bind_double(res, 7, doc["soil"][0].as<double>());
+    sqlite3_bind_double(res, 8, doc["soil"][1].as<double>());
+    sqlite3_bind_double(res, 9, doc["press"][0].as<double>());
+    sqlite3_bind_double(res, 10, doc["press"][1].as<double>());
+    rc = sqlite3_step(res); sqlite3_finalize(res);
+    if (rc == SQLITE_DONE) server.send(200, "text/plain", "OK");
+    else if (rc == SQLITE_CONSTRAINT) server.send(409, "text/plain", "Name taken");
+    else server.send(500, "text/plain", "DB error");
+  } else server.send(500, "text/plain", "Prepare error");
 }
 
 void handlePlantsDelete() {
   if (server.method() != HTTP_DELETE) { server.send(405, "text/plain", "Method not allowed"); return; }
   String name = server.arg("name");
-  DynamicJsonDocument plantsDoc(4096);
-  File f = LittleFS.open(PLANTS_FILE, "r");
-  JsonArray arr = plantsDoc.to<JsonArray>();
-  if (f) { deserializeJson(plantsDoc, f); f.close(); arr = plantsDoc.as<JsonArray>(); }
-  if (!arr) arr = plantsDoc.to<JsonArray>();
-
-  DynamicJsonDocument filtered(4096);
-  JsonArray newArr = filtered.to<JsonArray>();
-  for (JsonObject p : arr) if (p["name"].as<String>() != name) newArr.add(p);
-  
-  f = LittleFS.open(PLANTS_FILE, "w"); if (f) { serializeJson(filtered, f); f.close(); }
+  const char* sql = "DELETE FROM Plants WHERE name = ?;";
+  rc = sqlite3_prepare_v2(db, sql, -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_text(res, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(res); sqlite3_finalize(res);
+  }
   server.send(200, "text/plain", "OK");
 }
 // ===============================================================================
@@ -660,7 +695,7 @@ void setup() {
   if (!timeSynced) bootTime = millis() / 1000;
 
   if (!LittleFS.begin(true)) { Serial.println("LittleFS failed!"); while (true) delay(100); }
-  initDB(); preSeedPlants(); SPI.begin();
+  initDB(); SPI.begin();
   while (!bme.begin()) { delay(1000); }
   epd.LDirInit(); epd.Clear(); paint.SetWidth(56); paint.SetHeight(24); epd.DisplayPartBaseImage(IMAGE_DATA);
   readAndLog(); lastLogTime = millis();
