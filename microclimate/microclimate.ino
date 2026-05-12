@@ -1,0 +1,1254 @@
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <WebServer.h>
+#include <ArduinoOTA.h>
+#include <LittleFS.h>
+#include <SPI.h>
+#include <BME280Spi.h>
+#include <time.h>
+#include <ArduinoJson.h>
+#include <sqlite3.h>
+// ==================== E-PAPER БИБЛИОТЕКИ ====================
+#include "epd1in54_V2.h"
+#include "imagedata.h"
+#include "epdpaint.h"
+
+#define SERIAL_BAUD 115200
+
+// ==================== Wi-Fi НАСТРОЙКИ ====================
+#define STA_SSID "iPhone (Сергей)"
+#define STA_PASS "170999747"
+#define AP_SSID  "netSensorModule-01"
+#define AP_PASS  "188B0E14E2C1"
+#define MDNS_NAME "SensorModule-C3"
+IPAddress ap_ip(192, 168, 10, 1);
+IPAddress ap_mask(255, 255, 255, 0);
+
+// ==================== Пины ====================
+#define SOIL_PIN       0
+#define CS_BME280_PIN  8
+
+// ==================== E-PAPER НАСТРОЙКИ ====================
+#define COLORED     0
+#define UNCOLORED   1
+Epd epd;
+unsigned char image[1024];
+Paint paint(image, 0, 0);
+char strData[10];
+
+// ==================== Объекты ====================
+BME280Spi::Settings settings(CS_BME280_PIN);
+BME280Spi bme(settings);
+WebServer server(80);
+
+// ==================== SQLite БАЗА ДАННЫХ ====================
+#define DB_FILE "/littlefs/sensor_log.db"
+#define MAX_LOG_ENTRIES 1000
+
+sqlite3 *db = nullptr;
+sqlite3_stmt *res = nullptr;
+int rc;
+char *zErrMsg = 0;
+
+// ==================== Глобальные переменные ====================
+unsigned long lastLogTime = 0;
+int currentSoil = 0, currentHum = 0, currentTemp = 0, currentPres = 0;
+time_t bootTime = 0;
+bool timeSynced = false;
+
+// ==================== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ====================
+String formatTime(time_t t, bool showSeconds = false) {
+  if (!timeSynced || t < 1700000000) {
+    if (bootTime == 0) bootTime = millis() / 1000;
+    unsigned long uptime = (millis() / 1000) - bootTime;
+    int days = uptime / 86400;
+    int hours = (uptime % 86400) / 3600;
+    int mins = (uptime % 3600) / 60;
+    int secs = uptime % 60;
+    char buf[32];
+    if (days > 0) sprintf(buf, "UP %dd %02d:%02d", days, hours, mins);
+    else if (showSeconds) sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
+    else sprintf(buf, "UP %02d:%02d", hours, mins);
+    return String(buf);
+  }
+  struct tm timeinfo;
+  if (localtime_r(&t, &timeinfo)) {
+    char buf[20];
+    if (showSeconds) strftime(buf, sizeof(buf), "%d.%m %H:%M:%S", &timeinfo);
+    else strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
+    return String(buf);
+  }
+  return "??.?? ??:??";
+}
+
+// ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
+void initDB() {
+  Serial.println("=== Инициализация SQLite БД ===");
+  
+  if (!LittleFS.exists("/")) {
+    Serial.println("Ошибка: LittleFS не смонтирован!");
+    return;
+  }
+  
+  sqlite3_initialize();
+  
+  const char* dbPath = DB_FILE;
+  Serial.printf("Попытка открытия БД: %s\n", dbPath);
+  
+  rc = sqlite3_open(dbPath, &db);
+  
+  if (rc != SQLITE_OK) {
+    Serial.printf("Ошибка открытия БД: %d\n", rc);
+    Serial.printf("Сообщение: %s\n", sqlite3_errmsg(db));
+    db = nullptr;
+    return;
+  }
+  
+  Serial.println("БД успешно открыта");
+  
+  String sql = "CREATE TABLE IF NOT EXISTS SensorLog ("
+               "ID INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "ts INTEGER NOT NULL, "
+               "time TEXT, "
+               "temp REAL, "
+               "hum REAL, "
+               "soil REAL, "
+               "pressure REAL);";
+  
+  Serial.println("Создание таблицы SensorLog...");
+  rc = sqlite3_exec(db, sql.c_str(), NULL, NULL, &zErrMsg);
+  
+  if (rc != SQLITE_OK) {
+    Serial.printf("Ошибка создания таблицы: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+  } else {
+    Serial.println("Таблица создана/проверена");
+  }
+  
+  testDBWrite();
+}
+
+void testDBWrite() {
+  if (!db) return;
+  
+  String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
+  rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
+  
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_int(res, 1, (int)time(nullptr));
+    sqlite3_bind_text(res, 2, "TEST", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(res, 3, 25.0);
+    sqlite3_bind_double(res, 4, 50.0);
+    sqlite3_bind_double(res, 5, 75.0);
+    sqlite3_bind_double(res, 6, 760.0);
+    
+    rc = sqlite3_step(res);
+    if (rc == SQLITE_DONE) {
+      Serial.println("Тестовая запись успешно добавлена");
+    } else {
+      Serial.printf("Ошибка тестовой записи: %d\n", rc);
+    }
+    sqlite3_finalize(res);
+    
+    sqlite3_exec(db, "DELETE FROM SensorLog WHERE time='TEST';", NULL, NULL, NULL);
+  } else {
+    Serial.printf("Ошибка подготовки тестового запроса: %s\n", sqlite3_errmsg(db));
+  }
+}
+
+// ==================== ЗАПИСЬ В БАЗУ ДАННЫХ ====================
+void logToDB(int soil, int hum, int temp, int press) {
+  if (!db) {
+    Serial.println("БД недоступна, запись пропущена");
+    return;
+  }
+  
+  time_t now = time(nullptr);
+  String timeStr = formatTime(now, true);
+  
+  String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
+  rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
+  
+  if (rc == SQLITE_OK) {
+    sqlite3_bind_int(res, 1, (int)now);
+    sqlite3_bind_text(res, 2, timeStr.c_str(), timeStr.length(), SQLITE_TRANSIENT);
+    sqlite3_bind_double(res, 3, temp);
+    sqlite3_bind_double(res, 4, hum);
+    sqlite3_bind_double(res, 5, soil);
+    sqlite3_bind_double(res, 6, press);
+    
+    rc = sqlite3_step(res);
+    if (rc != SQLITE_DONE) {
+      Serial.printf("Ошибка записи в БД: %d\n", rc);
+    }
+    sqlite3_finalize(res);
+  } else {
+    Serial.printf("Ошибка подготовки запроса: %s\n", sqlite3_errmsg(db));
+  }
+}
+
+// ==================== ЧТЕНИЕ ИЗ БАЗЫ ДАННЫХ ====================
+String readHistoryFromDB(int periodSeconds, int limitCount, time_t customStart = 0, time_t customEnd = 0) {
+  if (!db) return "[]";
+  
+  DynamicJsonDocument doc(32768);
+  JsonArray arr = doc.to<JsonArray>();
+  
+  String sql = "SELECT ts, time, temp, hum, soil, pressure FROM SensorLog";
+  
+  if (periodSeconds > 0) {
+    time_t now = time(nullptr);
+    time_t cutoff = now - periodSeconds;
+    sql += " WHERE ts >= " + String(cutoff);
+  } else if (customStart > 0 && customEnd > 0) {
+    sql += " WHERE ts >= " + String(customStart) + " AND ts <= " + String(customEnd);
+  }
+  
+  sql += " ORDER BY ts ASC";
+  
+  if (limitCount > 0) {
+    sql += " LIMIT " + String(limitCount);
+  }
+  
+  rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
+  if (rc == SQLITE_OK) {
+    int count = 0;
+    while (sqlite3_step(res) == SQLITE_ROW) {
+      JsonObject entry = arr.createNestedObject();
+      entry["ts"] = sqlite3_column_int(res, 0);
+      const char* t = (const char*)sqlite3_column_text(res, 1);
+      entry["time"] = t ? String(t) : "";
+      entry["temp"] = sqlite3_column_double(res, 2);
+      entry["hum"] = sqlite3_column_double(res, 3);
+      entry["soil"] = sqlite3_column_double(res, 4);
+      entry["pressure"] = sqlite3_column_double(res, 5);
+      count++;
+    }
+    sqlite3_finalize(res);
+    Serial.printf("Прочитано %d записей из БД\n", count);
+  } else {
+    Serial.printf("Ошибка чтения из БД: %s\n", sqlite3_errmsg(db));
+  }
+  
+  String out;
+  serializeJson(arr, out);
+  return out;
+}
+
+void clearDB() {
+  if (db) {
+    sqlite3_exec(db, "DELETE FROM SensorLog;", NULL, NULL, &zErrMsg);
+    sqlite3_free(zErrMsg);
+    Serial.println("БД очищена");
+  }
+}
+
+// ==================== HTML + JS ====================
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Мониторинг растений</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+:root {
+--bg: #f0f2f5; --card: #ffffff; --text: #1a1a2e; --text2: #6b7280;
+--border: #e5e7eb; --shadow: 0 4px 20px rgba(0,0,0,0.08);
+--primary: #10b981; --primary-dark: #059669; --accent: #3b82f6;
+--warning: #f59e0b; --danger: #ef4444; --success: #22c55e;
+}
+[data-theme="dark"] {
+--bg: #0f172a; --card: #1e293b; --text: #f1f5f9; --text2: #94a3b8;
+--border: #334155; --shadow: 0 4px 20px rgba(0,0,0,0.4);
+--primary: #22c55e; --primary-dark: #16a34a; --accent: #60a5fa;
+}
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+background: var(--bg); color: var(--text);
+transition: background 0.3s ease, color 0.3s ease;
+min-height: 100vh; line-height: 1.5;
+}
+.theme-toggle {
+position: fixed; top: 12px; right: 12px; z-index: 100;
+width: 40px; height: 40px; border: none; border-radius: 12px;
+background: var(--card); box-shadow: var(--shadow);
+cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center;
+transition: transform 0.2s, background 0.3s ease, color 0.3s ease;
+color: var(--text);
+}
+.theme-toggle:active { transform: scale(0.95); }
+header {
+padding: 16px 20px; text-align: center;
+font-size: 18px; font-weight: 600; color: var(--primary);
+background: var(--card); box-shadow: var(--shadow);
+position: sticky; top: 0; z-index: 50;
+display: flex; align-items: center; justify-content: center; gap: 8px;
+transition: background 0.3s ease;
+}
+header .status { font-size: 12px; color: var(--text2); font-weight: 400; }
+header .sync-status { font-size: 10px; color: var(--success); margin-left: 4px; }
+header .sync-status.error { color: var(--danger); }
+.tabs {
+display: flex; justify-content: center; gap: 6px; padding: 10px;
+background: var(--card); border-bottom: 1px solid var(--border);
+position: sticky; top: 56px; z-index: 45;
+transition: background 0.3s ease;
+}
+.tab {
+padding: 8px 16px; border: none; background: transparent;
+color: var(--text2); cursor: pointer; border-radius: 10px;
+font-size: 14px; font-weight: 500; transition: all 0.2s;
+}
+.tab:hover { background: rgba(16,185,129,0.1); color: var(--primary); }
+.tab.active { background: var(--primary); color: #fff; }
+.container { max-width: 800px; margin: 0 auto; padding: 14px; }
+.content { display: none; animation: fadeIn 0.25s ease-out; }
+.content.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.metric-card {
+background: var(--card); padding: 16px 14px; border-radius: 16px;
+text-align: center; box-shadow: var(--shadow); border: 1px solid var(--border);
+transition: transform 0.2s, box-shadow 0.2s, background 0.3s ease;
+}
+.metric-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+.metric-label { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-value { font-size: 28px; font-weight: 700; color: var(--primary); margin: 6px 0 2px; }
+.metric-unit { font-size: 13px; color: var(--text2); font-weight: 500; }
+.history-panel, .chart-panel {
+margin-top: 16px; background: var(--card); padding: 14px;
+border-radius: 16px; box-shadow: var(--shadow); border: 1px solid var(--border);
+transition: background 0.3s ease;
+}
+.history-header, .chart-header {
+display: flex; justify-content: space-between; align-items: center;
+margin-bottom: 12px; flex-wrap: wrap; gap: 8px;
+}
+.history-title, .chart-title { font-weight: 600; font-size: 15px; }
+.filter-group, .chart-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.filter-btn, .chart-filter {
+padding: 5px 11px; border: 1px solid var(--border); background: transparent;
+color: var(--text2); cursor: pointer; border-radius: 20px;
+font-size: 11px; font-weight: 500; transition: all 0.2s;
+}
+.filter-btn:hover, .chart-filter:hover { border-color: var(--primary); color: var(--primary); }
+.filter-btn.active, .chart-filter.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.filter-btn.danger { color: var(--danger); border-color: var(--danger); }
+.filter-btn.danger:hover { background: var(--danger); color: #fff; }
+.custom-range {
+display: flex; gap: 5px; align-items: center; margin-left: 5px;
+}
+.custom-range input {
+padding: 4px; border: 1px solid var(--border); border-radius: 4px;
+background: var(--bg); color: var(--text); font-size: 11px;
+}
+.history-list {
+max-height: 280px; overflow-y: auto; border-radius: 10px;
+background: rgba(16,185,129,0.03); padding: 8px;
+}
+.history-item {
+padding: 10px 12px; border-bottom: 1px solid var(--border);
+font-size: 13px; display: flex; justify-content: space-between; align-items: center;
+}
+.history-item:last-child { border-bottom: none; }
+.history-time { font-weight: 600; color: var(--text); min-width: 105px; font-family: 'Courier New', monospace; font-size: 13px; }
+.history-values { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text2); }
+.history-values span { display: flex; align-items: center; gap: 3px; }
+.history-values .val-temp { color: #ef4444; }
+.history-values .val-hum { color: #3b82f6; }
+.history-values .val-soil { color: #22c55e; }
+.history-values .val-press { color: #a855f7; }
+.history-empty { text-align: center; padding: 20px; color: var(--text2); font-style: italic; }
+.chart-container {
+height: 280px; position: relative; background: rgba(16,185,129,0.04);
+border-radius: 12px; padding: 12px; margin-bottom: 10px;
+}
+canvas { width: 100%; height: 100%; display: block; }
+.chart-legend {
+display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;
+font-size: 12px; color: var(--text2);
+}
+.legend-item {
+display: flex; align-items: center; gap: 5px; cursor: pointer;
+padding: 4px 8px; border-radius: 16px; transition: background 0.2s;
+}
+.legend-item:hover { background: rgba(16,185,129,0.1); }
+.legend-item.active {
+background: var(--accent); color: #fff;
+box-shadow: 0 2px 8px rgba(59,130,246,0.3);
+}
+.legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+.chart-tooltip {
+position: absolute; padding: 8px 12px; background: var(--card);
+border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
+font-size: 12px; pointer-events: none; z-index: 20; display: none;
+max-width: 200px; transition: background 0.3s ease, border-color 0.3s ease;
+}
+.chart-tooltip.visible { display: block; }
+.tooltip-time { font-weight: 600; margin-bottom: 4px; color: var(--text); }
+.tooltip-row { display: flex; justify-content: space-between; gap: 12px; margin: 2px 0; }
+.tooltip-color { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+.loading {
+display: flex; align-items: center; justify-content: center;
+padding: 20px; color: var(--text2); font-style: italic;
+}
+.loading::after {
+content: ''; width: 16px; height: 16px; border: 2px solid var(--border);
+border-top-color: var(--primary); border-radius: 50%;
+animation: spin 0.8s linear infinite; margin-left: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.chart-mode-indicator {
+font-size: 11px; color: var(--text2); margin-left: 8px;
+padding: 2px 8px; background: rgba(16,185,129,0.1);
+border-radius: 12px; display: none;
+}
+.chart-mode-indicator.visible { display: inline; }
+.y-axis-label {
+position: absolute; left: 5px; top: 50%; transform: translateY(-50%) rotate(-90deg);
+font-size: 11px; font-weight: 600; color: var(--text); pointer-events: none; white-space: nowrap; letter-spacing: 1px;
+}
+.y-axis-values {
+position: absolute; left: 15px; top: 0; bottom: 40px; display: flex;
+flex-direction: column; justify-content: space-between; padding: 25px 0; pointer-events: none;
+}
+.y-axis-value {
+font-size: 10px; color: var(--text2); text-align: right; font-family: 'Courier New', monospace;
+}
+@media (max-width: 500px) {
+.metrics-grid { grid-template-columns: 1fr; }
+.history-header, .chart-header { flex-direction: column; align-items: flex-start; }
+.filter-group, .chart-filters { width: 100%; justify-content: center; }
+.history-values { flex-direction: column; gap: 4px; }
+.history-time { min-width: 95px; font-size: 12px; }
+}
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="themeBtn" title="Переключить тему">◑</button>
+<header>
+Мониторинг растений
+<span class="status" id="timeStatus">--:--</span>
+<span class="sync-status" id="syncStatus">●</span>
+</header>
+<div class="tabs">
+<button class="tab active" data-tab="main">Показатели</button>
+<button class="tab" data-tab="charts">Графики</button>
+</div>
+<div class="container">
+<div id="tab-main" class="content active">
+<div class="metrics-grid">
+<div class="metric-card">
+<div class="metric-label">Температура</div>
+<div class="metric-value" id="temp">--</div>
+<div class="metric-unit">°C</div>
+</div>
+<div class="metric-card">
+<div class="metric-label">Влажность воздуха</div>
+<div class="metric-value" id="hum">--</div>
+<div class="metric-unit">%</div>
+</div>
+<div class="metric-card">
+<div class="metric-label">Влажность почвы</div>
+<div class="metric-value" id="soil">--</div>
+<div class="metric-unit">%</div>
+</div>
+<div class="metric-card">
+<div class="metric-label">Атм. давление</div>
+<div class="metric-value" id="pressure">--</div>
+<div class="metric-unit">мм рт.ст.</div>
+</div>
+</div>
+<div class="history-panel">
+<div class="history-header">
+<div class="history-title">История измерений</div>
+<div class="filter-group">
+<button class="filter-btn active" data-period="0" data-limit="20">Посл. 20</button>
+<button class="filter-btn" data-period="86400" data-limit="0">1 день</button>
+<button class="filter-btn" data-period="604800" data-limit="0">7 дней</button>
+<button class="filter-btn" data-period="2592000" data-limit="0">Месяц</button>
+<button class="filter-btn" id="historyDateBtn">Дата</button>
+<button class="filter-btn danger" id="clearBtn" title="Очистить историю">X</button>
+</div>
+</div>
+<div class="custom-range" id="historyCustomRange" style="display:none; margin-bottom:10px;">
+<input type="datetime-local" id="historyStartDate">
+<input type="datetime-local" id="historyEndDate">
+<button class="filter-btn active" id="historyApplyBtn">Применить</button>
+<button class="filter-btn" id="historyCancelBtn">Отмена</button>
+</div>
+<div class="history-list" id="historyList">
+<div class="loading">Загрузка данных...</div>
+</div>
+</div>
+</div>
+<div id="tab-charts" class="content">
+<div class="chart-panel">
+<div class="chart-header">
+<div>
+<span class="chart-title">Динамика показателей</span>
+<span class="chart-mode-indicator" id="chartModeIndicator">Режим: один параметр</span>
+</div>
+<div class="chart-filters">
+<button class="chart-filter active" data-period="0" data-limit="20">Посл. 20</button>
+<button class="chart-filter" data-period="86400" data-limit="0">1 день</button>
+<button class="chart-filter" data-period="604800" data-limit="0">7 дней</button>
+<button class="chart-filter" data-period="2592000" data-limit="0">Месяц</button>
+<button class="chart-filter" id="chartDateBtn">Дата</button>
+</div>
+</div>
+<div class="custom-range" id="chartCustomRange" style="display:none; margin-bottom:10px;">
+<input type="datetime-local" id="chartStartDate">
+<input type="datetime-local" id="chartEndDate">
+<button class="filter-btn active" id="chartApplyBtn">Применить</button>
+<button class="filter-btn" id="chartCancelBtn">Отмена</button>
+</div>
+<div class="chart-container">
+<canvas id="chart"></canvas>
+<div class="chart-tooltip" id="tooltip">
+<div class="tooltip-time"></div>
+</div>
+<div class="y-axis-label" id="yAxisLabel"></div>
+<div class="y-axis-values" id="yAxisValues"></div>
+</div>
+<div class="chart-legend" id="legend">
+<div class="legend-item active" data-metric="all">
+<span class="legend-dot" style="background:linear-gradient(135deg,#ef4444,#3b82f6,#22c55e,#a855f7)"></span>
+Все параметры
+</div>
+<div class="legend-item" data-metric="temp"><span class="legend-dot" style="background:#ef4444"></span>Температура</div>
+<div class="legend-item" data-metric="hum"><span class="legend-dot" style="background:#3b82f6"></span>Влажность</div>
+<div class="legend-item" data-metric="soil"><span class="legend-dot" style="background:#22c55e"></span>Почва</div>
+<div class="legend-item" data-metric="pressure"><span class="legend-dot" style="background:#a855f7"></span>Давление</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+let chartData = [];
+let currentHistoryPeriod = 0;
+let currentHistoryLimit = 20;
+let currentChartPeriod = 0;
+let currentChartLimit = 20;
+let visibleMetrics = { temp: true, hum: true, soil: true, pressure: true };
+let currentChartMode = 'all';
+let serverTimeOffset = 0;
+let historyCustomStart = 0, historyCustomEnd = 0;
+let chartCustomStart = 0, chartCustomEnd = 0;
+const UPDATE_INTERVAL = 10000;
+
+document.addEventListener('DOMContentLoaded', () => {
+initTheme();
+initTabs();
+initHistoryFilters();
+initChartFilters();
+initLegend();
+initClearButton();
+initHistoryCustomRange();
+initChartCustomRange();
+initChart();
+syncTimeWithServer();
+startAutoUpdate();
+loadData();
+});
+
+async function syncTimeWithServer() {
+try {
+const res = await fetch('/time?t=' + Date.now());
+const serverTimeStr = await res.text();
+const now = new Date();
+if (serverTimeStr && !serverTimeStr.startsWith('UP')) {
+const parts = serverTimeStr.split(' ');
+if (parts.length >= 2) {
+const [datePart, timePart] = parts;
+const [day, month, year] = datePart.split('.');
+const [hours, minutes, seconds] = timePart.split(':');
+const serverDate = new Date('20'+year+'-'+month+'-'+day+'T'+hours+':'+minutes+':'+seconds);
+serverTimeOffset = serverDate.getTime() - now.getTime();
+document.getElementById('timeStatus').textContent = serverTimeStr;
+document.getElementById('syncStatus').className = 'sync-status';
+document.getElementById('syncStatus').title = 'Время синхронизировано';
+}
+} else {
+document.getElementById('syncStatus').className = 'sync-status error';
+document.getElementById('syncStatus').title = 'Время не синхронизировано';
+}
+} catch (e) {
+document.getElementById('syncStatus').className = 'sync-status error';
+}
+}
+
+function initTheme() {
+const saved = localStorage.getItem('theme');
+if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+document.getElementById('themeBtn').addEventListener('click', () => {
+const html = document.documentElement;
+const isDark = html.getAttribute('data-theme') === 'dark';
+if (isDark) {
+html.removeAttribute('data-theme');
+localStorage.setItem('theme', 'light');
+} else {
+html.setAttribute('data-theme', 'dark');
+localStorage.setItem('theme', 'dark');
+}
+if (document.getElementById('tab-charts').classList.contains('active')) drawChart();
+});
+}
+
+function initTabs() {
+document.querySelectorAll('.tab').forEach(btn => {
+btn.addEventListener('click', () => {
+document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+btn.classList.add('active');
+document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+if (btn.dataset.tab === 'charts') setTimeout(drawChart, 100);
+});
+});
+}
+
+// === ИСПРАВЛЕНО: Отдельные обработчики для истории и графиков ===
+function initHistoryFilters() {
+document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(btn => {
+btn.addEventListener('click', () => {
+document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b => b.classList.remove('active'));
+btn.classList.add('active');
+currentHistoryPeriod = parseInt(btn.dataset.period);
+currentHistoryLimit = parseInt(btn.dataset.limit);
+historyCustomStart = 0; historyCustomEnd = 0;
+document.getElementById('historyCustomRange').style.display = 'none';
+loadHistory();
+});
+});
+}
+
+function initChartFilters() {
+document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(btn => {
+btn.addEventListener('click', () => {
+document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b => b.classList.remove('active'));
+btn.classList.add('active');
+currentChartPeriod = parseInt(btn.dataset.period);
+currentChartLimit = parseInt(btn.dataset.limit);
+chartCustomStart = 0; chartCustomEnd = 0;
+document.getElementById('chartCustomRange').style.display = 'none';
+loadChartData();
+});
+});
+}
+
+function initHistoryCustomRange() {
+document.getElementById('historyDateBtn').addEventListener('click', () => {
+document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b => b.classList.remove('active'));
+document.getElementById('historyDateBtn').classList.add('active');
+document.getElementById('historyCustomRange').style.display = 'flex';
+const now = new Date();
+now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+document.getElementById('historyEndDate').value = now.toISOString().slice(0,16);
+const yesterday = new Date(now.getTime() - 24*60*60*1000);
+document.getElementById('historyStartDate').value = yesterday.toISOString().slice(0,16);
+});
+document.getElementById('historyApplyBtn').addEventListener('click', () => {
+const startVal = document.getElementById('historyStartDate').value;
+const endVal = document.getElementById('historyEndDate').value;
+if (startVal && endVal) {
+historyCustomStart = Math.floor(new Date(startVal).getTime() / 1000);
+historyCustomEnd = Math.floor(new Date(endVal).getTime() / 1000);
+currentHistoryPeriod = 0; currentHistoryLimit = 0;
+loadHistory();
+document.getElementById('historyCustomRange').style.display = 'none';
+}
+});
+document.getElementById('historyCancelBtn').addEventListener('click', () => {
+document.getElementById('historyCustomRange').style.display = 'none';
+document.querySelectorAll('.history-panel .filter-btn[data-period]').forEach(b => b.classList.remove('active'));
+document.querySelector('.history-panel .filter-btn[data-period="0"]').classList.add('active');
+currentHistoryPeriod = 0; currentHistoryLimit = 20;
+historyCustomStart = 0; historyCustomEnd = 0;
+loadHistory();
+});
+}
+
+function initChartCustomRange() {
+document.getElementById('chartDateBtn').addEventListener('click', () => {
+document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b => b.classList.remove('active'));
+document.getElementById('chartDateBtn').classList.add('active');
+document.getElementById('chartCustomRange').style.display = 'flex';
+const now = new Date();
+now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+document.getElementById('chartEndDate').value = now.toISOString().slice(0,16);
+const yesterday = new Date(now.getTime() - 24*60*60*1000);
+document.getElementById('chartStartDate').value = yesterday.toISOString().slice(0,16);
+});
+document.getElementById('chartApplyBtn').addEventListener('click', () => {
+const startVal = document.getElementById('chartStartDate').value;
+const endVal = document.getElementById('chartEndDate').value;
+if (startVal && endVal) {
+chartCustomStart = Math.floor(new Date(startVal).getTime() / 1000);
+chartCustomEnd = Math.floor(new Date(endVal).getTime() / 1000);
+currentChartPeriod = 0; currentChartLimit = 0;
+loadChartData();
+document.getElementById('chartCustomRange').style.display = 'none';
+}
+});
+document.getElementById('chartCancelBtn').addEventListener('click', () => {
+document.getElementById('chartCustomRange').style.display = 'none';
+document.querySelectorAll('.chart-panel .chart-filter[data-period]').forEach(b => b.classList.remove('active'));
+document.querySelector('.chart-panel .chart-filter[data-period="0"]').classList.add('active');
+currentChartPeriod = 0; currentChartLimit = 20;
+chartCustomStart = 0; chartCustomEnd = 0;
+loadChartData();
+});
+}
+
+function initLegend() {
+document.querySelectorAll('.legend-item').forEach(item => {
+item.addEventListener('click', () => {
+const metric = item.dataset.metric;
+document.querySelectorAll('.legend-item').forEach(i => i.classList.remove('active'));
+item.classList.add('active');
+if (metric === 'all') {
+currentChartMode = 'all';
+visibleMetrics = { temp: true, hum: true, soil: true, pressure: true };
+document.getElementById('chartModeIndicator').classList.remove('visible');
+document.getElementById('yAxisLabel').style.display = 'none';
+document.getElementById('yAxisValues').innerHTML = '';
+} else {
+currentChartMode = metric;
+visibleMetrics = { temp: false, hum: false, soil: false, pressure: false };
+visibleMetrics[metric] = true;
+document.getElementById('chartModeIndicator').classList.add('visible');
+const labels = { temp: '°C', hum: '%', soil: '%', pressure: 'мм' };
+const labelEl = document.getElementById('yAxisLabel');
+labelEl.textContent = labels[metric] || '';
+labelEl.style.color = getMetricStyle(metric).color;
+labelEl.style.display = 'block';
+}
+drawChart();
+});
+});
+}
+
+function initClearButton() {
+document.getElementById('clearBtn').addEventListener('click', async () => {
+if (!confirm('Удалить всю историю измерений?')) return;
+try {
+await fetch('/clear', { method: 'POST' });
+loadHistory();
+if (document.getElementById('tab-charts').classList.contains('active')) loadChartData();
+} catch (e) { alert('Ошибка при очистке'); }
+});
+}
+
+async function loadData() {
+await Promise.all([fetchMetrics(), loadHistory()]);
+if (document.getElementById('tab-charts').classList.contains('active')) await loadChartData();
+}
+
+async function fetchMetrics() {
+try {
+const res = await fetch('/data?t=' + Date.now());
+const data = await res.json();
+updateMetrics(data);
+syncTimeWithServer();
+} catch (e) { console.log('Ошибка загрузки показателей'); }
+}
+
+function updateMetrics(d) {
+document.getElementById('temp').textContent = d.temp ?? '--';
+document.getElementById('hum').textContent = d.humidity ?? '--';
+document.getElementById('soil').textContent = d.soil ?? '--';
+document.getElementById('pressure').textContent = d.pressure ?? '--';
+}
+
+async function loadHistory() {
+const list = document.getElementById('historyList');
+list.innerHTML = '<div class="loading">Загрузка...</div>';
+try {
+let url = '/hist?period='+currentHistoryPeriod+'&limit='+currentHistoryLimit;
+if (historyCustomStart > 0 && historyCustomEnd > 0) {
+url += '&start='+historyCustomStart+'&end='+historyCustomEnd;
+}
+url += '&t='+Date.now();
+const res = await fetch(url);
+chartData = await res.json();
+renderHistory(chartData);
+} catch (e) {
+list.innerHTML = '<div class="history-empty">Ошибка загрузки</div>';
+}
+}
+
+function renderHistory(data) {
+const list = document.getElementById('historyList');
+if (!data || data.length === 0) {
+list.innerHTML = '<div class="history-empty">Нет данных за выбранный период</div>';
+return;
+}
+let html = '';
+data.slice().reverse().forEach(item => {
+let timeDisplay = item.time || '--:--:--';
+html += '<div class="history-item">' +
+'<span class="history-time">' + timeDisplay + '</span>' +
+'<div class="history-values">' +
+'<span class="val-temp">T:' + (item.temp!=null?item.temp:'-') + '°C</span>' +
+'<span class="val-hum">H:' + (item.hum!=null?item.hum:'-') + '%</span>' +
+'<span class="val-soil">S:' + (item.soil!=null?item.soil:'-') + '%</span>' +
+'<span class="val-press">P:' + (item.pressure!=null?item.pressure:'-') + 'мм</span>' +
+'</div></div>';
+});
+list.innerHTML = html;
+}
+
+async function loadChartData() {
+try {
+let url = '/hist?period='+currentChartPeriod+'&limit='+currentChartLimit;
+if (chartCustomStart > 0 && chartCustomEnd > 0) {
+url += '&start='+chartCustomStart+'&end='+chartCustomEnd;
+}
+url += '&t='+Date.now();
+const res = await fetch(url);
+chartData = await res.json();
+drawChart();
+} catch (e) { console.log('Ошибка загрузки графика'); }
+}
+
+let chartCtx, chartCanvas;
+function initChart() {
+chartCanvas = document.getElementById('chart');
+chartCtx = chartCanvas.getContext('2d');
+chartCanvas.addEventListener('mousemove', handleChartHover);
+chartCanvas.addEventListener('mouseleave', hideTooltip);
+chartCanvas.addEventListener('touchmove', (e) => { e.preventDefault(); handleChartHover(e); }, {passive: false});
+window.addEventListener('resize', () => {
+if (document.getElementById('tab-charts').classList.contains('active')) drawChart();
+});
+}
+
+function drawChart() {
+if (!chartCtx || !chartData || chartData.length < 2) {
+drawEmptyChart();
+return;
+}
+const dpr = window.devicePixelRatio || 1;
+const rect = chartCanvas.getBoundingClientRect();
+chartCanvas.width = rect.width * dpr;
+chartCanvas.height = rect.height * dpr;
+chartCtx.scale(dpr, dpr);
+const W = rect.width, H = rect.height;
+const P = { t: 25, r: 40, b: 40, l: 45 };
+const cW = W - P.l - P.r, cH = H - P.t - P.b;
+chartCtx.clearRect(0, 0, W, H);
+const activeMetrics = currentChartMode === 'all'
+? Object.keys(visibleMetrics).filter(k => visibleMetrics[k])
+: [currentChartMode];
+if (activeMetrics.length === 0) {
+drawEmptyChart();
+return;
+}
+const ranges = calculateRanges(chartData, activeMetrics);
+drawGrid(P, cW, cH, ranges, W, H, activeMetrics);
+drawYAxisValues(P, cH, ranges, activeMetrics);
+const lines = {};
+activeMetrics.forEach(key => {
+lines[key] = drawLine(chartData, key, ranges[key], P, cW, cH, getMetricStyle(key));
+});
+chartCanvas._lines = lines;
+chartCanvas._params = { P, cW, cH, ranges, activeMetrics };
+}
+
+function calculateRanges(data, activeMetrics) {
+const ranges = {};
+const metricInfo = {
+temp: { key: 'temp', label: '°C', defaultMin: 10, defaultMax: 35, color: '#ef4444' },
+hum: { key: 'hum', label: '%', defaultMin: 0, defaultMax: 100, color: '#3b82f6' },
+soil: { key: 'soil', label: '%', defaultMin: 0, defaultMax: 100, color: '#22c55e' },
+pressure: { key: 'pressure', label: 'мм', defaultMin: 740, defaultMax: 770, color: '#a855f7' }
+};
+activeMetrics.forEach(metric => {
+const info = metricInfo[metric];
+let min = Infinity, max = -Infinity;
+data.forEach(d => {
+const val = d[info.key];
+if (val != null) {
+min = Math.min(min, val);
+max = Math.max(max, val);
+}
+});
+if (min === Infinity) {
+min = info.defaultMin;
+max = info.defaultMax;
+}
+if (min === max) { min -= 1; max += 1; }
+const pad = (max - min) * 0.1;
+ranges[metric] = {
+min: min - pad,
+max: max + pad,
+key: info.key,
+label: info.label,
+color: info.color
+};
+});
+return ranges;
+}
+
+function getMetricStyle(key) {
+const styles = {
+temp: { color: '#ef4444', width: 2.5 },
+hum: { color: '#3b82f6', width: 2.5 },
+soil: { color: '#22c55e', width: 2.5 },
+pressure: { color: '#a855f7', width: 2, dash: [5, 3] }
+};
+return styles[key] || { color: '#6b7280', width: 2 };
+}
+
+function drawGrid(P, cW, cH, ranges, W, H, activeMetrics) {
+const ctx = chartCtx;
+const gridColor = getComputedStyle(document.body).getPropertyValue('--border').trim();
+const textColor = getComputedStyle(document.body).getPropertyValue('--text2').trim();
+const textPrimary = getComputedStyle(document.body).getPropertyValue('--text').trim();
+ctx.strokeStyle = gridColor;
+ctx.lineWidth = 1;
+ctx.font = '10px sans-serif';
+ctx.fillStyle = textColor;
+ctx.textAlign = 'right';
+for (let i = 0; i <= 4; i++) {
+const y = P.t + (cH / 4) * i;
+ctx.beginPath();
+ctx.moveTo(P.l, y);
+ctx.lineTo(W - P.r, y);
+ctx.stroke();
+}
+ctx.textAlign = 'center';
+ctx.fillStyle = textColor;
+const step = Math.max(1, Math.floor(chartData.length / 6));
+for (let i = 0; i < chartData.length; i += step) {
+const x = P.l + (cW / Math.max(1, chartData.length - 1)) * i;
+const timeStr = chartData[i].time || '';
+const timeParts = timeStr.split(' ');
+const timeOnly = timeParts.length > 1 ? timeParts[1] : timeStr;
+const [hours, minutes] = timeOnly.split(':');
+const label = hours && minutes ? hours+':'+minutes : timeOnly;
+ctx.fillText(label, x, P.t + cH + 18);
+}
+ctx.fillStyle = textPrimary;
+ctx.fillText('Время', W / 2, H - 5);
+ctx.strokeStyle = gridColor;
+ctx.beginPath();
+ctx.moveTo(P.l, P.t + cH);
+ctx.lineTo(W - P.r, P.t + cH);
+ctx.stroke();
+}
+
+function drawYAxisValues(P, cH, ranges, activeMetrics) {
+const valuesContainer = document.getElementById('yAxisValues');
+const labelEl = document.getElementById('yAxisLabel');
+if (!valuesContainer || activeMetrics.length === 0) {
+if (valuesContainer) valuesContainer.innerHTML = '';
+return;
+}
+if (currentChartMode === 'all') {
+valuesContainer.innerHTML = '';
+labelEl.style.display = 'none';
+return;
+}
+const firstMetric = activeMetrics[0];
+const range = ranges[firstMetric];
+let html = '';
+for (let i = 0; i <= 4; i++) {
+const val = Math.round(range.max - (range.max - range.min) * (i / 4));
+html += '<div class="y-axis-value">'+val+'</div>';
+}
+valuesContainer.innerHTML = html;
+}
+
+function drawLine(data, key, range, P, cW, cH, style) {
+const ctx = chartCtx;
+ctx.strokeStyle = style.color;
+ctx.lineWidth = style.width;
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+if (style.dash) ctx.setLineDash(style.dash);
+const points = [];
+const n = Math.max(1, data.length - 1);
+data.forEach((d, i) => {
+const val = d[range.key];
+if (val == null) return;
+const x = P.l + (cW / n) * i;
+const y = P.t + cH - ((val - range.min) / (range.max - range.min)) * cH;
+points.push({ x, y, val, time: d.time });
+});
+if (points.length > 1) {
+ctx.beginPath();
+ctx.moveTo(points[0].x, points[0].y);
+for (let i = 0; i < points.length - 1; i++) {
+const p0 = points[Math.max(0, i - 1)];
+const p1 = points[i];
+const p2 = points[i + 1];
+const p3 = points[Math.min(points.length - 1, i + 2)];
+const cp1x = p1.x + (p2.x - p0.x) * 0.3 / 3;
+const cp1y = p1.y + (p2.y - p0.y) * 0.3 / 3;
+const cp2x = p2.x - (p3.x - p1.x) * 0.3 / 3;
+const cp2y = p2.y - (p3.y - p1.y) * 0.3 / 3;
+ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+}
+ctx.stroke();
+}
+ctx.setLineDash([]);
+return points;
+}
+
+function drawEmptyChart() {
+const ctx = chartCtx;
+const rect = chartCanvas.getBoundingClientRect();
+ctx.clearRect(0, 0, rect.width, rect.height);
+ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text2').trim();
+ctx.font = '14px sans-serif';
+ctx.textAlign = 'center';
+ctx.fillText('Выберите период для отображения графика', rect.width / 2, rect.height / 2);
+}
+
+function handleChartHover(e) {
+e.preventDefault();
+if (!chartCanvas._lines || !chartCanvas._params) return;
+const rect = chartCanvas.getBoundingClientRect();
+const mx = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
+const my = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
+const { P } = chartCanvas._params;
+let closest = null, minDist = 30;
+Object.entries(chartCanvas._lines).forEach(([key, points]) => {
+points.forEach(p => {
+const d = Math.hypot(p.x - mx, p.y - my);
+if (d < minDist) {
+minDist = d;
+closest = { ...p, key, color: getMetricStyle(key).color };
+}
+});
+});
+const tooltip = document.getElementById('tooltip');
+if (closest && minDist < 30) {
+let html = '<div class="tooltip-time">' + (closest.time || '') + '</div>';
+const idx = chartData.findIndex(d => d.time === closest.time);
+if (idx >= 0) {
+const d = chartData[idx];
+const metrics = [
+{k:'temp', l:'Темп:', u:'°C', c:'#ef4444'},
+{k:'hum', l:'Влаж:', u:'%', c:'#3b82f6'},
+{k:'soil', l:'Почва:', u:'%', c:'#22c55e'},
+{k:'pressure', l:'Давл:', u:'мм', c:'#a855f7'}
+];
+metrics.forEach(m => {
+const show = currentChartMode === 'all' ? visibleMetrics[m.k] : (m.k === currentChartMode);
+if (d[m.k] != null && show) {
+html += '<div class="tooltip-row"><span><span class="tooltip-color" style="background:'+m.c+'"></span>'+m.l+'</span><strong>'+d[m.k]+m.u+'</strong></div>';
+}
+});
+}
+tooltip.innerHTML = html;
+tooltip.classList.add('visible');
+const tx = mx + 15 > rect.width - 220 ? mx - 230 : mx + 15;
+const ty = Math.max(10, Math.min(rect.height - 150, my - 60));
+tooltip.style.left = tx + 'px';
+tooltip.style.top = ty + 'px';
+chartCtx.save();
+chartCtx.strokeStyle = closest.color;
+chartCtx.lineWidth = 1;
+chartCtx.setLineDash([4, 4]);
+chartCtx.beginPath();
+chartCtx.moveTo(closest.x, P.t);
+chartCtx.lineTo(closest.x, P.t + chartCanvas._params.cH);
+chartCtx.stroke();
+chartCtx.restore();
+} else {
+tooltip.classList.remove('visible');
+}
+}
+
+function hideTooltip() {
+document.getElementById('tooltip').classList.remove('visible');
+if (chartCanvas._params) drawChart();
+}
+
+function startAutoUpdate() {
+setInterval(async () => {
+await fetchMetrics();
+if (document.getElementById('tab-main').classList.contains('active')) await loadHistory();
+if (document.getElementById('tab-charts').classList.contains('active')) await loadChartData();
+}, UPDATE_INTERVAL);
+}
+</script>
+</body>
+</html>
+)rawliteral";
+
+// ====================== ВЕБ-ОБРАБОТЧИКИ ======================
+void handleHist() {
+  int p = server.hasArg("period") ? server.arg("period").toInt() : 0;
+  int limit = server.hasArg("limit") ? server.arg("limit").toInt() : 0;
+  time_t start = server.hasArg("start") ? server.arg("start").toInt() : 0;
+  time_t end = server.hasArg("end") ? server.arg("end").toInt() : 0;
+  
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "application/json", readHistoryFromDB(p, limit, start, end));
+}
+
+void handleData() {
+  DynamicJsonDocument doc(128);
+  doc["temp"] = currentTemp;
+  doc["humidity"] = currentHum;
+  doc["soil"] = currentSoil;
+  doc["pressure"] = currentPres;
+  String out;
+  serializeJson(doc, out);
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "application/json", out);
+}
+
+void handleTime() {
+  time_t now = time(nullptr);
+  String timeStr = formatTime(now, true);
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "text/plain", timeStr);
+}
+
+void handleRoot() {
+  server.send(200, "text/html", INDEX_HTML);
+}
+
+void handleClear() {
+  clearDB();
+  server.send(200, "text/plain", "OK");
+}
+
+void handleNotFound() {
+  handleRoot();
+}
+
+// ====================== E-PAPER И ДАТЧИКИ ======================
+void updateEpaper(int soil, int hum, int temp, int press) {
+  paint.Clear(UNCOLORED);
+  sprintf(strData, "%d", soil);
+  paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
+  epd.SetFrameMemoryPartial(paint.GetImage(), 150, 116, 56, 24);
+  paint.Clear(UNCOLORED);
+  sprintf(strData, "%d", hum);
+  paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
+  epd.SetFrameMemoryPartial(paint.GetImage(), 150, 60, 56, 24);
+  paint.Clear(UNCOLORED);
+  sprintf(strData, "%d", temp);
+  paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
+  epd.SetFrameMemoryPartial(paint.GetImage(), 20, 60, 56, 24);
+  paint.Clear(UNCOLORED);
+  sprintf(strData, "%d", press);
+  paint.DrawStringAt(0, 0, strData, &Font24, COLORED);
+  epd.SetFrameMemoryPartial(paint.GetImage(), 20, 116, 56, 24);
+  epd.DisplayPartFrame();
+}
+
+void readAndLog() {
+  int raw = analogRead(SOIL_PIN);
+  int soil = 100 - (raw - 1200) / 19;
+  soil = constrain(soil, 0, 100);
+  float pressure_pa = 0, temp_c = 0, humidity_pct = 0;
+  BME280::TempUnit tu(BME280::TempUnit_Celsius);
+  BME280::PresUnit pu(BME280::PresUnit_Pa);
+  bme.read(pressure_pa, temp_c, humidity_pct, tu, pu);
+  currentSoil = soil;
+  currentHum = round(humidity_pct);
+  currentTemp = round(temp_c);
+  currentPres = round(pressure_pa * 0.00750062);
+  logToDB(currentSoil, currentHum, currentTemp, currentPres);
+  updateEpaper(currentSoil, currentHum, currentTemp, currentPres);
+}
+
+// ====================== SETUP ======================
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  delay(800);
+  Serial.println("\nESP32-C3 Sensor Module Starting...");
+  WiFi.setHostname(MDNS_NAME);
+  WiFi.begin(STA_SSID, STA_PASS);
+  Serial.print("Connecting to WiFi");
+  int attempts = 15;
+  while (attempts-- && WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi failed, starting AP mode");
+    WiFi.mode(WIFI_AP);
+    WiFi.softAPConfig(ap_ip, ap_ip, ap_mask);
+    WiFi.softAP(AP_SSID, AP_PASS);
+    Serial.println("AP: " + String(AP_SSID) + " | Pass: " + String(AP_PASS));
+  } else {
+    Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
+  }
+  if (MDNS.begin(MDNS_NAME)) {
+    Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
+  }
+  configTime(5 * 3600, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+  Serial.print("Syncing time");
+  for (int i = 0; i < 40; i++) {
+    time_t now = time(nullptr);
+    if (now >= 1700000000) {
+      timeSynced = true;
+      Serial.println("\nTime: " + formatTime(now, true));
+      break;
+    }
+    delay(300);
+    Serial.print(".");
+  }
+  if (!timeSynced) {
+    Serial.println("\nTime sync timeout, using uptime");
+    bootTime = millis() / 1000;
+  }
+  
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed!");
+    while (true) delay(100);
+  }
+  Serial.println("LittleFS ready");
+  
+  initDB();
+  
+  SPI.begin();
+  while (!bme.begin()) {
+    Serial.println("BME280 not found, retrying...");
+    delay(1000);
+  }
+  Serial.println("BME280 initialized");
+  epd.LDirInit();
+  epd.Clear();
+  paint.SetWidth(56);
+  paint.SetHeight(24);
+  epd.DisplayPartBaseImage(IMAGE_DATA);
+  Serial.println("E-Paper ready");
+  readAndLog();
+  lastLogTime = millis();
+  server.on("/", handleRoot);
+  server.on("/data", handleData);
+  server.on("/hist", handleHist);
+  server.on("/time", handleTime);
+  server.on("/clear", HTTP_POST, handleClear);
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("Web server started");
+  ArduinoOTA.setHostname("SensorC3");
+  ArduinoOTA.onStart([]() {
+    epd.Sleep();
+    Serial.println("OTA update started");
+  });
+  ArduinoOTA.begin();
+  Serial.println("\nSystem ready! Access via http://" +
+    (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.10.1"));
+}
+
+// ====================== LOOP ======================
+void loop() {
+  server.handleClient();
+  ArduinoOTA.handle();
+  if (millis() - lastLogTime >= 15000UL) {
+    readAndLog();
+    lastLogTime = millis();
+  }
+}
