@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Зеленая полка — Вход</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="theme-dark">
+    <div class="theme-switcher" id="themeSwitcher">
+        <img src="тема.png" alt="Переключить тему" class="theme-icon-img">
+    </div>
+    <div class="wrapper">
+        <img src="Тёмная.png" alt="Зеленая полка" class="brand-logo logo-light">
+        <img src="Светлая.png" alt="Зеленая полка" class="brand-logo logo-dark">
+        <div class="auth-card">
+            <h1>Авторизация</h1>
+
+            <form action="#" method="POST" onsubmit="event.preventDefault();">
+                <div class="form-group">
+                    <input type="text" name="login" placeholder="Логин" required autocomplete="username">
+                </div>
+                
+                <div class="form-group">
+                    <input type="password" id="passwordInput" name="password" placeholder="Пароль" required autocomplete="current-password">
+                    <img src="Открытый.png" alt="Показать пароль" class="toggle-password" id="togglePassword">
+                </div>
+
+                <div class="register-link">
+                    Нет аккаунта? <a href="register.html">Зарегистрируйся!</a>
+                </div>
+
+                <button type="submit" class="btn">Вход</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(savedTheme);
+        }
+
+        document.getElementById('themeSwitcher').addEventListener('click', function() {
+            const isDark = document.body.classList.contains('theme-dark');
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(isDark ? 'theme-light' : 'theme-dark');
+            localStorage.setItem('theme', isDark ? 'theme-light' : 'theme-dark');
+        });
+
+        const passwordInput = document.getElementById('passwordInput');
+        const togglePassword = document.getElementById('togglePassword');
+
+        togglePassword.addEventListener('click', function() {
+            const isPassword = passwordInput.type === 'password';
+            passwordInput.type = isPassword ? 'text' : 'password';
+            this.src = isPassword ? 'Закрытый.png' : 'Открытый.png';
+            this.alt = isPassword ? 'Скрыть пароль' : 'Показать пароль';
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.auth-card') && !e.target.closest('.theme-switcher')) {
+                e.preventDefault(); 
+                createFallingLeaves(e.clientX, e.clientY);
+            }
+        });
+
+        function createFallingLeaves(x, y) {
+            const leafSrc = 'листок.png'; 
+            
+            const count = 8 + Math.floor(Math.random() * 5); 
+
+            for (let i = 0; i < count; i++) {
+                const leaf = document.createElement('img');
+                leaf.src = leafSrc;
+                leaf.className = 'falling-leaf';
+                leaf.onerror = function() {
+                    this.style.border = '1px solid red';
+                    this.style.width = '20px';
+                    this.style.height = '20px';
+                    console.error("Ошибка загрузки картинки falling-leaf.png!");
+                };
+                const size = 15 + Math.random() * 20;
+                leaf.style.width = size + 'px';
+                leaf.style.height = 'auto';
+                const offsetX = (Math.random() - 0.5) * 40;
+                const offsetY = (Math.random() - 0.5) * 20;
+                leaf.style.left = (x + offsetX) + 'px';
+                leaf.style.top = (y + offsetY) + 'px';
+                const rotation = (Math.random() - 0.5) * 60;
+                const swayAmount = 20 + Math.random() * 40;
+                leaf.style.setProperty('--sway', swayAmount + 'px');
+                leaf.style.setProperty('--rotation', rotation + 'deg');
+                leaf.style.setProperty('--fall-duration', (2 + Math.random() * 2) + 's');       
+                document.body.appendChild(leaf);
+                leaf.addEventListener('animationend', function() {
+                    leaf.remove();
+                });
+            }
+        }
+    </script>
+</body>
+</html>
