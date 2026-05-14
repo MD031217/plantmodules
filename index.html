@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlantCare - Умный уход за растениями</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-green: #5B8C5A; --dark-green: #2D4A3E; --light-green: #8FBC8F;
+            --accent-green: #7CB342; --bg-green: #E8F5E9; --white: #FFFFFF;
+            --gray: #F5F5F5; --text-dark: #2C3E50; --text-light: #7F8C8D;
+            --shadow: 0 4px 20px rgba(0,0,0,0.08); --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
+            --sidebar-width: 280px;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh; color: var(--text-dark);
+        }
+        .auth-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            display: flex; justify-content: center; align-items: center; z-index: 1000;
+        }
+        .auth-container {
+            background: rgba(255,255,255,0.95); border-radius: 24px; padding: 60px;
+            width: 90%; max-width: 500px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center;
+        }
+        .auth-logo {
+            width: 100px; height: 100px;
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            border-radius: 24px; display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 30px; box-shadow: 0 10px 30px rgba(91,140,90,0.3);
+        }
+        .auth-logo i { font-size: 50px; color: white; }
+        .auth-title { font-size: 36px; font-weight: 700; color: var(--text-dark); margin-bottom: 10px; }
+        .auth-subtitle { color: var(--text-light); font-size: 16px; margin-bottom: 40px; }
+        .input-group { width: 100%; margin-bottom: 20px; text-align: left; }
+        .input-group label { display: block; color: var(--text-dark); margin-bottom: 8px; font-weight: 600; font-size: 14px; }
+        .input-group input, .input-group select {
+            width: 100%; padding: 16px 20px; border: 2px solid #e0e0e0; border-radius: 12px;
+            font-size: 16px; transition: all 0.3s;
+        }
+        .input-group input:focus, .input-group select:focus {
+            outline: none; border-color: var(--primary-green);
+            box-shadow: 0 0 0 4px rgba(91,140,90,0.1);
+        }
+        .btn-primary {
+            width: 100%; padding: 16px; border: none; border-radius: 12px;
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            color: white; font-size: 16px; font-weight: 700; cursor: pointer;
+            transition: all 0.3s; margin-top: 10px;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(91,140,90,0.4); }
+        .btn-secondary {
+            width: 100%; padding: 16px; border: 2px solid var(--primary-green); border-radius: 12px;
+            background: transparent; color: var(--primary-green); font-size: 16px; font-weight: 600;
+            cursor: pointer; transition: all 0.3s; margin-top: 12px;
+        }
+        .btn-secondary:hover { background: var(--primary-green); color: white; }
+        .app-layout { display: none; min-height: 100vh; }
+        .app-layout.active { display: flex; }
+        .sidebar {
+            width: var(--sidebar-width); background: var(--white); box-shadow: var(--shadow);
+            padding: 30px; display: flex; flex-direction: column; position: fixed;
+            height: 100vh; left: 0; top: 0; z-index: 100;
+        }
+        .sidebar-logo {
+            display: flex; align-items: center; gap: 12px; margin-bottom: 50px;
+            padding-bottom: 30px; border-bottom: 2px solid var(--gray);
+        }
+        .sidebar-logo i { font-size: 32px; color: var(--primary-green); }
+        .sidebar-logo span { font-size: 24px; font-weight: 700; color: var(--text-dark); }
+        .nav-menu { list-style: none; flex: 1; }
+        .nav-item { margin-bottom: 10px; }
+        .nav-link {
+            display: flex; align-items: center; gap: 15px; padding: 15px 20px;
+            border-radius: 12px; color: var(--text-light); text-decoration: none;
+            font-weight: 600; transition: all 0.3s; cursor: pointer;
+        }
+        .nav-link:hover, .nav-link.active { background: var(--bg-green); color: var(--primary-green); }
+        .nav-link i { font-size: 20px; width: 24px; }
+        .sidebar-footer { padding-top: 30px; border-top: 2px solid var(--gray); }
+        .user-profile {
+            display: flex; align-items: center; gap: 12px; padding: 15px;
+            background: var(--gray); border-radius: 12px;
+        }
+        .user-avatar {
+            width: 45px; height: 45px;
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            color: white; font-weight: 700;
+        }
+        .user-info h4 { font-size: 14px; color: var(--text-dark); }
+        .user-info p { font-size: 12px; color: var(--text-light); }
+        .main-content {
+            flex: 1; margin-left: var(--sidebar-width); padding: 40px;
+            background: var(--bg-green); min-height: 100vh;
+        }
+        .header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 40px; background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            padding: 30px 40px; border-radius: 20px; color: white; box-shadow: var(--shadow-lg);
+        }
+        .header h1 { font-size: 32px; margin-bottom: 5px; }
+        .header p { opacity: 0.9; }
+        .header-actions { display: flex; gap: 15px; }
+        .header-btn {
+            width: 50px; height: 50px; background: rgba(255,255,255,0.2); border: none;
+            border-radius: 12px; color: white; cursor: pointer; transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+        .header-btn:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); }
+        .content-section { display: none; }
+        .content-section.active { display: block; animation: fadeIn 0.4s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .section-title { font-size: 28px; font-weight: 700; color: var(--text-dark); }
+        .search-bar {
+            display: flex; align-items: center; gap: 12px; background: white;
+            padding: 12px 24px; border-radius: 12px; box-shadow: var(--shadow); width: 350px;
+        }
+        .search-bar input { border: none; outline: none; font-size: 15px; width: 100%; }
+        .search-bar i { color: var(--text-light); }
+        .stats-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 25px; margin-bottom: 40px; }
+        .stat-card {
+            background: white; border-radius: 20px; padding: 25px; box-shadow: var(--shadow);
+            display: flex; align-items: center; gap: 20px; transition: all 0.3s;
+        }
+        .stat-card:hover { transform: translateY(-5px); box-shadow: var(--shadow-lg); }
+        .stat-icon {
+            width: 60px; height: 60px; background: var(--bg-green); border-radius: 16px;
+            display: flex; align-items: center; justify-content: center;
+            color: var(--primary-green); font-size: 28px;
+        }
+        .stat-info h3 { font-size: 28px; font-weight: 700; color: var(--text-dark); margin-bottom: 5px; }
+        .stat-info p { color: var(--text-light); font-size: 14px; }
+        .plants-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 25px; margin-bottom: 40px; }
+        .plant-card {
+            background: white; border-radius: 20px; overflow: hidden; box-shadow: var(--shadow);
+            cursor: pointer; transition: all 0.3s;
+        }
+        .plant-card:hover { transform: translateY(-8px); box-shadow: var(--shadow-lg); }
+        .plant-image { width: 100%; height: 250px; overflow: hidden; position: relative; }
+        .plant-image img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s; }
+        .plant-card:hover .plant-image img { transform: scale(1.1); }
+        .plant-badge {
+            position: absolute; top: 15px; right: 15px; padding: 6px 15px;
+            border-radius: 20px; font-size: 12px; font-weight: 700; color: white;
+        }
+        .plant-badge.good { background: var(--accent-green); }
+        .plant-badge.warning { background: #FFB74D; }
+        .plant-badge.danger { background: #E57373; }
+        .plant-info { padding: 25px; }
+        .plant-info h3 { font-size: 20px; font-weight: 700; margin-bottom: 10px; color: var(--text-dark); }
+        .plant-info p { color: var(--text-light); font-size: 14px; margin-bottom: 15px; }
+        .plant-stats { display: flex; gap: 20px; padding-top: 15px; border-top: 1px solid var(--gray); }
+        .plant-stat { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-light); }
+        .plant-stat i { color: var(--primary-green); }
+        .charts-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 25px; margin-bottom: 40px; }
+        .chart-card { background: white; border-radius: 20px; padding: 30px; box-shadow: var(--shadow); }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        .chart-title { font-size: 20px; font-weight: 700; color: var(--text-dark); }
+        .chart-icon {
+            width: 45px; height: 45px; background: var(--bg-green); border-radius: 12px;
+            display: flex; align-items: center; justify-content: center; color: var(--primary-green);
+        }
+        .chart-container { height: 250px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 20px 0; }
+        .chart-bar-wrapper { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+        .chart-bar {
+            width: 100%; background: linear-gradient(180deg, var(--primary-green), var(--light-green));
+            border-radius: 8px 8px 0 0; min-height: 40px; position: relative; transition: all 0.3s;
+        }
+        .chart-bar:hover { opacity: 0.8; transform: scaleY(1.05); }
+        .chart-bar-value {
+            position: absolute; top: -30px; left: 50%; transform: translateX(-50%);
+            font-size: 13px; font-weight: 700; color: var(--text-dark);
+            background: white; padding: 4px 8px; border-radius: 6px; box-shadow: var(--shadow);
+        }
+        .chart-label { font-size: 13px; color: var(--text-light); font-weight: 500; }
+        .network-container { max-width: 900px; margin: 0 auto; }
+        .network-info-box { background: white; border-radius: 20px; padding: 30px; margin-bottom: 30px; box-shadow: var(--shadow); }
+        .info-alert {
+            background: #E3F2FD; border-left: 4px solid #2196F3; padding: 20px;
+            border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; align-items: flex-start;
+        }
+        .info-alert i { font-size: 24px; color: #2196F3; margin-top: 2px; }
+        .info-alert h4 { color: #1565C0; margin-bottom: 8px; }
+        .info-alert p { color: #1565C0; font-size: 14px; line-height: 1.6; }
+        .scan-section { background: white; border-radius: 20px; padding: 40px; box-shadow: var(--shadow-lg); text-align: center; }
+        .scan-icon {
+            width: 120px; height: 120px; background: var(--bg-green); border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; margin: 0 auto 30px;
+            color: var(--primary-green); font-size: 60px; position: relative;
+        }
+        .scan-icon.scanning::after {
+            content: ''; position: absolute; width: 100%; height: 100%; border-radius: 50%;
+            border: 4px solid var(--primary-green); animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+        .network-list { display: flex; flex-direction: column; gap: 15px; margin-top: 30px; max-height: 500px; overflow-y: auto; }
+        .network-item {
+            display: flex; align-items: center; justify-content: space-between; padding: 25px;
+            background: var(--gray); border-radius: 16px; cursor: pointer; transition: all 0.3s; border: 2px solid transparent;
+        }
+        .network-item:hover { background: #e8e8e8; transform: translateX(5px); border-color: var(--primary-green); }
+        .network-item.selected { background: var(--bg-green); border-color: var(--primary-green); }
+        .network-item-info { display: flex; align-items: center; gap: 20px; flex: 1; }
+        .network-item i { font-size: 28px; color: var(--primary-green); }
+        .network-item h4 { font-size: 18px; margin-bottom: 5px; }
+        .network-item p { color: var(--text-light); font-size: 14px; }
+        .signal-strength { display: flex; gap: 3px; align-items: flex-end; height: 20px; }
+        .signal-bar { width: 4px; background: var(--primary-green); border-radius: 2px; }
+        .signal-bar:nth-child(1) { height: 6px; } .signal-bar:nth-child(2) { height: 10px; }
+        .signal-bar:nth-child(3) { height: 14px; } .signal-bar:nth-child(4) { height: 18px; }
+        .signal-bar.weak { background: #E57373; } .signal-bar.medium { background: #FFB74D; }
+        .signal-bar.strong { background: var(--accent-green); }
+        .password-section { margin-top: 30px; padding: 30px; background: var(--bg-green); border-radius: 16px; display: none; }
+        .password-section.show { display: block; animation: slideDown 0.3s ease; }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        .action-buttons { display: flex; gap: 15px; margin-top: 30px; }
+        .action-buttons button { flex: 1; }
+        .btn-scan {
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green)); color: white;
+            padding: 18px 40px; font-size: 16px; font-weight: 700; border: none; border-radius: 12px;
+            cursor: pointer; transition: all 0.3s; display: inline-flex; align-items: center; gap: 10px; margin: 0 auto;
+        }
+        .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(91,140,90,0.4); }
+        .btn-scan:disabled { opacity: 0.6; cursor: not-allowed; }
+        .manual-add { margin-top: 30px; padding: 30px; background: white; border-radius: 16px; box-shadow: var(--shadow); }
+        .manual-add h3 { margin-bottom: 20px; color: var(--text-dark); }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .status-message { padding: 15px 20px; border-radius: 12px; margin-bottom: 20px; display: none; align-items: center; gap: 10px; }
+        .status-message.success { background: #E8F5E9; color: #2E7D32; border: 1px solid #4CAF50; display: flex; }
+        .status-message.error { background: #FFEBEE; color: #C62828; border: 1px solid #E57373; display: flex; }
+        #currentConnectionInfo { margin-top: 20px; }
+        #disconnectBtn { margin-top: 15px; background: #ccc; color: #666; width: auto; padding: 12px 30px; opacity: 0.5; }
+        #disconnectBtn:not(:disabled) { background: #E57373; color: white; opacity: 1; cursor: pointer; }
+        @media (max-width: 1200px) { .stats-overview { grid-template-columns: repeat(2, 1fr); } .charts-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 768px) {
+            .sidebar { transform: translateX(-100%); transition: transform 0.3s; }
+            .sidebar.open { transform: translateX(0); }
+            .main-content { margin-left: 0; padding: 20px; }
+            .stats-overview { grid-template-columns: 1fr; }
+            .plants-grid { grid-template-columns: 1fr; }
+            .header { flex-direction: column; text-align: center; gap: 20px; }
+            .form-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-screen" id="authScreen">
+        <div class="auth-container">
+            <div class="auth-logo"><i class="fas fa-leaf"></i></div>
+            <h1 class="auth-title">PlantCare</h1>
+            <p class="auth-subtitle">Умная система ухода за растениями</p>
+            <div class="input-group">
+                <label>Имя пользователя</label>
+                <input type="text" placeholder="Введите имя" id="usernameInput">
+            </div>
+            <div class="input-group">
+                <label>Пароль</label>
+                <input type="password" placeholder="••••••••" id="passwordInput">
+            </div>
+            <button class="btn-primary" id="loginBtn">Войти <i class="fas fa-arrow-right" style="margin-left:8px"></i></button>
+            <button class="btn-secondary" id="guestBtn">Продолжить без регистрации</button>
+        </div>
+    </div>
+
+    <div class="app-layout" id="appLayout">
+        <aside class="sidebar">
+            <div class="sidebar-logo"><i class="fas fa-leaf"></i><span>PlantCare</span></div>
+            <ul class="nav-menu">
+                <li class="nav-item"><div class="nav-link active" onclick="showSection('dashboard')"><i class="fas fa-home"></i><span>Главная</span></div></li>
+                <li class="nav-item"><div class="nav-link" onclick="showSection('plants')"><i class="fas fa-seedling"></i><span>Мои растения</span></div></li>
+                <li class="nav-item"><div class="nav-link" onclick="showSection('stats')"><i class="fas fa-chart-bar"></i><span>Статистика</span></div></li>
+                <li class="nav-item"><div class="nav-link" onclick="showSection('network')"><i class="fas fa-wifi"></i><span>Сеть</span></div></li>
+            </ul>
+            <div class="sidebar-footer">
+                <div class="user-profile">
+                    <div class="user-avatar" id="userAvatar">U</div>
+                    <div class="user-info"><h4 id="userName">User</h4><p>Онлайн</p></div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <section class="content-section active" id="dashboardSection">
+                <div class="header">
+                    <div><h1>Доброе утро! 👋</h1><p>У вас 3 растения требуют внимания</p></div>
+                    <div class="header-actions">
+                        <button class="header-btn"><i class="fas fa-bell"></i></button>
+                        <button class="header-btn"><i class="fas fa-cog"></i></button>
+                    </div>
+                </div>
+                <div class="stats-overview">
+                    <div class="stat-card"><div class="stat-icon"><i class="fas fa-thermometer-half"></i></div><div class="stat-info"><h3>24°C</h3><p>Температура</p></div></div>
+                    <div class="stat-card"><div class="stat-icon"><i class="fas fa-tint"></i></div><div class="stat-info"><h3>65%</h3><p>Влажность воздуха</p></div></div>
+                    <div class="stat-card"><div class="stat-icon"><i class="fas fa-gauge-high"></i></div><div class="stat-info"><h3>760 мм</h3><p>Давление</p></div></div>
+                    <div class="stat-card"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-info"><h3 id="currentTime">14:30</h3><p>Текущее время</p></div></div>
+                </div>
+                <div class="section-header"><h2 class="section-title">Мои растения</h2><div class="search-bar"><i class="fas fa-search"></i><input type="text" placeholder="Поиск растений..."></div></div>
+                <div class="plants-grid">
+                    <div class="plant-card"><div class="plant-image"><img src="https://images.unsplash.com/photo-1614594975525-e45190731dc4?w=600&h=400&fit=crop" alt="Monstera"><span class="plant-badge good">Всё хорошо</span></div><div class="plant-info"><h3>Монстера Делициоза</h3><p>Гостиная • Северное окно</p><div class="plant-stats"><div class="plant-stat"><i class="fas fa-tint"></i><span>68% влажность</span></div><div class="plant-stat"><i class="fas fa-thermometer-half"></i><span>24°C</span></div></div></div></div>
+                    <div class="plant-card"><div class="plant-image"><img src="https://images.unsplash.com/photo-1509423355108-74d69b6438db?w=600&h=400&fit=crop" alt="Ficus"><span class="plant-badge warning">Нужен полив</span></div><div class="plant-info"><h3>Фикус Лирата</h3><p>Спальня • Западное окно</p><div class="plant-stats"><div class="plant-stat"><i class="fas fa-tint"></i><span>35% влажность</span></div><div class="plant-stat"><i class="fas fa-thermometer-half"></i><span>23°C</span></div></div></div></div>
+                    <div class="plant-card"><div class="plant-image"><img src="https://images.unsplash.com/photo-1599598425947-d35071e35b1c?w=600&h=400&fit=crop" alt="Snake Plant"><span class="plant-badge good">Всё хорошо</span></div><div class="plant-info"><h3>Сансевиерия</h3><p>Офис • Искусственный свет</p><div class="plant-stats"><div class="plant-stat"><i class="fas fa-tint"></i><span>72% влажность</span></div><div class="plant-stat"><i class="fas fa-thermometer-half"></i><span>25°C</span></div></div></div></div>
+                </div>
+            </section>
+
+            <section class="content-section" id="statsSection">
+                <div class="header"><div><h1>Статистика</h1><p id="currentDate">27 февраля 2026 • Пятница</p></div></div>
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <div class="chart-header"><h3 class="chart-title">Температура воздуха</h3><div class="chart-icon"><i class="fas fa-thermometer-half"></i></div></div>
+                        <div class="chart-container">
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:60%"><div class="chart-bar-value">22°</div></div><span class="chart-label">Пн</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:70%"><div class="chart-bar-value">24°</div></div><span class="chart-label">Вт</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:65%"><div class="chart-bar-value">23°</div></div><span class="chart-label">Ср</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:75%"><div class="chart-bar-value">25°</div></div><span class="chart-label">Чт</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:80%"><div class="chart-bar-value">26°</div></div><span class="chart-label">Пт</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:70%"><div class="chart-bar-value">24°</div></div><span class="chart-label">Сб</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:65%"><div class="chart-bar-value">23°</div></div><span class="chart-label">Вс</span></div>
+                        </div>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header"><h3 class="chart-title">Влажность почвы</h3><div class="chart-icon"><i class="fas fa-seedling"></i></div></div>
+                        <div class="chart-container">
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:80%;background:linear-gradient(180deg,#8FBC8F,#5B8C5A)"><div class="chart-bar-value">68%</div></div><span class="chart-label">Пн</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:60%;background:linear-gradient(180deg,#8FBC8F,#5B8C5A)"><div class="chart-bar-value">52%</div></div><span class="chart-label">Вт</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:75%;background:linear-gradient(180deg,#8FBC8F,#5B8C5A)"><div class="chart-bar-value">65%</div></div><span class="chart-label">Ср</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:45%;background:linear-gradient(180deg,#FFB74D,#FF9800)"><div class="chart-bar-value">38%</div></div><span class="chart-label">Чт</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:85%;background:linear-gradient(180deg,#8FBC8F,#5B8C5A)"><div class="chart-bar-value">72%</div></div><span class="chart-label">Пт</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:70%;background:linear-gradient(180deg,#8FBC8F,#5B8C5A)"><div class="chart-bar-value">60%</div></div><span class="chart-label">Сб</span></div>
+                            <div class="chart-bar-wrapper"><div class="chart-bar" style="height:65%;background:linear-gradient(180deg,#8FBC8F,#5B8C5A)"><div class="chart-bar-value">55%</div></div><span class="chart-label">Вс</span></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="content-section" id="networkSection">
+                <div class="header"><div><h1>Подключение к сети</h1><p>Сканирование и подключение к Wi-Fi сетям</p></div></div>
+                <div class="network-container">
+                    <div class="network-info-box">
+                        <div class="info-alert"><i class="fas fa-info-circle"></i><div><h4>Сканирование через PHP</h4><p>Используется команда Windows <code>netsh wlan show networks</code> для получения реального списка доступных Wi-Fi сетей вокруг вашего устройства.</p></div></div>
+                    </div>
+                    <div class="scan-section">
+                        <div class="scan-icon" id="scanIcon"><i class="fas fa-wifi"></i></div>
+                        <h2 style="margin-bottom:15px;color:var(--text-dark)">Сканирование сетей</h2>
+                        <p style="color:var(--text-light);margin-bottom:30px;max-width:600px;margin:0 auto 30px">Нажмите кнопку ниже для сканирования доступных Wi-Fi сетей</p>
+                        <div id="statusMessage" class="status-message"></div>
+                        <button class="btn-scan" id="scanBtn" onclick="scanNetworks()"><i class="fas fa-search"></i> Начать сканирование</button>
+                        <div id="currentConnectionInfo"></div>
+                        <button id="disconnectBtn" onclick="disconnectNetwork()" disabled><i class="fas fa-plug-slash"></i> Отключиться</button>
+                        <div class="network-list" id="networkList" style="display:none"></div>
+                        <div class="password-section" id="passwordSection">
+                            <h3 style="margin-bottom:20px">Подключение к сети</h3>
+                            <div class="input-group"><label>SSID сети</label><input type="text" id="selectedNetwork" readonly style="background:white"></div>
+                            <div class="input-group"><label>Пароль</label><input type="password" id="networkPassword" placeholder="Введите пароль от Wi-Fi"></div>
+                            <div class="action-buttons">
+                                <button class="btn-primary" onclick="connectToNetwork()" id="connectBtn"><i class="fas fa-plug"></i> Подключиться</button>
+                                <button class="btn-secondary" onclick="cancelConnection()" style="background:white;color:var(--text-dark)">Отмена</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="manual-add">
+                        <h3><i class="fas fa-plus-circle" style="margin-right:10px;color:var(--primary-green)"></i>Добавить сеть вручную</h3>
+                        <div class="form-row">
+                            <div class="input-group"><label>Название сети (SSID)</label><input type="text" id="manualSSID" placeholder="MyWiFiNetwork"></div>
+                            <div class="input-group"><label>Тип безопасности</label><select id="securityType"><option value="WPA2">WPA2/WPA3</option><option value="WPA">WPA</option><option value="WEP">WEP</option><option value="open">Открытая сеть</option></select></div>
+                        </div>
+                        <div class="input-group"><label>Пароль</label><input type="password" id="manualPassword" placeholder="Пароль от сети"></div>
+                        <button class="btn-primary" onclick="addManualNetwork()" style="width:auto;padding:16px 40px"><i class="fas fa-plus"></i> Добавить сеть</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="content-section" id="plantsSection">
+                <div class="header"><div><h1>Мои растения</h1><p>Управление всеми вашими растениями</p></div><button class="btn-primary" style="width:auto;padding:15px 30px"><i class="fas fa-plus" style="margin-right:8px"></i>Добавить растение</button></div>
+                <div class="plants-grid">
+                    <div class="plant-card"><div class="plant-image"><img src="https://images.unsplash.com/photo-1614594975525-e45190731dc4?w=600&h=400&fit=crop" alt="Monstera"><span class="plant-badge good">Всё хорошо</span></div><div class="plant-info"><h3>Монстера Делициоза</h3><p>Гостиная • Северное окно</p><div class="plant-stats"><div class="plant-stat"><i class="fas fa-tint"></i><span>68% влажность</span></div><div class="plant-stat"><i class="fas fa-thermometer-half"></i><span>24°C</span></div></div></div></div>
+                    <div class="plant-card"><div class="plant-image"><img src="https://images.unsplash.com/photo-1509423355108-74d69b6438db?w=600&h=400&fit=crop" alt="Ficus"><span class="plant-badge warning">Нужен полив</span></div><div class="plant-info"><h3>Фикус Лирата</h3><p>Спальня • Западное окно</p><div class="plant-stats"><div class="plant-stat"><i class="fas fa-tint"></i><span>35% влажность</span></div><div class="plant-stat"><i class="fas fa-thermometer-half"></i><span>23°C</span></div></div></div></div>
+                    <div class="plant-card"><div class="plant-image"><img src="https://images.unsplash.com/photo-1599598425947-d35071e35b1c?w=600&h=400&fit=crop" alt="Snake Plant"><span class="plant-badge good">Всё хорошо</span></div><div class="plant-info"><h3>Сансевиерия</h3><p>Офис • Искусственный свет</p><div class="plant-stats"><div class="plant-stat"><i class="fas fa-tint"></i><span>72% влажность</span></div><div class="plant-stat"><i class="fas fa-thermometer-half"></i><span>25°C</span></div></div></div></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+   <script>
+    let selectedNetworkSSID = null, currentConnection = null, isScanning = false;
+
+    // Проверка связи с локальным сервером
+    async function testLocalServer() {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            const res = await fetch('api/scan_wifi.php?action=status', {
+                method: 'GET',
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!res.ok) {
+                throw new Error('HTTP ' + res.status);
+            }
+            
+            const data = await res.json();
+            console.log('✅ Server connection OK:', data);
+            return true;
+        } catch (e) {
+            console.error('❌ Server connection failed:', e.message);
+            return false;
+        }
+    }
+
+    function handleLogin() {
+        const username = document.getElementById('usernameInput').value;
+        if (username.trim() === '') { alert('Введите имя'); return; }
+        document.getElementById('userName').textContent = username;
+        document.getElementById('userAvatar').textContent = username.charAt(0).toUpperCase();
+        localStorage.setItem('plantCareUser', username);
+        document.getElementById('authScreen').style.display = 'none';
+        document.getElementById('appLayout').classList.add('active');
+        if (document.getElementById('networkSection').classList.contains('active')) { 
+            checkAdapterAndScan(); 
+        }
+    }
+
+    function handleGuestLogin() {
+        document.getElementById('userName').textContent = 'Гость';
+        document.getElementById('userAvatar').textContent = 'G';
+        localStorage.setItem('plantCareGuest', 'true');
+        document.getElementById('authScreen').style.display = 'none';
+        document.getElementById('appLayout').classList.add('active');
+        if (document.getElementById('networkSection').classList.contains('active')) { 
+            checkAdapterAndScan(); 
+        }
+    }
+
+    function showSection(name) {
+        document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
+        document.getElementById(name + 'Section').classList.add('active');
+        document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+        if (event?.target) event.target.closest('.nav-link')?.classList.add('active');
+        if (name === 'network') { checkAdapterAndScan(); }
+    }
+
+    async function checkAdapterAndScan() {
+        console.log('🔍 Checking server connection...');
+        
+        // Проверяем связь с локальным сервером
+        const serverOk = await testLocalServer();
+        
+        if (!serverOk) {
+            showStatus('⚠️ Не удалось соединиться с локальным сервером. Проверьте, что Open Server запущен.', 'error');
+            document.getElementById('networkList').innerHTML = `
+                <div style="padding:20px;background:#FFEBEE;border-radius:12px;text-align:left;color:#C62828">
+                    <strong>❌ Ошибка соединения с сервером</strong><br><br>
+                    <strong>Важно:</strong> Это локальный сервер, интернет НЕ нужен!<br><br>
+                    1. Убедитесь, что <strong>Open Server запущен</strong> (зелёный флажок)<br>
+                    2. Запустите <strong>от имени администратора</strong> (правый клик)<br>
+                    3. Проверьте, что файл <strong>api/scan_wifi.php</strong> существует<br>
+                    4. Откройте консоль браузера (F12) для деталей<br><br>
+                    <button onclick="checkAdapterAndScan()" style="margin-top:10px;padding:10px 20px;background:#4CAF50;color:white;border:none;border-radius:8px;cursor:pointer">
+                        🔄 Попробовать снова
+                    </button>
+                </div>
+            `;
+            document.getElementById('networkList').style.display = 'flex';
+            return;
+        }
+        
+        console.log('✅ Server OK, scanning...');
+        scanNetworks();
+    }
+
+    async function scanNetworks() {
+        if (isScanning) return;
+        isScanning = true;
+        
+        const btn = document.getElementById('scanBtn');
+        const icon = document.getElementById('scanIcon');
+        const list = document.getElementById('networkList');
+        const status = document.getElementById('statusMessage');
+        
+        btn.disabled = true; 
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Поиск...'; 
+        icon.classList.add('scanning'); 
+        list.style.display = 'none'; 
+        list.innerHTML = ''; 
+        status.style.display = 'none';
+        
+        try {
+            console.log('📡 Starting WiFi scan...');
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            
+            const res = await fetch('api/scan_wifi.php?action=scan', {
+                method: 'GET',
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            console.log('Response status:', res.status);
+            
+            if (!res.ok) {
+                throw new Error('HTTP ' + res.status);
+            }
+            
+            const data = await res.json();
+            console.log('Scan response:', data);
+            
+            if (data.success) {
+                if (data.networks && data.networks.length > 0) {
+                    displayNetworks(data.networks);
+                    list.style.display = 'flex';
+                    showStatus('📡 Найдено сетей: ' + data.networks.length, 'success');
+                } else {
+                    list.innerHTML = `<div style="padding:20px;color:#666;text-align:center">
+                        <i class="fas fa-wifi" style="font-size:40px;margin-bottom:15px;opacity:0.5"></i><br>
+                        Сети не найдены.<br>
+                        <small>Убедитесь, что WiFi адаптер включён в системе</small>
+                    </div>`;
+                    list.style.display = 'flex';
+                    showStatus(data.message || 'Сети не найдены', 'error');
+                }
+                updateConnectionStatus();
+            } else {
+                showStatus('❌ ' + (data.error || 'Ошибка сканирования'), 'error');
+                list.innerHTML = `<div style="padding:20px;color:#C62828;text-align:center">
+                    <i class="fas fa-exclamation-triangle" style="font-size:40px;margin-bottom:15px"></i><br>
+                    ${escapeHtml(data.error || 'Не удалось получить список сетей')}<br><br>
+                    <small>Запустите Open Server от имени администратора</small>
+                </div>`;
+                list.style.display = 'flex';
+            }
+        } catch (e) {
+            console.error('❌ Scan error:', e);
+            showStatus('❌ Ошибка: ' + e.message, 'error');
+            list.innerHTML = `<div style="padding:20px;color:#C62828;text-align:center">
+                <i class="fas fa-server" style="font-size:40px;margin-bottom:15px"></i><br>
+                Не удалось связаться с сервером.<br>
+                <small>Проверьте, что Open Server запущен от имени администратора</small>
+            </div>`;
+            list.style.display = 'flex';
+        } finally {
+            isScanning = false;
+            btn.disabled = false; 
+            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Обновить список'; 
+            icon.classList.remove('scanning');
+        }
+    }
+
+    async function updateConnectionStatus() {
+        try {
+            const res = await fetch('api/scan_wifi.php?action=status');
+            const data = await res.json();
+            const el = document.getElementById('currentConnectionInfo');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            
+            if (data.adapter_status === 'not_found') {
+                if (el) el.innerHTML = '<div style="padding:15px;color:#FF9800;text-align:center"><i class="fas fa-wifi-slash"></i> WiFi адаптер не обнаружен</div>';
+                if (disconnectBtn) { disconnectBtn.disabled = true; disconnectBtn.style.opacity = '0.5'; }
+                return;
+            }
+            
+            if (data.current_connection?.ssid) {
+                currentConnection = data.current_connection.ssid;
+                if (el) {
+                    el.innerHTML = `<div style="background:linear-gradient(135deg,#4CAF50,#2E7D32);color:white;padding:15px 20px;border-radius:12px;margin:15px 0;display:flex;align-items:center;gap:12px">
+                        <i class="fas fa-wifi" style="font-size:20px"></i>
+                        <div><strong>Подключено:</strong> ${escapeHtml(data.current_connection.ssid)}
+                        ${data.current_connection.signal ? `<br><small>Сигнал: ${data.current_connection.signal}%</small>` : ''}</div>
+                    </div>`;
+                }
+                if (disconnectBtn) { 
+                    disconnectBtn.disabled = false; 
+                    disconnectBtn.style.opacity = '1';
+                    disconnectBtn.style.background = '#E57373';
+                    disconnectBtn.style.color = 'white';
+                }
+            } else {
+                if (el) el.innerHTML = '<div style="padding:15px;color:#666;text-align:center">Нет активного подключения</div>';
+                if (disconnectBtn) { 
+                    disconnectBtn.disabled = true; 
+                    disconnectBtn.style.opacity = '0.5';
+                    disconnectBtn.style.background = '#ccc';
+                }
+            }
+        } catch (e) { 
+            console.error('Status error:', e); 
+        }
+    }
+
+    function displayNetworks(networks) {
+        const list = document.getElementById('networkList'); list.innerHTML = '';
+        networks.forEach(net => {
+            const item = document.createElement('div'), 
+                isSecured = net.security !== 'Open', 
+                isConnected = currentConnection === net.ssid;
+            item.className = 'network-item' + (isConnected ? ' selected' : '');
+            item.innerHTML = `<div class="network-item-info" style="flex:1;cursor:pointer" onclick="selectNetwork(this, '${escapeHtml(net.ssid)}', '${net.security}')">
+                <div style="display:flex;align-items:center;gap:15px">
+                    <i class="fas fa-wifi" style="font-size:24px;color:var(--primary-green)"></i>
+                    <div style="flex:1">
+                        <h4 style="margin:0 0 4px 0;display:flex;align-items:center;gap:8px">
+                            ${escapeHtml(net.ssid)}
+                            ${isSecured ? '<i class="fas fa-lock" style="font-size:12px;color:#999" title="Защищённая сеть"></i>' : ''}
+                            ${isConnected ? '<span style="background:#4CAF50;color:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">● Подключено</span>' : ''}
+                        </h4>
+                        <p style="margin:0;color:var(--text-light);font-size:13px">${escapeHtml(net.security)} • ${net.frequency} • ${net.signal_percent}%</p>
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:15px">
+                <div class="signal-strength" title="Сигнал: ${net.signal_percent}%">${generateSignalBars(net.signal, net.signal_percent)}</div>
+                ${!isConnected ? `<button class="btn-connect" onclick="event.stopPropagation();quickConnect('${escapeHtml(net.ssid)}','${net.security}')" style="padding:8px 16px;background:var(--primary-green);color:white;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">${isSecured ? '🔐 Подключиться' : '📡 Подключиться'}</button>` : `<button onclick="event.stopPropagation();disconnectNetwork()" style="padding:8px 16px;background:#E57373;color:white;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">Отключить</button>`}
+            </div>`;
+            list.appendChild(item);
+        });
+    }
+
+    function quickConnect(ssid, security) {
+        if (security === 'Open') connectToNetwork(ssid, '', security);
+        else selectNetwork(document.querySelector('[data-ssid="' + CSS.escape(ssid) + '"]'), ssid, security);
+    }
+
+    function selectNetwork(el, ssid, security) {
+        document.querySelectorAll('.network-item').forEach(i => i.classList.remove('selected'));
+        if (el) el.closest('.network-item')?.classList.add('selected');
+        selectedNetworkSSID = ssid;
+        const isSecured = security !== 'Open';
+        document.getElementById('selectedNetwork').value = ssid;
+        const pwdField = document.getElementById('passwordSection');
+        if (isSecured) {
+            if (pwdField) pwdField.style.display = 'block';
+            document.getElementById('networkPassword').placeholder = 'Введите пароль от сети';
+            document.getElementById('networkPassword').type = 'password';
+        } else {
+            if (pwdField) pwdField.style.display = 'none';
+            document.getElementById('networkPassword').value = '';
+        }
+        document.getElementById('passwordSection').classList.add('show');
+        document.getElementById('networkPassword').focus();
+    }
+
+    async function connectToNetwork(ssid, password, security) {
+        const actualSsid = ssid || selectedNetworkSSID;
+        const actualPwd = password !== undefined ? password : document.getElementById('networkPassword').value;
+        const actualSec = security || document.getElementById('securityType').value;
+        
+        if (!actualSsid) { alert('Выберите сеть'); return; }
+        if (actualSec !== 'open' && !actualPwd) { alert('Введите пароль для защищённой сети'); return; }
+        
+        const btn = document.getElementById('connectBtn'), orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Подключение...'; btn.disabled = true;
+        
+        console.log('🔗 Connecting to:', actualSsid);
+        
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            
+            const res = await fetch('api/scan_wifi.php?action=connect', {
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    ssid: actualSsid, 
+                    password: actualPwd, 
+                    security: actualSec 
+                }),
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            console.log('Connect response status:', res.status);
+            
+            if (!res.ok) {
+                throw new Error('HTTP ' + res.status);
+            }
+            
+            const data = await res.json();
+            console.log('Connect response:', data);
+            
+            if (data.success) {
+                btn.innerHTML = '✅ Подключено!'; btn.style.background = 'var(--accent-green)';
+                showStatus(data.message, 'success');
+                setTimeout(() => {
+                    document.getElementById('networkPassword').value = '';
+                    document.getElementById('passwordSection').classList.remove('show');
+                    selectedNetworkSSID = null;
+                    updateConnectionStatus(); 
+                    scanNetworks();
+                }, 2000);
+            } else { 
+                let errorMsg = data.error || 'Неизвестная ошибка';
+                if (data.debug) {
+                    console.error('Debug info:', data.debug);
+                }
+                alert('❌ Ошибка: ' + errorMsg); 
+                btn.innerHTML = orig; btn.disabled = false; 
+            }
+        } catch (e) { 
+            console.error('❌ Connection error:', e);
+            alert('❌ Ошибка соединения: ' + e.message + '\n\nПроверьте:\n1. Open Server запущен от имени администратора\n2. WiFi адаптер включён в системе\n3. Файл api/scan_wifi.php существует'); 
+            btn.innerHTML = orig; btn.disabled = false; 
+        }
+    }
+
+    async function disconnectNetwork() {
+        if (!confirm('Отключиться от текущей WiFi сети?')) return;
+        try {
+            const res = await fetch('api/scan_wifi.php?action=disconnect', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) { 
+                showStatus('✅ ' + data.message, 'success'); 
+                currentConnection = null; 
+                updateConnectionStatus(); 
+                scanNetworks(); 
+            } else {
+                alert('❌ Ошибка: ' + data.error);
+            }
+        } catch (e) { 
+            alert('❌ Ошибка соединения'); 
+        }
+    }
+
+    function cancelConnection() {
+        document.getElementById('passwordSection').classList.remove('show');
+        document.querySelectorAll('.network-item').forEach(i => i.classList.remove('selected'));
+        selectedNetworkSSID = null;
+    }
+
+    async function addManualNetwork() {
+        const ssid = document.getElementById('manualSSID').value, 
+            pwd = document.getElementById('manualPassword').value, 
+            sec = document.getElementById('securityType').value;
+        if (!ssid) { alert('Введите название сети (SSID)'); return; }
+        if (sec !== 'open' && !pwd) { alert('Введите пароль для защищённой сети'); return; }
+        try {
+            const res = await fetch('api/scan_wifi.php?action=add_profile', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ ssid, password: pwd || '', security: sec })
+            });
+            const data = await res.json();
+            if (data.success) { 
+                showStatus('✅ ' + data.message, 'success'); 
+                document.getElementById('manualSSID').value = ''; 
+                document.getElementById('manualPassword').value = ''; 
+                scanNetworks(); 
+            } else {
+                alert('❌ Ошибка: ' + data.error);
+            }
+        } catch (e) { 
+            alert('❌ Ошибка соединения'); 
+        }
+    }
+
+    function showStatus(msg, type) {
+        const el = document.getElementById('statusMessage');
+        el.textContent = msg; el.className = 'status-message ' + type; el.style.display = 'flex';
+        setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function generateSignalBars(str, percent) {
+        let b = '';
+        for (let i = 1; i <= 4; i++) {
+            let c = '';
+            if (i <= str) c = str <= 2 ? 'weak' : (str === 3 ? 'medium' : 'strong');
+            b += '<div class="signal-bar ' + c + '" title="' + percent + '%"></div>';
+        }
+        return b;
+    }
+
+    function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+    function updateTime() {
+        const now = new Date();
+        document.getElementById('currentTime').textContent = now.toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
+        document.getElementById('currentDate').textContent = now.toLocaleDateString('ru-RU', {day:'numeric',month:'long',year:'numeric',weekday:'long'});
+    }
+
+    // Инициализация
+    document.addEventListener('DOMContentLoaded', () => {
+        console.log('🌱 PlantCare App Loading...');
+        
+        document.getElementById('loginBtn').onclick = handleLogin;
+        document.getElementById('guestBtn').onclick = handleGuestLogin;
+        updateTime(); setInterval(updateTime, 60000);
+        
+        const user = localStorage.getItem('plantCareUser');
+        if (user) {
+            document.getElementById('userName').textContent = user;
+            document.getElementById('userAvatar').textContent = user.charAt(0).toUpperCase();
+            document.getElementById('authScreen').style.display = 'none';
+            document.getElementById('appLayout').classList.add('active');
+            updateConnectionStatus();
+        }
+        
+        document.addEventListener('keypress', e => { 
+            if (e.key === 'Enter' && document.getElementById('authScreen').style.display !== 'none') handleLogin(); 
+        });
+        
+        document.getElementById('networkPassword')?.addEventListener('keypress', e => { 
+            if (e.key === 'Enter' && document.getElementById('passwordSection').classList.contains('show')) connectToNetwork(); 
+        });
+        
+        // Тест соединения при загрузке
+        console.log('🔍 Testing local server connection...');
+        testLocalServer().then(ok => {
+            console.log('Server connection:', ok ? '✅ OK' : '❌ FAILED');
+        });
+    });
+</script>
+</body>
+</html>
