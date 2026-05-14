@@ -22,7 +22,8 @@
                 </div>
                 
                 <div class="form-group">
-                    <input type="password" name="password" placeholder="Пароль" required autocomplete="current-password">
+                    <input type="password" id="passwordInput" name="password" placeholder="Пароль" required autocomplete="current-password">
+                    <img src="Открытый.png" alt="Показать пароль" class="toggle-password" id="togglePassword">
                 </div>
 
                 <div class="register-link">
@@ -46,6 +47,16 @@
             document.body.classList.remove('theme-dark', 'theme-light');
             document.body.classList.add(isDark ? 'theme-light' : 'theme-dark');
             localStorage.setItem('theme', isDark ? 'theme-light' : 'theme-dark');
+        });
+
+        const passwordInput = document.getElementById('passwordInput');
+        const togglePassword = document.getElementById('togglePassword');
+
+        togglePassword.addEventListener('click', function() {
+            const isPassword = passwordInput.type === 'password';
+            passwordInput.type = isPassword ? 'text' : 'password';
+            this.src = isPassword ? 'Закрытый.png' : 'Открытый.png';
+            this.alt = isPassword ? 'Скрыть пароль' : 'Показать пароль';
         });
 
         document.addEventListener('click', function(e) {
