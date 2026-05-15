@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Регистрация</title>
+    <link rel="stylesheet" href="register-style.css">
+</head>
+<body class="theme-dark">
+    <div class="theme-switcher" id="themeSwitcher">
+        <img src="тема.png" alt="Переключить тему" class="theme-icon-img">
+    </div>
+
+    <div class="wrapper">
+        <div class="auth-card">
+            <h1>Регистрация</h1>
+
+            <form action="#" method="POST" onsubmit="event.preventDefault();">
+                
+                <div class="form-group">
+                    <label class="field-label">Логин<span class="required">*</span></label>
+                    <input type="text" name="login" id="loginInput" placeholder="от 3 до 50 символов" required minlength="3" maxlength="50">
+                </div>
+
+                <div class="form-group">
+                    <label class="field-label">Пароль<span class="required">*</span></label>
+                    <input type="password" name="password" id="passwordInput" placeholder="от 6 символов" required minlength="6">
+                    <img src="предупреждение.png" alt="Внимание" class="field-icon" id="passwordWarning">
+                </div>
+
+                <div class="form-group">
+                    <label class="field-label">Повторите пароль<span class="required">*</span></label>
+                    <input type="password" name="password_confirm" id="passwordConfirmInput" placeholder="" required>
+                    <img src="предупреждение.png" alt="Внимание" class="field-icon" id="confirmWarning">
+                </div>
+
+                <div class="form-group">
+                    <label class="field-label">Почта<span class="required">*</span></label>
+                    <input type="email" name="email" placeholder="your@email.com" required>
+                </div>
+                
+
+                <button type="submit" class="btn">Зарегистрироваться</button>
+                
+                <div class="register-link">
+                    Есть аккаунт? <a href="login.html">Заходи!</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(savedTheme);
+        }
+        document.getElementById('themeSwitcher').addEventListener('click', function() {
+            const isDark = document.body.classList.contains('theme-dark');
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(isDark ? 'theme-light' : 'theme-dark');
+            localStorage.setItem('theme', isDark ? 'theme-light' : 'theme-dark');
+        });
+        const passwordInput = document.getElementById('passwordInput');
+        const passwordConfirmInput = document.getElementById('passwordConfirmInput');
+        const passwordWarning = document.getElementById('passwordWarning');
+        const confirmWarning = document.getElementById('confirmWarning');
+
+        function checkPasswordsMatch() {
+            const password = passwordInput.value;
+            const confirmPassword = passwordConfirmInput.value;
+            
+            if (confirmPassword.length > 0) {
+                if (password !== confirmPassword) {
+                    passwordWarning.style.opacity = '0.85';
+                    confirmWarning.style.opacity = '0.85';
+                } else {
+                    passwordWarning.style.opacity = '0';
+                    confirmWarning.style.opacity = '0';
+                }
+            } else {
+                passwordWarning.style.opacity = '0';
+                confirmWarning.style.opacity = '0';
+            }
+        }
+
+        passwordInput.addEventListener('input', checkPasswordsMatch);
+        passwordConfirmInput.addEventListener('input', checkPasswordsMatch);
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.auth-card') && !e.target.closest('.theme-switcher')) {
+                e.preventDefault();
+                createFallingLeaves(e.clientX, e.clientY);
+            }
+        });
+
+        function createFallingLeaves(x, y) {
+            const leafSrc = 'листок.png'; 
+            const count = 8 + Math.floor(Math.random() * 5);
+            for (let i = 0; i < count; i++) {
+                const leaf = document.createElement('img');
+                leaf.src = leafSrc;
+                leaf.className = 'falling-leaf';
+                leaf.onerror = function() {
+                    this.style.border = '1px solid red';
+                    this.style.width = '20px';
+                    this.style.height = '20px';
+                    console.error("Ошибка загрузки картинки falling-leaf.png!");
+                };
+
+                const size = 15 + Math.random() * 20;
+                leaf.style.width = size + 'px';
+                leaf.style.height = 'auto';
+                const offsetX = (Math.random() - 0.5) * 40;
+                const offsetY = (Math.random() - 0.5) * 20;
+                leaf.style.left = (x + offsetX) + 'px';
+                leaf.style.top = (y + offsetY) + 'px';
+                const rotation = (Math.random() - 0.5) * 60;
+                const swayAmount = 20 + Math.random() * 40;
+                leaf.style.setProperty('--sway', swayAmount + 'px');
+                leaf.style.setProperty('--rotation', rotation + 'deg');
+                leaf.style.setProperty('--fall-duration', (2 + Math.random() * 2) + 's');
+                document.body.appendChild(leaf);
+                leaf.addEventListener('animationend', function() {
+                    leaf.remove();
+                });
+            }
+        }
+    </script>
+</body>
+</html>
