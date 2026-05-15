@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мои растения</title>
+    <link rel="stylesheet" href="myplant-style.css">
+</head>
+<body class="theme-dark">
+    <div class="top-sticky-wrapper">
+        
+        <header class="site-header">
+            <div class="user-pill">
+                <img src="Т.пол.png" alt="User" class="user-avatar avatar-dark">
+                <img src="Св.пол.png" alt="User" class="user-avatar avatar-light">
+                <span class="user-text">USER</span>
+            </div>
+
+            <div class="logo-container">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+            </div>
+
+            <div class="theme-switcher" id="themeSwitcher">
+                <img src="тема.png" alt="Тема" class="theme-icon-img">
+            </div>
+        </header>
+
+        <nav class="navigation">
+            <a href="#" class="nav-btn">Главная</a>
+            <a href="#" class="nav-btn active">Мои растения</a>
+            <a href="#" class="nav-btn">Игра</a>
+            <a href="#" class="nav-btn">Настройки</a>
+        </nav>
+        
+    </div>
+
+    <div class="page-wrapper">
+        <main class="cards-area">
+            <div class="plant-card glowing">
+                <img src="Фикус.png" alt="Фикус" class="plant-img">
+                <div class="plant-label">Фикус</div>
+            </div>
+
+            <div class="plant-card glowing">
+                <img src="Монстера.png" alt="Монстера" class="plant-img">
+                <div class="plant-label">Монстера</div>
+            </div>
+
+            <a href="login.html" class="add-link" style="text-decoration: none;">
+                <div class="plant-card add-card glowing">
+                    <img src="Тёмная_иконка.png" alt="Add Plant" class="plus-icon icon-dark">
+                    <img src="Светлая_иконка.png" alt="Add Plant" class="plus-icon icon-light">
+                </div>
+            </a>
+        </main>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-grid">
+            <div class="footer-col">
+                <h3>Зелёная полка</h3>
+                <p>Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</p>
+            </div>
+            <div class="footer-col">
+                <h3>Модули</h3>
+                <p>Освещения растений<br>Сбор данных о растениях<br>Полив растений</p>
+            </div>
+            <div class="footer-col">
+                <h3>Контакты</h3>
+                <p>Почта<br>Наши сети</p>
+            </div>
+        </div>
+        <div class="copyright-bar">2026 Зелёная полка</div>
+    </footer>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const savedTheme = localStorage.getItem('theme') || 'theme-dark';
+        document.body.classList.remove('theme-dark', 'theme-light');
+        document.body.classList.add(savedTheme);
+        const switcher = document.querySelector('.theme-switcher');
+        if (switcher) {
+            switcher.addEventListener('click', () => {
+                const isDark = document.body.classList.contains('theme-dark');
+                const newTheme = isDark ? 'theme-light' : 'theme-dark';
+                
+                document.body.classList.remove('theme-dark', 'theme-light');
+                document.body.classList.add(newTheme);
+                localStorage.setItem('theme', newTheme);
+            });
+        }
+    });
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.plant-card') && 
+                !e.target.closest('.navigation') && 
+                !e.target.closest('.footer') &&
+                !e.target.closest('.theme-switcher') &&
+                !e.target.closest('.user-pill')) {
+                e.preventDefault();
+                createFallingLeaves(e.clientX, e.clientY);
+            }
+        });
+
+        function createFallingLeaves(x, y) {
+            const leafSrc = 'листок.png';
+            const count = 8 + Math.floor(Math.random() * 5);
+            for (let i = 0; i < count; i++) {
+                const leaf = document.createElement('img');
+                leaf.src = leafSrc;
+                leaf.className = 'falling-leaf';
+                const size = 15 + Math.random() * 20;
+                leaf.style.width = size + 'px';
+                leaf.style.height = 'auto';
+                const offsetX = (Math.random() - 0.5) * 40;
+                const offsetY = (Math.random() - 0.5) * 20;
+                leaf.style.left = (x + offsetX) + 'px';
+                leaf.style.top = (y + offsetY) + 'px';
+                const rotation = (Math.random() - 0.5) * 60;
+                const swayAmount = 20 + Math.random() * 40;
+                leaf.style.setProperty('--sway', swayAmount + 'px');
+                leaf.style.setProperty('--rotation', rotation + 'deg');
+                leaf.style.setProperty('--fall-duration', (2 + Math.random() * 2) + 's');
+                document.body.appendChild(leaf);
+                leaf.addEventListener('animationend', () => leaf.remove());
+            }
+        }
+    </script>
+</body>
+</html>
