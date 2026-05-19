@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Главная</title>
+    <link rel="stylesheet" href="myplant-style.css">
+    
+    <style>
+        .deco-leaf {
+            position: absolute;
+            z-index: 0;
+            pointer-events: none;   
+            width: 700px;  
+            opacity: 0.9;
+            transition: opacity 0.3s;
+        }
+        .leaf-left { left: 0px; top: 9.5%; }
+        .leaf-right { right: 0px; top: -25%; }
+        @media (max-width: 900px) {
+            .deco-leaf { width: 250px; opacity: 0.4; }
+            .leaf-left { left: -50px; }
+            .leaf-right { right: -50px; }
+        }
+
+        .page-wrapper {
+            position: relative;
+            width: 100%;
+            min-height: 1400px;
+            padding-top: 60px;
+            padding-bottom: 50px;
+        }
+
+        .content-block,
+        .center-block {
+            position: absolute;
+            width: 650px;
+            height: 250px;
+            z-index: 2;
+        }
+
+        .content-block {
+            left: 150px;
+            top: 25px;
+            text-align: left;
+        }
+
+        .hero-title {
+            font-size: 52px;
+            font-weight: 400;
+            line-height: 1.1;
+            margin-bottom: 24px;
+            color: var(--text-main);
+            transition: transform 0.3s ease;
+        }
+
+        .hero-text {
+            font-size: 22px;
+            line-height: 1.7;
+            color: var(--text-main);
+            opacity: 0.9;
+            margin: 0;
+            transition: transform 0.3s ease;
+        }
+
+        .hero-text:hover {
+            transform: scale(1.04);
+        }
+
+        .center-block.about-block {
+            right: 500px;
+            top: 380px;
+            text-align: right;
+        }
+
+        .center-block.modules-block {
+            left: 50%;
+            transform: translateX(-50%);
+            top: 740px; /* ️ Сдвинул ниже (было 700px) */
+            text-align: center;
+        }
+
+        .section-title {
+            font-size: 52px;
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+            color: var(--accent-green);
+            transition: transform 0.3s ease;
+        }
+
+        .section-title:hover {
+            transform: scale(1.05);
+        }
+
+        /* ️ Принудительно тёмный цвет для текста в карточках */
+        .module-title,
+        .module-description {
+            color: #0F182B; 
+        }
+
+        /* ГАЛЕРЕЯ МОДУЛЕЙ */
+        .modules-gallery {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            top: 820px;
+            width: 90%;
+            max-width: 1200px;
+            display: flex;
+            justify-content: center;
+            align-items: stretch;
+            gap: 30px;
+            flex-wrap: wrap;
+            z-index: 2;
+            padding: 20px;
+        }
+
+        .module-card {
+            background: var(--card-bg);
+            border-radius: 24px;
+            padding: 30px;
+            width: 350px;
+            min-height: 420px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            box-shadow: var(--card-internal-shadow);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .module-card:hover {
+            transform: translateY(-5px) scale(1.01);
+            box-shadow: 0 10px 30px var(--glow-color);
+        }
+
+        .module-icon {
+            width: 320px;
+            height: 320px;
+            object-fit: contain;
+            margin-bottom: 20px;
+            transition: transform 0.3s ease;
+        }
+
+        .module-card:hover .module-icon {
+            transform: scale(1.1);
+        }
+
+        .module-title {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .module-description {
+            font-size: 15px;
+            line-height: 1.6;
+            opacity: 0.8;
+            text-align: center;
+            margin: 0;
+        }
+
+        body.theme-light .hero-title { color: #0E5A42; }
+        body.theme-light .hero-text { color: #1C2533; }
+        body.theme-light .section-title { color: #0E5A42; }
+        body.theme-dark .hero-title { color: #21C85F; }
+        body.theme-dark .hero-text { color: #FFFFFF; }
+        body.theme-dark .section-title { color: #21C85F; }
+
+        @media (max-width: 900px) {
+            .content-block,
+            .center-block {
+                width: 90%;
+                left: 5% !important;
+                right: 5% !important;
+                transform: none !important;
+                position: relative;
+                margin: 0 auto 40px auto;
+                text-align: center !important;
+            }
+            .modules-gallery {
+                position: relative;
+                top: auto;
+                left: auto;
+                transform: none;
+                margin-top: 40px;
+            }
+        }
+    </style>
+</head>
+<body class="theme-light">
+
+    <div class="top-sticky-wrapper">
+        <header class="site-header">
+            <div class="user-pill">
+                <img src="Св.пол.png" alt="User" class="user-avatar avatar-light">
+                <img src="Т.пол.png" alt="User" class="user-avatar avatar-dark">
+                <span class="user-text">USER</span>
+            </div>
+
+            <div class="logo-container">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+            </div>
+
+            <div class="theme-switcher" id="themeSwitcher">
+                <img src="тема.png" alt="Тема" class="theme-icon-img">
+            </div>
+        </header>
+
+        <nav class="navigation">
+            <a href="index.html" class="nav-btn active">Главная</a>
+            <a href="myplant.html" class="nav-btn">Мои растения</a>
+            <a href="#" class="nav-btn">Настройки</a>
+        </nav>
+    </div>
+
+    <div class="page-wrapper">
+        <img src="Лево.png" alt="Leaf Decor" class="deco-leaf leaf-left">
+        <img src="Право.png" alt="Leaf Decor" class="deco-leaf leaf-right">
+        
+        <div class="content-block">
+            <h1 class="hero-title">Мы любим то,<br>что делаем</h1>
+            <p class="hero-text">
+                Мы сделали умную систему, которая сама ухаживает за комнатными растениями. 
+                У нас есть три устройства: одно проверяет тепло и влажность, другое включает 
+                подсветку, третье поливает цветы. Все наши приборы работают без проводов и 
+                сами решают, когда и сколько воды или света нужно растению.
+            </p>
+        </div>
+        
+        <div class="center-block about-block">
+            <h2 class="hero-title">О нас</h2>
+            <p class="hero-text">
+                Мы сделали умную систему, которая сама ухаживает за комнатными растениями. 
+                У нас есть три устройства: одно проверяет тепло и влажность, другое включает 
+                подсветку, третье поливает цветы. Все наши приборы работают без проводов и 
+                сами решают, когда и сколько воды или света нужно растению.
+            </p>
+        </div>
+        <div class="center-block modules-block">
+            <h2 class="hero-title">Модули</h2>
+        </div>
+
+        <div class="modules-gallery">
+            <div class="module-card">
+                <img src="Осветительный.png" alt="Освещение" class="module-icon">
+                <h3 class="module-title">Освещение растений</h3>
+                <p class="module-description">
+                    Автоматическая подсветка с регулировкой интенсивности и спектра для оптимального фотосинтеза
+                </p>
+            </div>
+
+            <div class="module-card">
+                <img src="Полив.png" alt="Полив" class="module-icon">
+                <h3 class="module-title">Полив растений</h3>
+                <p class="module-description">
+                    Умная система полива с контролем влажности почвы и автоматическим дозированием воды
+                </p>
+            </div>
+
+            <div class="module-card" onclick="location.href='statistic.html'">
+                <img src="Сбор_данных.jpg" alt="Климат" class="module-icon">
+                <h3 class="module-title">Контроль климата</h3>
+                <p class="module-description">
+                    Мониторинг температуры и влажности с автоматической корректировкой микроклимата
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="footer-grid">
+            <div class="footer-col">
+                <h3>Зелёная полка</h3>
+                <p>Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</p>
+            </div>
+            <div class="footer-col">
+                <h3>Модули</h3>
+                <p>Освещения растений</p>
+                <p>Сбор данных о растениях</p>
+                <p>Полив растений</p>
+            </div>
+            <div class="footer-col">
+                <h3>Контакты</h3>
+                <p>Почта</p>
+                <p>Наши сети</p>
+            </div>
+        </div>
+        <div class="copyright-bar">
+            2026 Зелёная полка
+        </div>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const themeBtn = document.getElementById('themeSwitcher'); 
+            const body = document.body;
+            const savedTheme = localStorage.getItem('theme');
+            
+            if (savedTheme) {
+                body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
+            }
+
+            if(themeBtn) {
+                themeBtn.addEventListener('click', () => {
+                    if (body.classList.contains('theme-light')) {
+                        body.className = 'theme-dark';
+                        localStorage.setItem('theme', 'dark');
+                    } else {
+                        body.className = 'theme-light';
+                        localStorage.setItem('theme', 'light');
+                    }
+                });
+            }
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.plant-card') && 
+                !e.target.closest('.navigation') && 
+                !e.target.closest('.footer') &&
+                !e.target.closest('.theme-switcher') &&
+                !e.target.closest('.user-pill') &&
+                !e.target.closest('.module-card')) { 
+                e.preventDefault();
+                createFallingLeaves(e.clientX, e.clientY);
+            }
+        });
+
+        function createFallingLeaves(x, y) {
+            const leafSrc = 'листок.png';
+            const count = 8 + Math.floor(Math.random() * 5);
+            for (let i = 0; i < count; i++) {
+                const leaf = document.createElement('img');
+                leaf.src = leafSrc;
+                leaf.className = 'falling-leaf';
+                const size = 15 + Math.random() * 20;
+                leaf.style.width = size + 'px';
+                leaf.style.height = 'auto';
+                const offsetX = (Math.random() - 0.5) * 40;
+                const offsetY = (Math.random() - 0.5) * 20;
+                leaf.style.left = (x + offsetX) + 'px';
+                leaf.style.top = (y + offsetY) + 'px';
+                const rotation = (Math.random() - 0.5) * 60;
+                const swayAmount = 20 + Math.random() * 40;
+                leaf.style.setProperty('--sway', swayAmount + 'px');
+                leaf.style.setProperty('--rotation', rotation + 'deg');
+                leaf.style.setProperty('--fall-duration', (2 + Math.random() * 2) + 's');
+                document.body.appendChild(leaf);
+                leaf.addEventListener('animationend', () => leaf.remove());
+            }
+        }
+    </script>
+</body>
+</html>
