@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Настройки</title>
+    <link rel="stylesheet" href="style-settings.css">
+</head>
+<body class="theme-dark">
+    <div class="top-sticky-wrapper">
+        <header class="site-header">
+            <div class="user-pill">
+                <img src="Св.пол.png" alt="User" class="user-avatar avatar-light">
+                <img src="Т.пол.png" alt="User" class="user-avatar avatar-dark">
+                <span class="user-text">USER</span>
+            </div>
+
+            <div class="logo-container">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+            </div>
+
+            <div class="theme-switcher" id="themeSwitcher">
+                <img src="тема.png" alt="Тема" class="theme-icon-img">
+            </div>
+        </header>
+
+        <nav class="navigation">
+            <a href="index.html" class="nav-btn">Главная</a>
+            <a href="myplant.html" class="nav-btn">Мои растения</a>
+            <a href="settings.html" class="nav-btn active">Настройки</a>
+        </nav>
+    </div>
+    <div class="page-wrapper">
+        <main class="main-content">
+            <div class="scan-card">
+                <div class="wifi-icon">
+                    <img src="Светлая_большая.png" alt="WiFi" class="wifi-img wifi-light">
+                    <img src="Тёмная_большая.png" alt="WiFi" class="wifi-img wifi-dark">
+                </div>
+
+                <h1 class="scan-title">Сканирование сетей</h1>
+                <p class="scan-subtitle">Нажмите кнопку ниже для сканирования доступных Wi-Fi сетей</p>
+
+                <button class="btn-scan" id="scanBtn" onclick="toggleScan()">Начать сканирование</button>
+                <div class="network-list-section" id="networkList" style="display: none;">
+                    <div class="network-item">
+                        <div class="network-icon">
+                            <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                            <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                        </div>
+                        <span class="network-name">HONOR 7</span>
+                        <span class="network-security">Защищено/Общедоступная</span>
+                        <button class="btn-connect" onclick="openModal('HONOR 7')">Отключиться</button>
+                    </div>
+
+                    <div class="network-item">
+                        <div class="network-icon">
+                            <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                            <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                        </div>
+                        <span class="network-name">iPhone</span>
+                        <span class="network-security">Защищено/Общедоступная</span>
+                        <button class="btn-disconnect" onclick="openModal('iPhone')">Подключиться</button>
+                    </div>
+
+                    <div class="network-item empty">
+                        <div class="network-icon">
+                            <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                            <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                        </div>
+                        <span class="network-name" style="visibility: hidden;">—</span>
+                        <span class="network-security"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="manual-section">
+                <h2 class="manual-title">
+                    <span class="plus-icon">
+                        <svg viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">
+                            <line x1="7" y1="1" x2="7" y2="13"/>
+                            <line x1="1" y1="7" x2="13" y2="7"/>
+                        </svg>
+                    </span>
+                    Добавить сеть вручную
+                </h2>
+
+                <div class="manual-form">
+                    <div class="form-group">
+                        <label class="form-label">Название сети (SSID)</label>
+                        <input type="text" class="form-input" placeholder="">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Тип безопасности</label>
+                        <input type="text" class="form-input" placeholder="">
+                    </div>
+                    <div class="form-group full-width">
+                        <label class="form-label">Пароль</label>
+                        <input type="password" class="form-input" placeholder="">
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <footer class="site-footer">
+            <div class="footer-columns">
+                <div>
+                    <h3 class="footer-column-title">Зелёная полка</h3>
+                    <p class="footer-column-text">
+                        Система контроля<br>
+                        микроклимата растений<br>
+                        соответствует<br>
+                        приоритетам<br>
+                        техлидерства РФ, IoT и<br>
+                        импортозамещению.
+                    </p>
+                </div>
+                <div>
+                    <h3 class="footer-column-title">Модули</h3>
+                    <ul class="footer-column-list">
+                        <li>Освещения растений</li>
+                        <li>Сбор данных о растениях</li>
+                        <li>Полив растений</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="footer-column-title">Контакты</h3>
+                    <ul class="footer-column-list">
+                        <li>Почта</li>
+                        <li>Наши сети</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-copyright">
+                2026 Зелёная полка
+            </div>
+        </footer>
+
+    </div>
+    <div class="modal-overlay" id="passwordModal">
+        <div class="modal-card">
+            <div class="modal-network-row">
+                <div class="network-icon">
+                    <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                    <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                </div>
+                <span class="modal-network-name" id="modalNetworkName">iPhone</span>
+                <span class="modal-network-security">Защищено</span>
+            </div>
+
+            <label class="modal-label">Введите код безопасности</label>
+            <div class="modal-input-wrapper">
+                <input type="password" class="modal-input" id="modalPasswordInput">
+                <button type="button" class="modal-eye-btn" id="eyeBtn">
+                    <img src="Открытый.png" id="eyeImg" alt="Показать пароль">
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const themeSwitcher = document.getElementById('themeSwitcher');
+        const body = document.body;
+        themeSwitcher.addEventListener('click', () => {
+            body.classList.toggle('theme-dark');
+            body.classList.toggle('theme-light');
+            updateEyeSource(); 
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+        const themeBtn = document.getElementById('themeSwitcher'); 
+        const body = document.body;
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
+        }
+
+        if(themeBtn) {
+            themeBtn.addEventListener('click', () => {
+                if (body.classList.contains('theme-light')) {
+                    body.className = 'theme-dark';
+                    localStorage.setItem('theme', 'dark');
+                    updateEyeSource(); 
+                } else {
+                    body.className = 'theme-light';
+                    localStorage.setItem('theme', 'light');
+                }
+            });
+        }
+    });
+
+        let isScanned = false;
+        function toggleScan() {
+            const btn = document.getElementById('scanBtn');
+            const list = document.getElementById('networkList');
+            if (!isScanned) {
+                btn.textContent = 'Обновить список';
+                list.style.display = 'block';
+                isScanned = true;
+            } else {
+                list.style.display = 'none';
+                void list.offsetWidth;
+                list.style.display = 'block';
+            }
+        }
+        
+        const passwordInput = document.getElementById('modalPasswordInput');
+        const eyeBtn = document.getElementById('eyeBtn');
+        const eyeImg = document.getElementById('eyeImg');
+        let passwordVisible = false;
+        function updateEyeSource() {
+            const isDark = body.classList.contains('theme-dark');
+            
+            if (passwordVisible) {
+                eyeImg.src = isDark ? 'Закрытый.png' : 'Закрытый.png';
+                eyeImg.alt = 'Скрыть пароль';
+            } else {
+                eyeImg.src = isDark ? 'Открытый.png' : 'Открытый.png';
+                eyeImg.alt = 'Показать пароль';
+            }
+        }
+        eyeBtn.addEventListener('click', function() {
+            passwordVisible = !passwordVisible;
+            passwordInput.type = passwordVisible ? 'text' : 'password';
+            updateEyeSource(); 
+        });
+
+        function openModal(networkName) {
+            const modal = document.getElementById('passwordModal');
+            document.getElementById('modalNetworkName').textContent = networkName;
+            modal.classList.add('active');
+            passwordVisible = false;
+            passwordInput.type = 'password';
+            updateEyeSource(); 
+        }
+        document.getElementById('passwordModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeModal();
+        });
+
+        function closeModal() {
+            document.getElementById('passwordModal').classList.remove('active');
+        }
+        
+    </script>
+</body>
+</html>
