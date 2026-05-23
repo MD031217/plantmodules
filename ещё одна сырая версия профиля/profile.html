@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ghjabkm</title>
+    <link rel="stylesheet" href="profile-style.css">
+</head>
+<body class="theme-light">
+
+    <div class="top-sticky-wrapper">
+        <header class="site-header">
+            <a href="profile.html" class="user-pill">
+                <img src="Т.пол.png" alt="Avatar Dark" class="user-avatar avatar-dark" id="header-avatar-dark">
+                <img src="Св.пол.png" alt="Avatar Light" class="user-avatar avatar-light" id="header-avatar-light">
+                <span class="user-text" id="header-username">User_login</span>
+            </a>
+
+            <div class="logo-container">
+                <img src="Светлая.png" alt="Зелёная полка (Dark)" class="main-logo logo-dark">
+                <img src="Тёмная.png" alt="Зелёная полка (Light)" class="main-logo logo-light">
+            </div>
+
+            <div class="theme-switcher" onclick="toggleTheme()">
+                <input type="checkbox" id="theme-toggle" class="mode-toggle">
+                <label for="theme-toggle">
+                    <img src="тема.png" alt="Тема" class="theme-icon-img">
+                </label>
+            </div>
+        </header>
+
+        <nav class="navigation">
+            <a href="index.html" class="nav-btn">Главная</a>
+            <a href="myplant.html" class="nav-btn">Мои растения</a>
+            <a href="settings.html" class="nav-btn">Настройки</a>
+        </nav>
+    </div>
+
+    <main class="page-wrapper">
+        <div class="card">
+            <a href="login.html" class="add-link" style="text-decoration: none;">
+                <div class="logout-icon" onclick="logout()" title="Выйти">
+                    <img src="ненаведдверьтем.png" alt="Выйти" class="logout-img logout-dark-default">
+                    <img src="наведдверьтем.png" alt="Выйти при наведении" class="logout-img logout-dark-hover">
+                    <img src="ненаведдверьсвет.png" alt="Выйти" class="logout-img logout-light-default">
+                    <img src="наведдверьсвет.png" alt="Выйти при наведении" class="logout-img logout-light-hover">
+                </div>
+            </a>
+
+            <div class="card-header">Профиль пользователя</div>
+
+            <div class="profile-layout">
+                <div>
+                    <img class="avatar" src="https://i.imgur.com/8KxHqJp.jpg" alt="avatar" id="profile-avatar">
+                    <div class="timezone-section">
+                        <div class="timezone-label">Часовой пояс </div>
+                        <div class="timezone-box" id="profile-timezone">(UTC+05:00)Asian/Yekaterinburg</div>
+                    </div>
+                </div>
+                
+                <div class="profile-info">
+                    <div class="profile-name" id="profile-name">User_login</div>
+                    <div class="profile-email" id="profile-email">name_mail@email.com</div>
+                    
+                    <div>
+                        <div class="gender-label">Пол <span class="lock-icon">🔒</span></div>
+                        <div class="gender-options">
+                            <div class="gender-opt selected" id="view-gender-female">
+                                <div class="radio-dot"></div>
+                                Женский
+                            </div>
+                            <div class="gender-opt" id="view-gender-male">
+                                <div class="radio-dot"></div>
+                                Мужской
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card-actions">
+                <button class="btn btn-edit" onclick="window.location.href='edit-profile.html'">Редактировать</button>
+                <button class="btn btn-delete" onclick="deleteAccount()">Удалить аккаунт</button>
+            </div>
+        </div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="footer-columns">
+            <div>
+                <div class="footer-column-title">Зелёная полка</div>
+                <div class="footer-column-text">Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</div>
+            </div>
+            <div>
+                <div class="footer-column-title">Модули</div>
+                <ul class="footer-column-list">
+                    <li>Освещения растений</li>
+                    <li>Сбор данных о растениях</li>
+                    <li>Полив растений</li>
+                </ul>
+            </div>
+            <div>
+                <div class="footer-column-title">Контакты</div>
+                <ul class="footer-column-list">
+                    <li>Почта</li>
+                    <li>Наши сети</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-copyright">2026 Зелёная полка</div>
+    </footer>
+
+    <script>
+        function toggleTheme() {
+            document.body.classList.toggle('theme-light');
+            document.body.classList.toggle('theme-dark');
+            const theme = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
+            localStorage.setItem('theme', theme);
+        }
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            if (savedTheme === 'dark') {
+                document.body.classList.remove('theme-light');
+                document.body.classList.add('theme-dark');
+            }
+        }
+        loadTheme();
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const defaultData = {
+                username: 'User_login',
+                email: 'name_mail@email.com',
+                avatar: 'https://i.imgur.com/8KxHqJp.jpg',
+                gender: 'female',
+                timezone: '(UTC+05:00) Asian/Yekaterinburg'
+            };
+
+            const userData = JSON.parse(localStorage.getItem('userData')) || defaultData;
+
+            document.getElementById('header-avatar-dark').src = userData.avatar;
+            document.getElementById('header-avatar-light').src = userData.avatar;
+            document.getElementById('header-username').textContent = userData.username;
+            document.getElementById('profile-avatar').src = userData.avatar;
+            document.getElementById('profile-name').textContent = userData.username;
+            document.getElementById('profile-email').textContent = userData.email;
+            document.getElementById('profile-timezone').textContent = userData.timezone;
+            const femaleOpt = document.getElementById('view-gender-female');
+            const maleOpt = document.getElementById('view-gender-male');
+            
+            femaleOpt.classList.remove('selected');
+            maleOpt.classList.remove('selected');
+            
+            if (userData.gender === 'female') {
+                femaleOpt.classList.add('selected');
+            } else {
+                maleOpt.classList.add('selected');
+            }
+        });
+
+        function logout() {
+            if (confirm('Вы уверены, что хотите выйти?')) {
+                window.location.href = 'index.html';
+            }
+        }
+
+        function deleteAccount() {
+            if (confirm('Вы уверены, что хотите удалить аккаунт? Это действие нельзя отменить.')) {
+                localStorage.removeItem('userData');
+                window.location.href = 'register.html';
+            }
+        }
+    </script>
+</body>
+</html>
