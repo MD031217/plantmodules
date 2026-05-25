@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мои растения</title>
+    <link rel="stylesheet" href="myplant-style.css">
+    
+</head>
+<body class="theme-dark">
+    <div class="top-sticky-wrapper">
+        
+        <header class="site-header">
+            <a href="profile.html" class="user-pill" aria-label="Профиль">
+                <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
+                <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
+                <span class="user-text">User_login</span>
+            </a>
+
+            <div class="logo-container">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+            </div>
+
+            <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
+                <img src="тема.png" alt="" class="theme-icon-img">
+            </label>
+        </header>
+        <input type="checkbox" id="themeToggle" class="mode-toggle">
+
+        <nav class="navigation">
+            <a href="index.html" class="nav-btn">Главная</a> 
+            <a href="myplant.html" class="nav-btn active">Мои растения</a>
+            <a href="settings.html" class="nav-btn">Настройки</a>
+        </nav>
+        
+    </div>
+
+    <div class="page-wrapper">
+        <div class="cards-area">
+            <div id="plants-container" class="plants-container"></div>
+            <div class="plant-card glowing" data-plant-name="Фикус">
+                <img src="Фикус.png" alt="Фикус" class="plant-img">
+                <a href="statistic.html" class="plant-label">Фикус</a>
+                <button class="delete-plant-btn" onclick="deletePlant(this, 'Фикус')" title="Удалить растение">×</button>
+            </div>
+            
+            <div class="plant-card glowing" data-plant-name="Монстера">
+                <img src="Монстера.png" alt="Монстера" class="plant-img">
+                <a href="statistic.html" class="plant-label">Монстера</a>
+                <button class="delete-plant-btn" onclick="deletePlant(this, 'Монстера')" title="Удалить растение">×</button>
+            </div>
+            
+            <div class="plant-card add-card glowing" id="addPlantCard">
+                <div class="add-link">
+                    <img src="Тёмная_иконка.png" alt="Добавить" class="plus-icon icon-dark">
+                    <img src="Светлая_иконка.png" alt="Добавить" class="plus-icon icon-light">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="plantModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">✕</button>
+            
+            <!-- Шаг 1: Название -->
+            <div id="modal-step-1" class="modal-step">
+                <h3 class="modal-title">Название растения</h3>
+                <input type="text" id="plant-name-input" class="modal-input" placeholder="">
+                
+                <div class="modal-photo-area">
+                    <a href="#" class="modal-link" onclick="handlePhotoSelect(event)">Выбрать фото</a>
+                    <input type="file" id="file-input" style="display: none;" accept="image/*">
+                </div>
+
+                <button id="add-btn-step-1" class="modal-btn" disabled>Добавить</button>
+            </div>
+
+            <div id="modal-step-2" class="modal-step" style="display: none;">
+                <h3 class="modal-title">Название растения</h3>
+                <input type="text" id="plant-name-display" class="modal-input" readonly>
+                
+                <div class="modal-preview-area">
+                    <img id="plant-preview-img" src="" alt="Preview" class="plant-preview" style="display: none;">
+                    <span class="modal-caption">Предпросмотр</span>
+                    <a href="#" class="modal-link" onclick="resetPhoto(event)">Выбрать фото</a>
+                </div>
+
+                <h3 class="modal-title-sub">Добавить комментарий</h3>
+                <input type="text" id="plant-comment-input" class="modal-input" placeholder="Напишите что-нибудь...">
+
+                <button class="modal-btn active" onclick="goToParameters()">Добавить</button>
+            </div>
+
+            <div id="modal-step-3" class="modal-step" style="display: none;">
+                <h3 class="modal-title">Задайте начальные параметры<br>модуля сбора данных:</h3>
+                
+                <div class="modal-params-list">
+                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр влажности воздуха (%)">
+                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр влажность почвы (%)">
+                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр температуры (°C)">
+                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр атм. давление (мм рт.ст.)">
+                </div>
+
+                <button class="modal-btn active" onclick="finalAddPlant()">Добавить</button>
+            </div>
+        </div>
+    </div>
+
+
+    <footer class="site-footer">
+        <div class="footer-columns">
+            <div>
+                <h3 class="footer-column-title">Зелёная полка</h3>
+                <p class="footer-column-text">Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</p>
+            </div>
+            <div>
+                <h3 class="footer-column-title">Модули</h3>
+                <ul class="footer-column-list">
+                    <li>Освещения растений</li>
+                    <li>Сбор данных о растениях</li>
+                    <li>Полив растений</li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="footer-column-title">Контакты</h3>
+                <ul class="footer-column-list">
+                    <li>Почта</li>
+                    <li>Наши сети</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-copyright">
+            2026 Зелёная полка
+        </div>
+    </footer>
+
+    <script>
+        (function () {
+            const toggle = document.getElementById('themeToggle');
+            const body   = document.body;
+            const KEY    = 'theme'; 
+            const saved = localStorage.getItem(KEY) || 'dark';
+            body.classList.remove('theme-dark', 'theme-light');
+            body.classList.add('theme-' + saved);
+            if (toggle) toggle.checked = (saved === 'light');
+            if (toggle) {
+                toggle.addEventListener('change', function () {
+                    const next = toggle.checked ? 'light' : 'dark';
+                    body.classList.remove('theme-dark', 'theme-light');
+                    body.classList.add('theme-' + next);
+                    localStorage.setItem(KEY, next);
+                });
+            }
+        })();
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            const themeBtn = document.getElementById('themeSwitcher'); 
+            const body = document.body;
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) {
+                body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
+            }
+            if(themeBtn) {
+                themeBtn.addEventListener('click', () => {
+                    if (body.classList.contains('theme-light')) {
+                        body.className = 'theme-dark';
+                        localStorage.setItem('theme', 'dark');
+                    } else {
+                        body.className = 'theme-light';
+                        localStorage.setItem('theme', 'light');
+                    }
+                });
+            }
+        });
+
+         function loadUserToHeader() {
+            const data = JSON.parse(localStorage.getItem('userData'));
+            if (!data) return; 
+            const userText = document.querySelector('.user-pill .user-text');
+            if (userText) userText.textContent = data.username;
+
+            const avDark = document.querySelector('.user-pill .avatar-dark');
+            const avLight = document.querySelector('.user-pill .avatar-light');
+            if (avDark) avDark.src = data.avatar;
+            if (avLight) avLight.src = data.avatar;
+        }
+
+        document.addEventListener('DOMContentLoaded', loadUserToHeader);
+
+        const modal = document.getElementById('plantModal');
+        const addCard = document.getElementById('addPlantCard');
+        const closeBtn = document.querySelector('.modal-close');
+
+        const step1 = document.getElementById('modal-step-1');
+        const step2 = document.getElementById('modal-step-2');
+        const step3 = document.getElementById('modal-step-3');
+
+        const plantNameInput = document.getElementById('plant-name-input');
+        const plantNameDisplay = document.getElementById('plant-name-display');
+        const commentInput = document.getElementById('plant-comment-input');
+        const fileInput = document.getElementById('file-input');
+        const plantPreviewImg = document.getElementById('plant-preview-img');
+        const addBtnStep1 = document.getElementById('add-btn-step-1');
+
+        const paramInputs = document.querySelectorAll('#modal-step-3 .modal-input');
+
+        // Открытие модального окна
+        if (addCard) {
+            addCard.addEventListener('click', () => {
+                openModal();
+            });
+        }
+
+        function openModal() {
+            modal.style.display = 'flex';
+            showStep(1);
+            resetForm();
+        }
+
+        // Закрытие модального окна
+        function closeModal() {
+            modal.style.display = 'none';
+        }
+
+        if (closeBtn) {
+            closeBtn.addEventListener('click', closeModal);
+        }
+
+        // Закрытие по клику вне модального окна
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeModal();
+            }
+        });
+
+        // Закрытие по Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal.style.display === 'flex') {
+                closeModal();
+            }
+        });
+
+        // Показ нужного шага
+        function showStep(stepNumber) {
+            step1.style.display = 'none';
+            step2.style.display = 'none';
+            step3.style.display = 'none';
+            
+            if (stepNumber === 1) {
+                step1.style.display = 'block';
+            } else if (stepNumber === 2) {
+                step2.style.display = 'block';
+            } else if (stepNumber === 3) {
+                step3.style.display = 'block';
+            }
+        }
+
+        // Сброс формы
+        function resetForm() {
+            plantNameInput.value = '';
+            plantNameDisplay.value = '';
+            if (commentInput) {
+                commentInput.value = '';
+            }
+            plantPreviewImg.src = '';
+            plantPreviewImg.style.display = 'none';
+            fileInput.value = '';
+            addBtnStep1.disabled = true;
+            addBtnStep1.classList.remove('active');
+            
+            paramInputs.forEach(input => {
+                input.value = '';
+            });
+        }
+
+        // Активация кнопки при вводе названия
+        plantNameInput.addEventListener('input', function() {
+            if (this.value.trim().length > 0) {
+                addBtnStep1.disabled = false;
+                addBtnStep1.classList.add('active');
+            } else {
+                addBtnStep1.disabled = true;
+                addBtnStep1.classList.remove('active');
+            }
+        });
+
+        // Выбор фото
+        function handlePhotoSelect(e) {
+            e.preventDefault();
+            fileInput.click();
+        }
+
+        // Обработка загруженного файла
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                if (!file.type.startsWith('image/')) {
+                    alert('Пожалуйста, выберите изображение');
+                    return;
+                }
+                
+                if (file.size > 5 * 1024 * 1024) {
+                    alert('Размер файла не должен превышать 5MB');
+                    return;
+                }
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    plantPreviewImg.src = e.target.result;
+                    plantPreviewImg.style.display = 'block';
+                };
+                reader.onerror = function() {
+                    alert('Ошибка при загрузке файла');
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Переход ко второму шагу
+        addBtnStep1.addEventListener('click', function() {
+            if (!this.disabled) {
+                plantNameDisplay.value = plantNameInput.value;
+                showStep(2);
+            }
+        });
+
+        // Функция для перехода к параметрам
+        function goToParameters() {
+            showStep(3);
+        }
+
+        // Функция сброса фото
+        function resetPhoto(e) {
+            e.preventDefault();
+            plantPreviewImg.src = '';
+            plantPreviewImg.style.display = 'none';
+            fileInput.value = '';
+        }
+
+        // Финальное добавление растения с перенаправлением
+        function finalAddPlant() {
+            const plantData = {
+                id: Date.now(),
+                name: plantNameInput.value.trim(),
+                comment: commentInput ? commentInput.value.trim() : '',
+                photo: plantPreviewImg.src || null,
+                parameters: {
+                    airHumidity: paramInputs[0].value || '',
+                    soilHumidity: paramInputs[1].value || '',
+                    temperature: paramInputs[2].value || '',
+                    pressure: paramInputs[3].value || ''
+                },
+                dateAdded: new Date().toISOString()
+            };
+            
+            if (!plantData.name) {
+                alert('Пожалуйста, введите название растения');
+                showStep(1);
+                return;
+            }
+            
+            try {
+                let plants = JSON.parse(localStorage.getItem('myPlants') || '[]');
+                plants.push(plantData);
+                localStorage.setItem('myPlants', JSON.stringify(plants));
+                
+                console.log('Растение добавлено:', plantData);
+                
+                closeModal();
+                
+                // Перенаправление на страницу настроек
+                window.location.href = 'statistic.html';
+                
+            } catch (error) {
+                console.error('Ошибка при сохранении:', error);
+                alert('Произошла ошибка при сохранении данных');
+            }
+        }
+
+        // Загрузка и отображение сохранённых растений
+        function loadPlants() {
+            const container = document.getElementById('plants-container');
+            if (!container) return;
+            
+            try {
+                const plants = JSON.parse(localStorage.getItem('myPlants') || '[]');
+                container.innerHTML = '';
+                
+                plants.forEach(plant => {
+                    const plantCard = createPlantCard(plant);
+                    container.appendChild(plantCard);
+                });
+            } catch (error) {
+                console.error('Ошибка при загрузке растений:', error);
+            }
+        }
+
+        // Создание карточки растения
+        function createPlantCard(plant) {
+            const card = document.createElement('div');
+            card.className = 'plant-card glowing';
+            card.setAttribute('data-plant-name', plant.name);
+            card.setAttribute('data-plant-id', plant.id);
+            
+            const imgSrc = plant.photo || 'img/default-plant.png';
+            const imgAlt = plant.name;
+            
+            card.innerHTML = `
+                <img src="${imgSrc}" alt="${imgAlt}" class="plant-img">
+                <a href="statistic.html" class="plant-label">${plant.name}</a>
+                <button class="delete-plant-btn" onclick="deletePlant(this, '${plant.name}', ${plant.id})" title="Удалить растение">×</button>
+            `;
+            
+            return card;
+        }
+
+        // Удаление растения
+        function deletePlant(btn, plantName, plantId) {
+            if (confirm(`Вы действительно хотите удалить растение "${plantName}"?`)) {
+                try {
+                    let plants = JSON.parse(localStorage.getItem('myPlants') || '[]');
+                    
+                    if (plantId) {
+                        // Удаление по ID (для динамических растений)
+                        plants = plants.filter(p => p.id !== plantId);
+                    } else {
+                        // Удаление по имени (для статических растений)
+                        plants = plants.filter(p => p.name !== plantName);
+                    }
+                    
+                    localStorage.setItem('myPlants', JSON.stringify(plants));
+                    
+                    // Удаляем карточку из DOM
+                    const card = btn.closest('.plant-card');
+                    if (card) {
+                        card.remove();
+                    }
+                    
+                    console.log(`Растение "${plantName}" удалено`);
+                } catch (error) {
+                    console.error('Ошибка при удалении:', error);
+                    alert('Произошла ошибка при удалении растения');
+                }
+            }
+        }
+
+        // Валидация параметров
+        paramInputs.forEach(input => {
+            input.addEventListener('input', function() {
+                if (this.value === '' || !isNaN(this.value)) {
+                    this.style.borderColor = 'var(--accent-green)';
+                } else {
+                    this.style.borderColor = 'red';
+                }
+            });
+        });
+
+        // Загрузка растений при загрузке страницы
+        document.addEventListener('DOMContentLoaded', loadPlants);
+    </script>
+</body>
+</html>
