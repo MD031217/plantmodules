@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Регистрация</title>
+    <style>
+        :root {
+            --page-bg: #EEF0F4;
+            --card-bg: #0FB881;
+            --brand-color: #0FB881;
+            --text-white: #111111;
+            --text-on-green: #ffffff;
+            --input-bg: #ffffff;
+            --input-text: #333333;
+            --btn-bg: #ffffff;
+            --btn-text: #0FB881;
+            --shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+            --placeholder-color: #88DDB8;
+            --label-color: #ffffff;
+        }
+
+        .theme-light {
+            --page-bg: #0F182B;
+            --card-bg: #21C85F;
+            --brand-color: #21C85F;
+            --text-white: #ffffff;
+            --text-on-green: #ffffff;
+            --input-bg: #ffffff;
+            --input-text: #333333;
+            --btn-bg: #ffffff;
+            --btn-text: #21C85F;
+            --shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+            --placeholder-color: #77DD9D;
+            --label-color: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--page-bg);
+            color: var(--text-white);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            transition: background-color 0.4s ease;
+        }
+
+        .falling-leaf {
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 1;
+            animation: fallingLeaf var(--fall-duration, 3s) linear forwards;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.1));
+        }
+
+        @keyframes fallingLeaf {
+            0% {
+                transform: translateY(0) translateX(0) rotate(0deg);
+                opacity: 1;
+            }
+            25% {
+                transform: translateY(25vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg));
+            }
+            50% {
+                transform: translateY(50vh) translateX(calc(var(--sway, 30px) * -0.5)) rotate(calc(var(--rotation, 20deg) * -0.5));
+                opacity: 0.9;
+            }
+            75% {
+                transform: translateY(75vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg));
+            }
+            100% {
+                transform: translateY(110vh) translateX(0) rotate(calc(var(--rotation, 20deg) * 1.5));
+                opacity: 0;
+            }
+        }
+
+        .theme-switcher {
+            position: absolute;
+            top: 32px;
+            right: 32px;
+            cursor: pointer;
+            width: 60px;
+            height: 60px;
+            background-color: #F1F3F6;
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s, background-color 0.3s;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        .theme-switcher:hover {
+            transform: scale(1.05);
+        }
+
+        .theme-switcher .theme-icon-img {
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+            filter: invert(0);
+        }
+
+        body.theme-light .theme-switcher {
+            background-color: #1B263B;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+        }
+
+        body.theme-light .theme-switcher .theme-icon-img {
+            filter: invert(1);
+        }
+
+        .wrapper {
+            width: 100%;
+            padding: 20px;
+            text-align: center;
+            animation: fadeInUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .auth-card {
+            width: 16.67cm;
+            min-height: 10cm;
+            background-color: var(--card-bg);
+            border-radius: 65px;
+            padding: 32px 36px 36px;
+            box-shadow: var(--shadow);
+            transition: background-color 0.4s ease;
+            margin: 0 auto;
+        }
+
+        .auth-card h1 {
+            font-size: 38px;
+            font-weight: 700;
+            margin-bottom: 24px;
+            color: var(--text-on-green);
+            letter-spacing: 0.5px;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+            position: relative;
+            text-align: left;
+        }
+
+        .field-label {
+            display: block;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--label-color);
+            margin-bottom: 6px;
+        }
+
+        .required {
+            color: #ff4757;
+            margin-left: 2px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 500;
+            background: var(--input-bg);
+            color: var(--input-text);
+            transition: box-shadow 0.2s;
+        }
+
+        .form-group input::placeholder {
+            color: var(--placeholder-color);
+            opacity: 1;
+            font-weight: 400;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6);
+        }
+
+        .field-icon {
+            position: absolute;
+            right: 14px;
+            bottom: 10px;
+            width: 24px;
+            height: 24px;
+            cursor: default;
+            opacity: 0; 
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .btn {
+            width: 70%;
+            padding: 14px;
+            margin-top: 10px;
+            background-color: var(--btn-bg);
+            color: var(--btn-text);
+            border: none;
+            border-radius: 14px;
+            font-size: 20px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.2s;
+            letter-spacing: 0.5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 14px rgba(0,0,0,0.15);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .register-link {
+            margin-top: 16px;
+            font-size: 17px;
+            color: var(--text-on-green);
+            opacity: 0.95;
+        }
+
+        .register-link a {
+            color: var(--text-on-green);
+            font-weight: 600;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }
+
+        @media (max-width: 480px) {
+            .auth-card {
+                width: 92%;
+                padding: 24px 20px;
+            }
+            .auth-card h1 {
+                font-size: 28px;
+            }
+            .btn {
+                width: 85%;
+            }
+        }
+    </style>
+</head>
+<body class="theme-dark">
+    <div class="theme-switcher" id="themeSwitcher">
+        <img src="тема.png" alt="Переключить тему" class="theme-icon-img">
+    </div>
+
+    <div class="wrapper">
+        <div class="auth-card">
+            <h1>Регистрация</h1>
+
+            <form action="#" method="POST" onsubmit="event.preventDefault();">
+                
+                <div class="form-group">
+                    <label class="field-label">Логин<span class="required">*</span></label>
+                    <input type="text" name="login" id="loginInput" placeholder="от 3 до 50 символов" required minlength="3" maxlength="50">
+                </div>
+
+                <div class="form-group">
+                    <label class="field-label">Пароль<span class="required">*</span></label>
+                    <input type="password" name="password" id="passwordInput" placeholder="от 6 символов" required minlength="6">
+                    <img src="предупреждение.png" alt="Внимание" class="field-icon" id="passwordWarning">
+                </div>
+
+                <div class="form-group">
+                    <label class="field-label">Повторите пароль<span class="required">*</span></label>
+                    <input type="password" name="password_confirm" id="passwordConfirmInput" placeholder="" required>
+                    <img src="предупреждение.png" alt="Внимание" class="field-icon" id="confirmWarning">
+                </div>
+
+                <div class="form-group">
+                    <label class="field-label">Почта<span class="required">*</span></label>
+                    <input type="email" name="email" placeholder="your@email.com" required>
+                </div>
+                
+
+                <button type="submit" class="btn">Зарегистрироваться</button>
+                
+                <div class="register-link">
+                    Есть аккаунт? <a href="login.html">Заходи!</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(savedTheme);
+        }
+        document.getElementById('themeSwitcher').addEventListener('click', function() {
+            const isDark = document.body.classList.contains('theme-dark');
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add(isDark ? 'theme-light' : 'theme-dark');
+            localStorage.setItem('theme', isDark ? 'theme-light' : 'theme-dark');
+        });
+        const passwordInput = document.getElementById('passwordInput');
+        const passwordConfirmInput = document.getElementById('passwordConfirmInput');
+        const passwordWarning = document.getElementById('passwordWarning');
+        const confirmWarning = document.getElementById('confirmWarning');
+
+        function checkPasswordsMatch() {
+            const password = passwordInput.value;
+            const confirmPassword = passwordConfirmInput.value;
+            
+            if (confirmPassword.length > 0) {
+                if (password !== confirmPassword) {
+                    passwordWarning.style.opacity = '0.85';
+                    confirmWarning.style.opacity = '0.85';
+                } else {
+                    passwordWarning.style.opacity = '0';
+                    confirmWarning.style.opacity = '0';
+                }
+            } else {
+                passwordWarning.style.opacity = '0';
+                confirmWarning.style.opacity = '0';
+            }
+        }
+
+        passwordInput.addEventListener('input', checkPasswordsMatch);
+        passwordConfirmInput.addEventListener('input', checkPasswordsMatch);
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.auth-card') && !e.target.closest('.theme-switcher')) {
+                e.preventDefault();
+                createFallingLeaves(e.clientX, e.clientY);
+            }
+        });
+
+        function createFallingLeaves(x, y) {
+            const leafSrc = 'листок.png'; 
+            const count = 8 + Math.floor(Math.random() * 5);
+            for (let i = 0; i < count; i++) {
+                const leaf = document.createElement('img');
+                leaf.src = leafSrc;
+                leaf.className = 'falling-leaf';
+                leaf.onerror = function() {
+                    this.style.border = '1px solid red';
+                    this.style.width = '20px';
+                    this.style.height = '20px';
+                    console.error("Ошибка загрузки картинки falling-leaf.png!");
+                };
+
+                const size = 15 + Math.random() * 20;
+                leaf.style.width = size + 'px';
+                leaf.style.height = 'auto';
+                const offsetX = (Math.random() - 0.5) * 40;
+                const offsetY = (Math.random() - 0.5) * 20;
+                leaf.style.left = (x + offsetX) + 'px';
+                leaf.style.top = (y + offsetY) + 'px';
+                const rotation = (Math.random() - 0.5) * 60;
+                const swayAmount = 20 + Math.random() * 40;
+                leaf.style.setProperty('--sway', swayAmount + 'px');
+                leaf.style.setProperty('--rotation', rotation + 'deg');
+                leaf.style.setProperty('--fall-duration', (2 + Math.random() * 2) + 's');
+                document.body.appendChild(leaf);
+                leaf.addEventListener('animationend', function() {
+                    leaf.remove();
+                });
+            }
+        }
+
+        document.getElementById('registerForm').addEventListener('submit', function(e) {
+            e.preventDefault(); 
+            
+            const login = document.getElementById('regLogin').value.trim();
+            const pass = document.getElementById('regPass').value.trim();
+            const passRepeat = document.getElementById('regPassRepeat').value.trim();
+
+            if (pass !== passRepeat) {
+                alert('Пароли не совпадают!');
+                return;
+            }
+            if (pass.length < 4) {
+                alert('Пароль слишком короткий (мин. 4 символа)');
+                return;
+            }
+
+            let users = JSON.parse(localStorage.getItem('users') || '{}');
+            if (users[login]) {
+                alert('Такой логин уже занят');
+                return;
+            }
+            users[login] = { pass: pass };
+            localStorage.setItem('users', JSON.stringify(users));
+            localStorage.setItem('currentUser', login);
+            window.location.href = 'profile.html'; 
+        });
+
+    </script>
+</body>
+</html>

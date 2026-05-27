@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Редактирование профиля</title>
+    <link rel="stylesheet" href="profile-style.css">
+    <style>
+        :root {
+            /* ТЁМНАЯ ТЕМА */
+            --page-bg: #0F182B;
+            --text-main: #ffffff;
+            --accent-green: #21C85F;
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --card-text: #333333;
+            --glow-color: rgba(33, 200, 95, 0.6);
+            --glow-soft: rgba(33, 200, 95, 0.3);
+            --user-pill-bg: #1a2d45;
+            --user-pill-text: #a0aab5;
+            --nav-bg: #21C85F;
+            --nav-btn-bg: rgba(255, 255, 255, 0.25);
+            --label-bg: rgba(33, 200, 95, 0.15);
+            --label-text: #21C85F;
+            --footer-bg: #21C85F;
+            --footer-text: #ffffff;
+            --footer-column-title: #ffffff;
+            --footer-column-text: #ffffff;
+            --footer-copy: #ffffff;
+            --switcher-bg: #1a2d45;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
+        }
+
+        .theme-light {
+            /* СВЕТЛАЯ ТЕМА */
+            --page-bg: #E8F0F2;
+            --text-main: #333333;
+            --accent-green: #10B981;
+            --card-bg: #ffffff;
+            --card-text: #333333;
+            --glow-color: rgba(16, 185, 129, 0.4);
+            --glow-soft: rgba(16, 185, 129, 0.2);
+            --user-pill-bg: #ffffff;
+            --user-pill-text: #8899aa;
+            --nav-bg: #10B981;
+            --nav-btn-bg: rgba(255, 255, 255, 0.3);
+            --label-bg: rgba(16, 185, 129, 0.15);
+            --label-text: #10B981;
+            --footer-bg: #10B981;
+            --footer-text: #ffffff;
+            --footer-column-title: #ffffff;
+            --footer-column-text: #ffffff;
+            --footer-copy: #ffffff;
+            --switcher-bg: #ffffff;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.1);
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--page-bg);
+            color: var(--text-main);
+            transition: background-color 0.4s ease, color 0.4s ease;
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+            display: none;
+        }
+        body.theme-dark .avatar-dark { display: block; }
+        body.theme-light .avatar-light { display: block; }
+
+        .logo-container {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+        }
+        .main-logo {
+            height: 100px;
+            display: none;
+            transition: height 0.3s ease;
+        }
+        body.theme-dark .logo-dark { display: block; }
+        body.theme-light .logo-light { display: block; }
+
+        .user-pill {
+            width: 145px; 
+        }
+
+        .mode-toggle {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            margin: 0;
+            padding: 0;
+            pointer-events: none;
+        }
+
+        .theme-switcher label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .theme-icon-img {
+            display: block; 
+            margin: 0 auto;
+            width: 24px;
+            height: 24px;
+            filter: invert(1);
+        }
+        .theme-light .theme-icon-img { filter: invert(0); }
+
+        .top-sticky-wrapper {
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            width: 100%;
+            background: transparent;
+            pointer-events: none;
+        }
+        .top-sticky-wrapper > * { pointer-events: auto; }
+
+        .site-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 40px;
+            background: transparent;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            pointer-events: auto;
+            position: relative;
+            z-index: 2;
+        }
+
+        .user-pill {
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+            background: var(--user-pill-bg);
+            border-radius: 50px;
+            padding: 8px 16px 8px 8px;
+            gap: 10px;
+            width: auto;
+            height: 44px;
+            box-shadow: 0 0 8px var(--glow-soft);
+            animation: userPulse 3s infinite alternate;
+            flex-shrink: 0;
+        }
+        @keyframes userPulse {
+            0% { box-shadow: 0 0 6px var(--glow-soft); }
+            100% { box-shadow: 0 0 16px var(--glow-color); }
+        }
+        .user-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+        .user-text { font-size: 14px; font-weight: 400; color: var(--user-pill-text); letter-spacing: 0.5px; }
+
+        .logo-container {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+        }
+
+        .theme-switcher {
+            width: 48px; height: 48px; background: var(--switcher-bg); border-radius: 14px;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            box-shadow: 0 0 10px var(--glow-soft); animation: switcherPulse 3s infinite alternate; flex-shrink: 0;
+        }
+        @keyframes switcherPulse {
+            0% { box-shadow: 0 0 8px var(--glow-soft); }
+            100% { box-shadow: 0 0 18px var(--glow-color); }
+        }
+        .theme-icon-img { width: 24px; height: 24px; filter: invert(1); }
+        .theme-light .theme-icon-img { filter: invert(0); }
+
+        .navigation {
+            display: flex; justify-content: center; align-items: center; gap: 8px;
+            background: var(--nav-bg); border-radius: 40px; padding: 6px;
+            margin: 0px 30px 35px 30px; height: 52px; pointer-events: auto;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+        }
+        .nav-btn {
+            color: #ffffff; text-decoration: none; font-size: 18px; font-weight: 600;
+            padding: 8px 22px; border-radius: 30px; transition: all 0.3s ease;
+            white-space: nowrap; position: relative; background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .nav-btn:hover, .nav-btn.active {
+            background: rgba(255, 255, 255, 0.35); backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .page-wrapper { flex: 1; padding: 0 20px 50px 20px; display: flex; justify-content: center; }
+
+        .card {
+            background: var(--card-bg); width: 100%; max-width: 840px; border-radius: 22px;
+            padding: 36px 48px; box-shadow: 0 0 24px var(--glow-color), var(--card-internal-shadow);
+            position: relative; color: var(--card-text);
+        }
+
+        .card-header {
+            text-align: left; font-size: 32px; font-weight: 700; color: var(--accent-green); margin-bottom: 24px;
+        }
+
+        .logout-icon {
+            position: absolute;
+            top: 28px;
+            right: 36px;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s ease;
+            width: 26px;
+            height: 26px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .logout-icon:hover { opacity: 1; }
+
+        .logout-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            pointer-events: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            transition: opacity 0.2s ease;
+            opacity: 0;
+        }
+
+        body.theme-dark .logout-dark-default { opacity: 1; }
+        body.theme-dark .logout-icon:hover .logout-dark-default { opacity: 0; }
+        body.theme-dark .logout-icon:hover .logout-dark-hover { opacity: 1; }
+
+        body.theme-light .logout-light-default { opacity: 1; }
+        body.theme-light .logout-icon:hover .logout-light-default { opacity: 0; }
+        body.theme-light .logout-icon:hover .logout-light-hover { opacity: 1; }
+
+        .field-icon {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px;
+            height: 18px;
+            opacity: 0; 
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .profile-layout {
+            display: grid; grid-template-columns: 150px 1fr; gap: 32px 40px; align-items: start; margin-bottom: 32px;
+        }
+        .avatar { width: 150px; height: 150px; border-radius: 18px; object-fit: cover; }
+        .timezone-section { margin-top: 14px; }
+
+        .gender-label {
+            font-size: 18px; font-weight: 700; color: var(--accent-green); display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+        }
+        .timezone-label {
+            font-size: 22px; font-weight: 700; color: var(--accent-green); display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+        }
+        .lock-icon { font-size: 13px; opacity: 0.45; }
+
+        .timezone-box {
+            display: inline-block; border: 1.5px solid rgba(128, 128, 128, 0.3); border-radius: 22px;
+            padding: 10px 22px; font-size: 16.5px; color: #888; white-space: nowrap; background: rgba(0,0,0,0.03);
+        }
+        .profile-info { display: flex; flex-direction: column; gap: 4px; }
+        .profile-name { font-size: 20px; font-weight: 700; color: var(--accent-green); }
+        .profile-email { font-size: 16px; color: var(--accent-green); opacity: 0.7; margin-bottom: 15px; }
+
+        .gender-options { display: flex; gap: 18px; }
+        .gender-opt {
+            display: flex; align-items: center; gap: 9px; padding: 7px 20px;
+            border: 1.5px solid rgba(128, 128, 128, 0.3); border-radius: 22px; cursor: pointer;
+            font-size: 15px; color: var(--card-text); background: transparent;
+            transition: all 0.3s ease;
+        }
+        .gender-opt.selected {
+            border-color: var(--accent-green);
+            background: #ffffff;
+            box-shadow: 0 0 15px var(--glow-soft);
+            color: var(--accent-green);
+        }
+
+        .radio-dot {
+            width: 16px; height: 16px; border: 2px solid rgba(128, 128, 128, 0.4);
+            border-radius: 50%; position: relative;
+        }
+        .gender-opt.selected .radio-dot { border-color: var(--accent-green); }
+        .gender-opt.selected .radio-dot::after {
+            content: ''; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px;
+            background: var(--accent-green); border-radius: 50%;
+        }
+
+        .card-actions { display: flex; justify-content: center; gap: 36px; margin-top: 20px; }
+
+        .btn {
+            padding: 11px 36px; border-radius: 22px; font-size: 16px; font-weight: 600;
+            cursor: pointer; border: none; transition: all 0.3s ease;
+        }
+
+        .btn-edit {
+            background: var(--accent-green);
+            color: #ffffff;
+            border: 1.5px solid var(--accent-green);
+            box-shadow: 0 0 15px var(--glow-soft);
+        }
+        .btn-edit:hover {
+            transform: scale(1.03);
+            box-shadow: 0 0 25px var(--glow-color), 0 0 10px var(--glow-color);
+            filter: brightness(1.1);
+        }
+
+        .btn-delete {
+            background: #ffffff;
+            color: #e55a5a;
+            border: 1.5px solid #ffb3b3;
+            box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
+        }
+        .btn-delete:hover {
+            transform: scale(1.03);
+            background: #fff5f5;
+            color: #d32f2f;
+            border-color: #ff8a8a;
+            box-shadow: 0 0 25px rgba(229, 90, 90, 0.6), 0 0 10px rgba(229, 90, 90, 0.4);
+        }
+
+        .site-footer {
+            background: var(--footer-bg); color: var(--footer-text); padding: 36px 40px 0;
+            transition: background 0.4s ease; margin-top: auto;
+        }
+        .footer-columns {
+            display: grid; grid-template-columns: 1.3fr 1fr 0.8fr; gap: 30px;
+            max-width: 900px; margin: 0 auto; padding-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        .footer-column-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: var(--footer-column-title); }
+        .footer-column-text { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
+        .footer-column-list { list-style: none; padding: 0; }
+        .footer-column-list li { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
+        .footer-copyright { text-align: center; padding: 16px 0 12px; font-size: 14px; color: var(--footer-copy); max-width: 900px; margin: 0 auto; }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 2000;
+            opacity: 0; visibility: hidden; transition: all 0.3s ease;
+        }
+        .modal-overlay.active { opacity: 1; visibility: visible; }
+
+        .avatar-modal {
+            background: var(--card-bg);
+            padding: 24px 32px;
+            border-radius: 24px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            text-align: center;
+            position: relative;
+            max-width: 320px;
+            width: 90%;
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            transform: scale(0.9);
+        }
+        .modal-overlay.active .avatar-modal { transform: scale(1); }
+
+        .modal-close-btn {
+            position: absolute; top: 12px; right: 12px;
+            background: var(--accent-green); color: white;
+            border: none; border-radius: 50%; width: 24px; height: 24px;
+            font-size: 16px; line-height: 24px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .modal-title { font-size: 20px; font-weight: 700; color: var(--accent-green); margin-bottom: 16px; }
+
+        .avatar-preview-area { display: none; margin-bottom: 16px; }
+        .modal-overlay.has-preview .avatar-preview-area { display: block; }
+        .modal-overlay.has-preview .modal-select-link { display: none; }
+        .modal-overlay.has-preview .modal-save-btn { display: inline-block; }
+
+        .modal-preview-img {
+            width: 120px; height: 120px; object-fit: cover;
+            border-radius: 18px; margin-bottom: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .preview-label { font-size: 13px; color: #888; display: block; margin-bottom: 12px; }
+
+        .modal-select-link {
+            font-size: 18px; font-weight: 700; color: var(--accent-green);
+            text-decoration: underline; cursor: pointer; display: block; margin-bottom: 10px;
+        }
+        .modal-select-link:hover { color: #1a9e4a; }
+
+        .modal-save-btn {
+            display: none;
+            background: var(--accent-green); color: white;
+            border: none; padding: 10px 32px; border-radius: 22px;
+            font-size: 16px; font-weight: 600; cursor: pointer;
+            box-shadow: 0 4px 15px var(--glow-soft);
+            transition: all 0.2s ease;
+        }
+        .modal-save-btn:hover { transform: scale(1.03); filter: brightness(1.1); }
+
+        #hidden-file-input { display: none; }
+
+        @media (max-width: 768px) {
+            .site-header { padding: 12px 16px; flex-wrap: wrap; gap: 12px; }
+            .logo-container { position: relative !important; left: auto !important; transform: none !important; order: -1; width: 100%; justify-content: center; margin-bottom: 0; }
+            .user-pill { width: auto; padding: 6px 12px 6px 6px; height: 38px; order: 1; margin-right: auto; animation: none; }
+            .user-avatar { width: 26px; height: 26px; }
+            .theme-switcher { position: relative !important; top: auto !important; right: auto !important; width: 42px; height: 42px; order: 2; animation: none; }
+            .navigation { order: 3; margin: 8px 12px 20px 12px; flex-wrap: wrap; height: auto; gap: 6px; padding: 6px; }
+            .nav-btn { padding: 8px 16px; font-size: 15px; }
+            .page-wrapper { padding: 0 12px 40px 12px; }
+            .card { padding: 24px 20px; }
+            .profile-layout { grid-template-columns: 1fr; }
+            .avatar { width: 130px; height: 130px; margin: 0 auto; display: block; }
+            .timezone-box { white-space: normal; width: 100%; text-align: center; }
+            .gender-options { justify-content: center; }
+            .card-actions { flex-direction: column; align-items: center; gap: 16px; }
+            .footer-columns { grid-template-columns: 1fr; text-align: center; }
+            .logout-icon {
+            top: 20px;
+            right: 20px;
+            width: 22px;
+            height: 22px;
+        }
+        }
+    </style>
+    <style>
+        .edit-profile-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 40px;
+            margin-bottom: 30px;
+        }
+        
+        .edit-avatar-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .edit-avatar-section .avatar {
+            width: 150px;
+            height: 150px;
+            border-radius: 18px;
+            object-fit: cover;
+        }
+        
+        .edit-avatar-section .btn-edit {
+            padding: 8px 20px;
+            font-size: 14px;
+        }
+        
+        .edit-avatar-section .upload-limit {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+        }
+        
+        .edit-user-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .edit-field-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .edit-field-row input {
+            flex: 1;
+            padding: 12px 45px 12px 18px;
+            border: 1.5px solid rgba(128, 128, 128, 0.3);
+            border-radius: 22px;
+            font-size: 16px;
+            background: rgba(0,0,0,0.03);
+            outline: none;
+        }
+        
+        .edit-field-row input:focus {
+            border-color: var(--accent-green);
+        }
+        
+        .edit-field-row .field-icon {
+            position: static;
+            opacity: 0.6;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        
+        .edit-section {
+            margin-bottom: 25px;
+        }
+        
+        .edit-section-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent-green);
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .edit-section-title .lock-icon {
+            font-size: 14px;
+            opacity: 0.5;
+        }
+        
+        .edit-password-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .password-input-wrapper {
+            position: relative;
+        }
+        
+        .password-input-wrapper input {
+            width: 100%;
+            padding: 12px 45px 12px 18px;
+            border: 1.5px solid rgba(128, 128, 0, 0.3);
+            border-radius: 22px;
+            font-size: 16px;
+            background: rgba(0,0,0,0.03);
+            outline: none;
+        }
+        
+        .password-input-wrapper input:focus {
+            border-color: var(--accent-green);
+        }
+        
+        .password-input-wrapper .warning-icon {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+        }
+        
+        .edit-gender-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .edit-gender-row .gender-label {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--accent-green);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .edit-timezone-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .edit-timezone-row .timezone-label {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent-green);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .edit-timezone-row select {
+            flex: 1;
+            max-width: 350px;
+            padding: 12px 45px 12px 18px;
+            border: 1.5px solid rgba(128, 128, 0, 0.3);
+            border-radius: 22px;
+            font-size: 16px;
+            background: rgba(0,0,0,0.03);
+            outline: none;
+            cursor: pointer;
+        }
+        
+        .edit-timezone-row select:focus {
+            border-color: var(--accent-green);
+        }
+        
+        @media (max-width: 768px) {
+            .edit-profile-header {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .edit-field-row,
+            .edit-gender-row,
+            .edit-timezone-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .edit-timezone-row select {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body class="theme-light">
+    <div class="top-sticky-wrapper">
+        <header class="site-header">
+            <div class="user-pill">
+                <img src="Т.пол.png" alt="User" class="user-avatar avatar-dark" id="header-avatar-dark">
+                <img src="Св.пол.png" alt="User" class="user-avatar avatar-light" id="header-avatar-light">
+                <span class="user-text" id="header-username">User_login</span>
+            </div>
+            
+            <div class="logo-container">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+            </div>
+            
+            <div class="theme-switcher" onclick="toggleTheme()">
+                <input type="checkbox" id="theme-toggle" class="mode-toggle">
+                <label for="theme-toggle">
+                    <img src="тема.png" alt="Theme" class="theme-icon-img">
+                </label>
+            </div>
+        </header>
+        
+        <nav class="navigation">
+            <a href="#" class="nav-btn">Главная</a>
+            <a href="#" class="nav-btn">Мои растения</a>
+            <a href="#" class="nav-btn">Настройки</a>
+        </nav>
+    </div>
+
+    <div class="page-wrapper">
+        <div class="card">
+            <h1 class="card-header">Редактирование профиля</h1>
+            <div class="edit-profile-header">
+                <div class="edit-avatar-section">
+                    <img src="https://i.imgur.com/8KxHqJp.jpg" alt="Avatar" class="avatar" id="profile-avatar">
+                    <button class="btn btn-edit" onclick="openAvatarModal()">Изменить фото</button>
+                    <div class="upload-limit">Изображение до 1МБ</div>
+                </div>
+                <div class="edit-user-info">
+                    <div class="edit-field-row">
+                        <input type="text" id="edit-username" value="User_login" placeholder="Имя пользователя">
+                    </div>
+                    <div class="edit-field-row">
+                        <input type="email" id="edit-email" value="name_mail@email.com" placeholder="Email">
+                    </div>
+                    <div class="edit-gender-row" style="margin-top: 10px;">
+                        <div class="gender-label">
+                            Пол
+                        </div>
+                        <div class="gender-options">
+                            <div class="gender-opt selected" id="edit-gender-female" onclick="selectGender('female')">
+                                <span class="radio-dot"></span>
+                                <span>Женский</span>
+                            </div>
+                            <div class="gender-opt" id="edit-gender-male" onclick="selectGender('male')">
+                                <span class="radio-dot"></span>
+                                <span>Мужской</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="edit-section">
+                <div class="edit-section-title">Сменить пароль</div>
+                <div class="edit-password-inputs">
+                    <div class="password-input-wrapper">
+                        <input type="password" id="new-password" placeholder="Новый пароль">
+                        <img src="warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-1" style="display:none;">
+                    </div>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="confirm-password" placeholder="Подтверждение нового пароль">
+                        <img src="warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-2" style="display:none;">
+                    </div>
+                </div>
+            </div>
+            <div class="edit-section">
+                <div class="edit-timezone-row">
+                    <div class="timezone-label">
+                        Часовой пояс
+                    </div>
+                    <select id="edit-timezone">
+                        <option value="(UTC+05:00) Asian/Yekaterinburg" selected>(UTC+05:00) Asian/Yekaterinburg</option>
+                        <option value="(UTC+03:00) Europe/Moscow">(UTC+03:00) Europe/Moscow</option>
+                        <option value="(UTC+07:00) Asia/Novosibirsk">(UTC+07:00) Asia/Novosibirsk</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-actions" style="margin-top: 35px;">
+                <button class="btn btn-edit" onclick="saveChanges()">Сохранить изменения</button>
+                <button class="btn btn-delete" onclick="window.location.href='profile.html'">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="avatar-modal">
+        <div class="avatar-modal">
+            <button class="modal-close-btn" onclick="closeAvatarModal()">×</button>
+            <div class="modal-title">Загрузить изображение</div>
+            <div class="avatar-preview-area" id="preview-area">
+                <img src="" alt="Preview" class="modal-preview-img" id="modal-preview-img">
+                <span class="preview-label">Предпросмотр</span>
+            </div>
+            <input type="file" id="hidden-file-input" accept="image/*">
+            <div class="modal-select-link" onclick="document.getElementById('hidden-file-input').click()">Выбрать фото</div>
+            <button class="modal-save-btn" id="modal-save-btn" onclick="confirmAvatarUpload()">Сохранить</button>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-columns">
+            <div class="footer-column">
+                <div class="footer-column-title">Зелёная полка</div>
+                <div class="footer-column-text">
+                    Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.
+                </div>
+            </div>
+            <div class="footer-column">
+                <div class="footer-column-title">Модули</div>
+                <ul class="footer-column-list">
+                    <li>Освещения растений</li>
+                    <li>Сбор данных о растениях</li>
+                    <li>Полив растений</li>
+                </ul>
+            </div>
+            <div class="footer-column">
+                <div class="footer-column-title">Контакты</div>
+                <ul class="footer-column-list">
+                    <li>Почта</li>
+                    <li>Наши сети</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-copyright">2026 Зелёная полка</div>
+    </footer>
+
+    <script>
+        let tempAvatarData = null;
+
+        function toggleTheme() {
+            document.body.classList.toggle('theme-light');
+            document.body.classList.toggle('theme-dark');
+            const theme = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
+            localStorage.setItem('theme', theme);
+        }
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            if (savedTheme === 'dark') {
+                document.body.classList.remove('theme-light');
+                document.body.classList.add('theme-dark');
+            }
+        }
+        loadTheme();
+
+        function selectGender(g) {
+            document.getElementById('edit-gender-female').classList.toggle('selected', g === 'female');
+            document.getElementById('edit-gender-male').classList.toggle('selected', g === 'male');
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const defaultData = {
+                username: 'User_login',
+                email: 'name_mail@email.com',
+                avatar: 'https://i.imgur.com/8KxHqJp.jpg',
+                gender: 'female',
+                timezone: '(UTC+05:00) Asian/Yekaterinburg'
+            };
+            const userData = JSON.parse(localStorage.getItem('userData')) || defaultData;
+
+            document.getElementById('header-avatar-dark').src = userData.avatar;
+            document.getElementById('header-avatar-light').src = userData.avatar;
+            document.getElementById('header-username').textContent = userData.username;
+
+            document.getElementById('profile-avatar').src = userData.avatar;
+            document.getElementById('edit-username').value = userData.username;
+            document.getElementById('edit-email').value = userData.email;
+            document.getElementById('edit-timezone').value = userData.timezone;
+            selectGender(userData.gender);
+        });
+
+        function openAvatarModal() {
+            document.getElementById('avatar-modal').classList.add('active');
+            document.getElementById('avatar-modal').classList.remove('has-preview');
+            document.getElementById('hidden-file-input').value = '';
+            tempAvatarData = null;
+        }
+        function closeAvatarModal() {
+            document.getElementById('avatar-modal').classList.remove('active');
+        }
+
+        document.getElementById('hidden-file-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (!file.type.startsWith('image/')) { alert('Выберите изображение'); return; }
+            if (file.size > 1048576) { alert('Размер не должен превышать 1МБ'); return; }
+            
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                tempAvatarData = ev.target.result;
+                document.getElementById('modal-preview-img').src = tempAvatarData;
+                document.getElementById('avatar-modal').classList.add('has-preview');
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function confirmAvatarUpload() {
+            if (tempAvatarData) {
+                document.getElementById('profile-avatar').src = tempAvatarData;
+                document.getElementById('header-avatar-dark').src = tempAvatarData;
+                document.getElementById('header-avatar-light').src = tempAvatarData;
+                closeAvatarModal();
+            }
+        }
+
+        function saveChanges() {
+            const username = document.getElementById('edit-username').value.trim();
+            const email = document.getElementById('edit-email').value.trim();
+            const pass = document.getElementById('new-password').value;
+            const conf = document.getElementById('confirm-password').value;
+            const timezone = document.getElementById('edit-timezone').value;
+            const gender = document.getElementById('edit-gender-female').classList.contains('selected') ? 'female' : 'male';
+            const avatar = tempAvatarData || document.getElementById('profile-avatar').src;
+
+            if (!username) { alert('Введите имя'); return; }
+            if (!email.includes('@')) { alert('Введите корректный email'); return; }
+            if (pass && pass.length < 6) {
+                alert('Пароль минимум 6 символов');
+                document.getElementById('pass-warn-1').style.display = 'block';
+                return;
+            }
+            if (pass && pass !== conf) {
+                alert('Пароли не совпадают');
+                document.getElementById('pass-warn-2').style.display = 'block';
+                return;
+            }
+
+            localStorage.setItem('userData', JSON.stringify({ username, email, avatar, gender, timezone }));
+            alert('Сохранено!');
+            window.location.href = 'profile.html';
+        }
+    </script>
+</body>
+</html>
