@@ -17,8 +17,8 @@
 #define SERIAL_BAUD 115200
 
 // ==================== Wi-Fi НАСТРОЙКИ ====================
-#define STA_SSID "iPhone (Сергей)"
-#define STA_PASS "170999747"
+#define STA_SSID "HONOR X7"
+#define STA_PASS "ixw2yybbz5e926"
 #define AP_SSID  "netSensorModule-01"
 #define AP_PASS  "188B0E14E2C1"
 #define MDNS_NAME "SensorModule-C3"
@@ -639,6 +639,10 @@ let chartCustomStart = 0, chartCustomEnd = 0;
 const UPDATE_INTERVAL = 10000;
 
 document.addEventListener('DOMContentLoaded', () => {
+if (!localStorage.getItem('auth_token')) {
+  window.location.href = '/';
+  return;
+}
 initTheme();
 initTabs();
 initHistoryFilters();
@@ -1441,7 +1445,7 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             .then(data => {
                 if (data.success) {
                     localStorage.setItem('auth_token', data.token);
-                    window.location.href = '/';
+                    window.location.href = '/app';
                 } else {
                     alert('Неверный логин или пароль');
                 }
@@ -1450,7 +1454,7 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
                 // Если сервер недоступен, проверяем локально
                 if (login === 'admin' && password === 'admin') {
                     localStorage.setItem('auth_token', 'local_admin');
-                    window.location.href = '/';
+                    window.location.href = '/app';
                 } else {
                     alert('Неверный логин или пароль');
                 }
@@ -1791,7 +1795,7 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             .then(data => {
                 if (data.success) {
                     localStorage.setItem('auth_token', data.token);
-                    window.location.href = '/';
+                    window.location.href = '/app';
                 } else {
                     alert(data.message || 'Ошибка регистрации');
                 }
@@ -1806,7 +1810,7 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
                 users[login] = { pass: pass, email: email };
                 localStorage.setItem('users', JSON.stringify(users));
                 localStorage.setItem('auth_token', 'local_' + login);
-                window.location.href = '/';
+                window.location.href = '/app';
             });
         });
     </script>
@@ -1978,9 +1982,10 @@ void setup() {
   lastLogTime = millis();
  
   // Настройка веб-сервера
-  server.on("/", handleRoot);
+  server.on("/", handleLogin);
   server.on("/login", handleLogin);
   server.on("/register", handleRegister);
+  server.on("/app", handleRoot);
   server.on("/api/login", HTTP_POST, handleApiLogin);
   server.on("/api/register", HTTP_POST, handleApiRegister);
   server.on("/data", handleData);
