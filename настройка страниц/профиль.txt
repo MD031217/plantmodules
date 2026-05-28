@@ -1,0 +1,168 @@
+// Страница профиля
+const char PROFILE_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Профиль</title>
+<style>
+:root { --page-bg: #EEF0F4; --card-bg: #0FB881; --brand-color: #0FB881; --text-white: #111111; --text-on-green: #ffffff; --btn-bg: #ffffff; --btn-text: #0FB881; --shadow: 0 12px 24px rgba(0, 0, 0, 0.12); --nav-bg: #ffffff; --nav-text: #1a1a2e; }
+.theme-light { --page-bg: #0F182B; --card-bg: #21C85F; --brand-color: #21C85F; --text-white: #ffffff; --text-on-green: #ffffff; --btn-bg: #ffffff; --btn-text: #21C85F; --shadow: 0 12px 24px rgba(0, 0, 0, 0.35); --nav-bg: #1B263B; --nav-text: #ffffff; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: var(--page-bg); color: var(--text-white); min-height: 100vh; display: flex; flex-direction: column; transition: background 0.4s ease; }
+header { background: var(--nav-bg); padding: 12px 20px; box-shadow: var(--shadow); display: flex; align-items: center; justify-content: space-between; transition: background 0.4s ease; }
+nav a { color: var(--nav-text); text-decoration: none; margin: 0 10px; font-weight: 500; transition: color 0.2s; }
+nav a:hover { color: var(--brand-color); }
+.container { max-width: 600px; margin: 20px auto; padding: 0 16px; width: 100%; flex: 1; }
+.profile-card { background: var(--card-bg); border-radius: 24px; padding: 30px; box-shadow: var(--shadow); text-align: center; transition: background 0.4s ease; }
+.profile-card h1 { font-size: 28px; font-weight: 700; margin-bottom: 20px; color: var(--text-on-green); }
+.avatar { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; margin-bottom: 15px; border: 3px solid var(--text-on-green); }
+.info-row { margin: 10px 0; display: flex; justify-content: space-between; align-items: center; color: var(--text-on-green); font-size: 15px; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 8px; }
+.info-row:last-child { border-bottom: none; }
+.btn-group { margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.btn { padding: 12px 24px; background: var(--btn-bg); color: var(--btn-text); border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; text-decoration: none; transition: transform 0.15s, box-shadow 0.2s; }
+.btn:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0,0,0,0.15); }
+.btn-danger { background: #ef4444; color: white; }
+footer { background: var(--nav-bg); padding: 20px; text-align: center; color: var(--nav-text); font-size: 13px; line-height: 1.6; transition: background 0.4s ease; }
+.theme-switcher { position: fixed; top: 12px; right: 12px; width: 40px; height: 40px; background: var(--nav-bg); border-radius: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: var(--shadow); z-index: 100; font-size: 18px; }
+</style>
+</head>
+<body class="theme-dark">
+<div class="theme-switcher" id="themeSwitcher">◑</div>
+<header>
+  <div style="font-weight:600;">Профиль</div>
+  <nav>
+    <a href="/app">Главная</a>
+    <a href="/app">Мои растения</a>
+    <a href="/app">Настройки</a>
+  </nav>
+</header>
+<div class="container">
+  <div class="profile-card">
+    <h1>Профиль пользователя</h1>
+    <img src="https://i.imgur.com/8KxHqJp.jpg" alt="Avatar" class="avatar">
+    <div class="info-row"><span>Логин:</span> <strong>User_login</strong></div>
+    <div class="info-row"><span>Почта:</span> <strong>name_mail@email.com</strong></div>
+    <div class="info-row"><span>Часовой пояс:</span> <strong>(UTC+05:00) Asian/Yekaterinburg</strong></div>
+    <div class="info-row"><span>Пол:</span> <strong>Женский</strong></div>
+    <div class="btn-group">
+      <a href="/edit-profile" class="btn">Редактировать</a>
+      <button class="btn btn-danger" id="logoutBtn">Выйти</button>
+    </div>
+  </div>
+</div>
+<footer>
+  <div><strong>Зелёная полка</strong></div>
+  <div>Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</div>
+  <div>Модули: Освещения растений | Сбор данных о растениях | Полив растений</div>
+  <div>Контакты: Почта | Наши сети</div>
+  <div>2026 Зелёная полка</div>
+</footer>
+<script>
+const savedTheme = localStorage.getItem('theme');
+if (savedTheme) document.body.className = savedTheme;
+document.getElementById('themeSwitcher').addEventListener('click', () => {
+  const isDark = document.body.classList.contains('theme-dark');
+  document.body.className = isDark ? 'theme-light' : 'theme-dark';
+  localStorage.setItem('theme', document.body.className);
+});
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  localStorage.removeItem('auth_token');
+  window.location.href = '/login';
+});
+</script>
+</body>
+</html>
+)rawliteral";
+
+// Страница редактирования профиля
+const char EDIT_PROFILE_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Редактирование профиля</title>
+<style>
+:root { --page-bg: #EEF0F4; --card-bg: #0FB881; --brand-color: #0FB881; --text-white: #111111; --text-on-green: #ffffff; --input-bg: #ffffff; --input-text: #333333; --btn-bg: #ffffff; --btn-text: #0FB881; --shadow: 0 12px 24px rgba(0, 0, 0, 0.12); --nav-bg: #ffffff; --nav-text: #1a1a2e; --label-color: #ffffff; }
+.theme-light { --page-bg: #0F182B; --card-bg: #21C85F; --brand-color: #21C85F; --text-white: #ffffff; --text-on-green: #ffffff; --input-bg: #ffffff; --input-text: #333333; --btn-bg: #ffffff; --btn-text: #21C85F; --shadow: 0 12px 24px rgba(0, 0, 0, 0.35); --nav-bg: #1B263B; --nav-text: #ffffff; --label-color: #ffffff; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: var(--page-bg); color: var(--text-white); min-height: 100vh; display: flex; flex-direction: column; transition: background 0.4s ease; }
+header { background: var(--nav-bg); padding: 12px 20px; box-shadow: var(--shadow); display: flex; align-items: center; justify-content: space-between; transition: background 0.4s ease; }
+nav a { color: var(--nav-text); text-decoration: none; margin: 0 10px; font-weight: 500; transition: color 0.2s; }
+nav a:hover { color: var(--brand-color); }
+.container { max-width: 600px; margin: 20px auto; padding: 0 16px; width: 100%; flex: 1; }
+.profile-card { background: var(--card-bg); border-radius: 24px; padding: 30px; box-shadow: var(--shadow); transition: background 0.4s ease; }
+.profile-card h1 { font-size: 28px; font-weight: 700; margin-bottom: 20px; color: var(--text-on-green); text-align: center; }
+.form-group { margin-bottom: 16px; }
+.field-label { display: block; font-size: 15px; font-weight: 600; color: var(--label-color); margin-bottom: 6px; }
+.form-group input, .form-group select { width: 100%; padding: 12px; border: none; border-radius: 10px; font-size: 15px; background: var(--input-bg); color: var(--input-text); }
+.btn-group { margin-top: 20px; display: flex; gap: 10px; justify-content: center; }
+.btn { padding: 12px 24px; background: var(--btn-bg); color: var(--btn-text); border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; text-decoration: none; transition: transform 0.15s, box-shadow 0.2s; }
+.btn:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0,0,0,0.15); }
+.btn-secondary { background: rgba(255,255,255,0.2); color: var(--text-on-green); }
+.avatar-upload { text-align: center; margin-bottom: 20px; }
+.avatar { width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 3px solid var(--text-on-green); }
+footer { background: var(--nav-bg); padding: 20px; text-align: center; color: var(--nav-text); font-size: 13px; line-height: 1.6; transition: background 0.4s ease; }
+.theme-switcher { position: fixed; top: 12px; right: 12px; width: 40px; height: 40px; background: var(--nav-bg); border-radius: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: var(--shadow); z-index: 100; font-size: 18px; }
+</style>
+</head>
+<body class="theme-dark">
+<div class="theme-switcher" id="themeSwitcher">◑</div>
+<header>
+  <div style="font-weight:600;">Редактирование профиля</div>
+  <nav>
+    <a href="/app">Главная</a>
+    <a href="/app">Мои растения</a>
+    <a href="/app">Настройки</a>
+  </nav>
+</header>
+<div class="container">
+  <div class="profile-card">
+    <h1>Редактирование профиля</h1>
+    <div class="avatar-upload">
+      <img src="https://i.imgur.com/8KxHqJp.jpg" alt="Avatar" class="avatar">
+      <div style="color:var(--text-on-green); margin-top:8px; font-size:14px;">Изменить фото</div>
+    </div>
+    <div class="form-group">
+      <label class="field-label">Пол</label>
+      <select><option>Женский</option><option>Мужской</option></select>
+    </div>
+    <div class="form-group">
+      <label class="field-label">Сменить пароль</label>
+      <input type="password" placeholder="Новый пароль">
+    </div>
+    <div class="form-group">
+      <label class="field-label">Часовой пояс</label>
+      <select>
+        <option>(UTC+05:00) Asian/Yekaterinburg</option>
+        <option>(UTC+03:00) Europe/Moscow</option>
+        <option>(UTC+07:00) Asia/Novosibirsk</option>
+      </select>
+    </div>
+    <div class="btn-group">
+      <button class="btn" onclick="alert('Сохранено!')">Сохранить изменения</button>
+      <a href="/profile" class="btn btn-secondary">Отмена</a>
+    </div>
+  </div>
+</div>
+<footer>
+  <div><strong>Зелёная полка</strong></div>
+  <div>Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</div>
+  <div>Модули: Освещения растений | Сбор данных о растениях | Полив растений</div>
+  <div>Контакты: Почта | Наши сети</div>
+  <div>2026 Зелёная полка</div>
+</footer>
+<script>
+const savedTheme = localStorage.getItem('theme');
+if (savedTheme) document.body.className = savedTheme;
+document.getElementById('themeSwitcher').addEventListener('click', () => {
+  const isDark = document.body.classList.contains('theme-dark');
+  document.body.className = isDark ? 'theme-light' : 'theme-dark';
+  localStorage.setItem('theme', document.body.className);
+});
+</script>
+</body>
+</html>
+)rawliteral";

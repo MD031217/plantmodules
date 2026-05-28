@@ -1,0 +1,18 @@
+Вставьте этот код сразу после функции handleRegister():
+void handleProfile() {
+  server.send(200, "text/html", PROFILE_HTML);
+}
+void handleEditProfile() {
+  server.send(200, "text/html", EDIT_PROFILE_HTML);
+}
+ Зарегистрируйте маршруты
+В функции setup() найдите блок server.on(...) и добавьте две строки вместе с остальными:
+  // ... ваши существующие server.on(...) ...
+  server.on("/profile", handleProfile);
+  server.on("/edit-profile", handleEditProfile);
+  server.onNotFound(handleNotFound); // должно остаться последней
+  server.begin();
+
+Поменяйте редиректы после входа/регистрации
+Найдите в коде LOGIN_HTML и REGISTER_HTML строки window.location.href = '/app'; и замените их на:
+window.location.href = '/profile';
