@@ -1,0 +1,2071 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Модуль полива</title>
+    <link rel="stylesheet" href="myplant-style.css">
+    <style>
+        /* Дополнительные стили для страницы полива */
+        .irrigation-container {
+            display: flex;
+            gap: 20px;
+            padding: 20px 40px;
+            min-height: calc(100vh - 300px);
+        }
+        
+        .valves-sidebar {
+            width: 300px;
+            flex-shrink: 0;
+        }
+        
+        .valve-item {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: var(--card-internal-shadow);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #1e293b; /* Темный текст для читаемости */
+        }
+        
+        .valve-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 0 20px var(--glow-soft);
+        }
+        
+        .valve-item.active {
+            border: 2px solid var(--accent-green);
+            background: rgba(33, 200, 95, 0.05);
+        }
+        
+        .valve-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .valve-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--accent-green);
+        }
+        
+        .valve-toggle {
+            width: 40px;
+            height: 22px;
+            background: rgba(0,0,0,0.15);
+            border-radius: 11px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .valve-toggle.on {
+            background: var(--accent-green);
+        }
+        
+        .valve-toggle::after {
+            content: '';
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s;
+        }
+        
+        .valve-toggle.on::after {
+            transform: translateX(18px);
+        }
+        
+        .valve-info {
+            font-size: 13px;
+            color: #374151;
+            margin: 4px 0;
+        }
+        
+        .valve-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            padding: 3px 8px;
+            background: rgba(33, 200, 95, 0.15);
+            border-radius: 8px;
+            margin-top: 6px;
+            color: var(--accent-green);
+            font-weight: 600;
+        }
+        
+        .valve-status.inactive {
+            background: rgba(100, 116, 139, 0.15);
+            color: #64748b;
+        }
+        
+        .main-content {
+            flex: 1;
+            background: var(--card-bg);
+            border-radius: 24px;
+            padding: 30px;
+            box-shadow: var(--card-internal-shadow);
+            max-height: calc(100vh - 220px);
+            overflow-y: auto;
+            color: #1e293b;
+        }
+        
+        .content-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .page-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--accent-green) !important;
+        }
+        
+        .btn-add-task {
+            background: var(--accent-green);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 20px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-add-task:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4);
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 25px;
+            border-bottom: 2px solid rgba(0,0,0,0.05);
+            padding-bottom: 10px;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: rgba(0,0,0,0.05);
+            color: #1e293b;
+        }
+        
+        .tab.active {
+            background: var(--accent-green);
+            color: white !important;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            font-size: 14px;
+            color: #374151 !important;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .form-hint {
+            font-size: 12px;
+            color: #64748b !important;
+            margin-top: 4px;
+            font-style: italic;
+            opacity: 0.9;
+        }
+        
+        .form-input, .form-select {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(0,0,0,0.03);
+            border: 2px solid rgba(0,0,0,0.1);
+            border-radius: 12px;
+            color: #1e293b !important;
+            font-size: 15px;
+            font-weight: 500;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        
+        .form-input:focus, .form-select:focus {
+            border-color: var(--accent-green);
+        }
+        
+        .form-input::placeholder, .form-select::placeholder {
+            color: #64748b;
+        }
+        
+        .form-input:disabled, .form-select:disabled {
+            background: rgba(0,0,0,0.01);
+            border-color: rgba(0,0,0,0.05);
+            color: #94a3b8 !important;
+            cursor: not-allowed;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+        
+        .form-row-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+        
+        .operations-list {
+            margin: 25px 0;
+        }
+        
+        .operation-item {
+            background: rgba(0,0,0,0.03);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .operation-type {
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 13px;
+            min-width: 120px;
+            text-align: center;
+        }
+        
+        .operation-type.water {
+            background: rgba(33, 200, 95, 0.2);
+            color: var(--accent-green);
+        }
+        
+        .operation-type.pause {
+            background: rgba(255, 193, 7, 0.2);
+            color: #b45309;
+        }
+        
+        .operation-type.sensor {
+            background: rgba(0, 188, 212, 0.2);
+            color: #0e7490;
+        }
+        
+        .operation-inputs {
+            flex: 1;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .operation-input {
+            flex: 1;
+            padding: 8px 12px;
+            background: rgba(0,0,0,0.03);
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 8px;
+            color: #1e293b !important;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .btn-operation {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .btn-edit {
+            background: var(--accent-green);
+            color: white;
+        }
+        
+        .btn-delete {
+            background: rgba(244, 67, 54, 0.85);
+            color: white;
+        }
+        
+        .btn-operation:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        
+        .sidebar-right {
+            width: 340px;
+            flex-shrink: 0;
+        }
+        
+        .moisture-panel {
+            background: var(--card-bg);
+            border-radius: 24px;
+            padding: 25px;
+            box-shadow: var(--card-internal-shadow);
+            color: #1e293b;
+        }
+        
+        .panel-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--accent-green) !important;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid rgba(0,0,0,0.05);
+        }
+        
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .toggle-label {
+            font-size: 14px;
+            color: #374151 !important;
+        }
+        
+        .global-limits {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid rgba(0,0,0,0.05);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 25px;
+        }
+        
+        .btn-action {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 16px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: rgba(0,0,0,0.05);
+            color: #1e293b;
+        }
+        
+        .btn-action.btn-save {
+            background: var(--accent-green);
+            color: white;
+        }
+        
+        .btn-action.btn-apply {
+            background: rgba(33, 200, 95, 0.15);
+            color: var(--accent-green);
+        }
+        
+        .btn-action.btn-history {
+            background: rgba(0,0,0,0.05);
+            color: #1e293b;
+        }
+        
+        .btn-action:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .valve-number {
+            display: inline-block;
+            width: 28px;
+            height: 28px;
+            background: var(--accent-green);
+            color: white;
+            border-radius: 8px;
+            text-align: center;
+            line-height: 28px;
+            font-weight: 700;
+            margin-right: 10px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent-green) !important;
+            margin: 25px 0 15px 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+
+        /* Стили для журнала */
+        #journalPanel {
+            display: none;
+        }
+        
+        .journal-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        
+        .journal-table th, .journal-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        .journal-table th {
+            color: var(--accent-green);
+            font-weight: 600;
+        }
+        
+        .journal-table tr:hover {
+            background: rgba(33, 200, 95, 0.05);
+        }
+        
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-success {
+            background: rgba(33, 200, 95, 0.2);
+            color: var(--accent-green);
+        }
+        
+        .status-fail {
+            background: rgba(244, 67, 54, 0.2);
+            color: #dc2626;
+        }
+        
+        .status-pending {
+            background: rgba(255, 193, 7, 0.2);
+            color: #b45309;
+        }
+        
+        .empty-journal {
+            text-align: center;
+            padding: 40px;
+            color: #64748b;
+            font-style: italic;
+        }
+
+        .edit-valve-btn {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(33, 200, 95, 0.85);
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.25s ease;
+            z-index: 15;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            padding: 0;
+            line-height: 1;
+        }
+        .edit-valve-btn:hover {
+            background: var(--accent-green, #21C85F);
+            transform: scale(1.1);
+        }
+        /* Показываем при наведении на карточку */
+        .valve-card:hover .edit-valve-btn,
+        [id*="valve"]:hover .edit-valve-btn,
+        .card:hover .edit-valve-btn,
+        .module-card:hover .edit-valve-btn,
+        div[class*="valve"]:hover .edit-valve-btn {
+            opacity: 1;
+        }
+
+        /* Мини-окошко редактирования */
+        .valve-editor-mini {
+            position: fixed;
+            background: var(--card-bg, #ffffff);
+            padding: 24px 28px;
+            border-radius: 32px;
+            width: 90%;
+            max-width: 320px;
+            box-shadow: 0 0 30px var(--glow-soft, rgba(33, 200, 95, 0.3));
+            animation: modalFadeIn 0.3s ease;
+            z-index: 2147483640;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: var(--text-main, #000);
+        }
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: translateY(16px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .valve-editor-title {
+            color: var(--accent-green, #21C85F);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 18px;
+            text-align: center;
+        }
+        .valve-editor-field {
+            margin-bottom: 14px;
+        }
+        .valve-editor-field label {
+            display: block;
+            font-size: 13px;
+            color: var(--text-main, #333);
+            opacity: 0.85;
+            margin-bottom: 6px;
+        }
+        .valve-editor-field input {
+            width: 100%;
+            padding: 12px 16px;
+            border-radius: 24px;
+            border: 2px solid var(--accent-green, #21C85F);
+            background: transparent;
+            font-size: 14px;
+            color: var(--accent-green, #21C85F);
+            box-sizing: border-box;
+            outline: none;
+        }
+        .valve-editor-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .valve-editor-actions button {
+            flex: 1;
+            padding: 12px;
+            border-radius: 24px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .valve-save-btn {
+            background: var(--accent-green, #21C85F);
+            color: #ffffff;
+        }
+        .valve-save-btn:hover {
+            box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4);
+            transform: translateY(-1px);
+        }
+        .valve-cancel-btn {
+            background: rgba(255, 255, 255, 0.15);
+            color: var(--text-main, #333);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .valve-cancel-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        .valve-editor-backdrop {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-color: rgba(15, 24, 43, 0.6);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 2147483639;
+        }
+
+        .btn-add-task {
+            background: var(--accent-green, #21C85F);
+            color: white !important;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-add-task:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4);
+        }
+        .btn-add-task:active {
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body class="theme-dark">
+    <!-- Шапка -->
+    <div class="top-sticky-wrapper">
+        
+        <header class="site-header">
+            <a href="profile.html" class="user-pill" aria-label="Профиль">
+                <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
+                <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
+                <span class="user-text">User_login</span>
+            </a>
+
+            <div class="logo-container">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+            </div>
+
+            <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
+                <img src="тема.png" alt="" class="theme-icon-img">
+            </label>
+        </header>
+        <input type="checkbox" id="themeToggle" class="mode-toggle">
+
+        <nav class="navigation">
+            <a href="index.html" class="nav-btn">Главная</a> 
+            <a href="myplant.html" class="nav-btn active">Мои растения</a>
+            <a href="settings.html" class="nav-btn">Настройки</a>
+        </nav>
+        
+    </div>
+
+    <!-- Основной контент -->
+    <div class="page-wrapper">
+        <div class="irrigation-container">
+            <!-- Левая панель: Клапаны -->
+            <div class="valves-sidebar" id="valvesSidebar">
+                <!-- Клапаны генерируются через JS -->
+            </div>
+
+            <!-- Центральная панель -->
+            <div class="main-content">
+                <div class="content-header">
+                    <h1 class="page-title">Конфигурация модуля полива</h1>
+                </div>
+                
+                <div class="tabs">
+                    <button class="tab" data-tab="manual">Вручную</button>
+                    <button class="tab active" data-tab="config">Расписание</button>
+                    <button class="tab" data-tab="journal">Журнал</button>
+                </div>
+
+                <!-- Панель ручного управления -->
+                <div id="manualPanel" style="display: none;">
+                    <div style="text-align: center; padding: 30px 20px;">
+                        <select class="form-select" id="manual-valve-select" style="margin-bottom: 25px;">
+                            <option value="1">Клапан 1</option>
+                            <option value="2">Клапан 2</option>
+                            <option value="3">Клапан 3</option>
+                            <option value="4">Клапан 4</option>
+                            <option value="5">Клапан 5</option>
+                            <option value="6">Клапан 6</option>
+                            <option value="7">Клапан 7</option>
+                            <option value="8">Клапан 8</option>
+                        </select>
+                        <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-bottom: 30px;">
+                            <button id="btn-manual-on" onclick="startWatering()" class="btn-action btn-save" style="min-width: 180px; padding: 16px 24px; font-size: 16px;">
+                                Включить клапан
+                            </button>
+                            <button id="btn-manual-off" onclick="stopWatering()" class="btn-action" style="min-width: 180px; padding: 16px 24px; font-size: 16px; background: rgba(244,67,54,0.15); color: #dc2626;" disabled>
+                                Выключить клапан
+                            </button>
+                        </div>
+                        
+                        <div style="background: rgba(0,0,0,0.03); border-radius: 16px; padding: 20px; max-width: 400px; margin: 0 auto;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                                <span style="color: #64748b; font-size: 14px;">Статус:</span>
+                                <span id="manual-status" style="font-weight: 600; color: var(--accent-green);">Ожидание</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                                <span style="color: #64748b; font-size: 14px;">Время работы:</span>
+                                <span id="manual-timer" style="font-weight: 600; font-family: monospace; font-size: 18px;">00:00</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="color: #64748b; font-size: 14px;">Объём воды (оценка):</span>
+                                <span id="manual-volume" style="font-weight: 600;">—</span>
+                            </div>
+                        </div>
+                        
+                        <p style="color: #64748b; font-size: 13px; margin-top: 25px; max-width: 500px; margin-left: auto; margin-right: auto;">
+                            При включении клапана в ручном режиме данные автоматически сохранятся в журнал после выключения.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Панель конфигурации -->
+                <div id="configPanel">
+                
+                    <div style="background:rgba(33,200,95,0.06); border-radius:16px; padding:20px; margin-bottom:25px; border:1px solid rgba(33,200,95,0.2);">
+                        <h4 style="margin:0 0 15px 0; color:var(--accent-green);">Настройка новой задачи</h4>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Клапан</label>
+                            <select class="form-select" id="input-valve-select">
+                                <option value="1">Клапан 1</option>
+                                <option value="2">Клапан 2</option>
+                                <option value="3">Клапан 3</option>
+                                <option value="4">Клапан 4</option>
+                                <option value="5">Клапан 5</option>
+                                <option value="6">Клапан 6</option>
+                                <option value="7">Клапан 7</option>
+                                <option value="8">Клапан 8</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label class="form-label">Тип расписания</label>
+                                <select class="form-select" id="input-schedule-type">
+                                    <option value="daily">Ежедневно</option>
+                                    <option value="weekly">Еженедельно</option>
+                                    <option value="interval">По интервалу</option>
+                                    <option value="once">Однократно</option>
+                                    <option value="sunrise">На рассвете</option>
+                                    <option value="sunset">На закате</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Приоритет (1-10)</label>
+                                <input type="number" class="form-input" id="input-priority" value="5" min="1" max="10">
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group" id="group-time">
+                                <label class="form-label">Время полива</label>
+                                <input type="time" class="form-input" id="input-time" value="08:00">
+                            </div>
+                            <div class="form-group" id="group-days" style="display:none;">
+                                <label class="form-label">Дни недели</label>
+                                <input type="text" class="form-input" id="input-days" placeholder="1,3,5" 
+                                    oninput="this.value=this.value.replace(/[^1-7,]/g,''); if(document.getElementById('input-schedule-type').value==='weekly') generateWeeklyDayFields(this.value);">
+                                <div class="form-hint">1=Пн, 7=Вс. Пример: 1,3,5</div>
+                            </div>
+                            <div class="form-group" id="group-interval" style="display:none;">
+                                <label class="form-label">Интервал (мин)</label>
+                                <input type="number" class="form-input" id="input-interval" value="60" min="1" max="1440">
+                            </div>
+                        </div>
+                        
+                        <div class="form-row-2" style="margin-top:10px;">
+                            <div class="form-group">
+                                <label class="form-label">Объём воды (мл)</label>
+                                <input type="number" class="form-input" id="input-water-volume" value="200" min="10" max="5000" step="10">
+                                <div class="form-hint">Сколько мл вылить за один полив</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Длительность открытия (сек)</label>
+                                <input type="number" class="form-input" id="input-water-duration" value="30" min="1" max="600">
+                                <div class="form-hint">На сколько секунд открывать клапан</div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label class="form-label">Повторений цикла</label>
+                                <input type="number" class="form-input" id="input-cycles" value="1" min="1" max="10">
+                            </div>
+                        </div>
+                        
+                        <!-- Контейнер для деталей дней (weekly) -->
+                        <div id="weekly-details-container" style="margin-top:15px; display:none;"></div>
+                        
+                        <!-- Кнопка добавления задачи -->
+                        <button class="btn-add-task" onclick="addTaskOperation()" style="width:100%; margin-top:10px; padding:14px; font-size:15px;">
+                            + Добавить задачу с этими параметрами
+                        </button>
+                    </div>
+                    
+                    <h3 class="section-title">Добавленные задачи</h3>
+                    <div class="operations-list" id="operations-list"></div>
+                    
+                </div>
+
+                <!-- Панель журнала -->
+                <div id="journalPanel">
+                    <h3 class="section-title">История полива</h3>
+                    <div id="journal-content">
+                        <table class="journal-table">
+                            <thead>
+                                <tr>
+                                    <th>Дата/Время</th>
+                                    <th>Клапан</th>
+                                    <th>Тип запуска</th>
+                                    <th>Длительность</th>
+                                    <th>Объём</th>
+                                    <th>Статус</th>
+                                </tr>
+                            </thead>
+                            <tbody id="journal-tbody"></tbody>
+                        </table>
+                        <div id="journal-empty" class="empty-journal">Журнал пока пуст. Выполните тестовый полив или дождитесь автоматического запуска.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Правая панель: Датчик влажности -->
+            <div class="sidebar-right">
+                <div class="moisture-panel">
+                    <h2 class="panel-title">Датчик влажности</h2>
+                    <div class="toggle-row">
+                        <span class="toggle-label">Режим влажности</span>
+                        <div class="valve-toggle" id="input-sensor-active"></div>
+                    </div>
+                    <div class="form-hint" style="margin-bottom: 20px;">Автоматический полив по показаниям датчика</div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Интервал проверки (мин)</label>
+                        <select class="form-select" id="input-sensor-interval">
+                            <option value="15">15 минут</option>
+                            <option value="30">30 минут</option>
+                            <option value="60">1 час</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Целевая влажность (%)</label>
+                        <input type="number" class="form-input" id="input-target-moisture" min="0" max="100">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Макс. длительность полива (сек)</label>
+                        <input type="number" class="form-input" id="input-sensor-duration">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Мин. пауза (часы)</label>
+                        <input type="number" class="form-input" id="input-min-pause">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Последнее измерение</label>
+                        <input type="number" class="form-input" id="input-last-moisture" readonly style="opacity: 0.7;">
+                    </div>
+                    
+                    <div class="action-buttons">
+                        <button class="btn-action btn-save" onclick="saveAllData()">Сохранить все</button>
+                        <button class="btn-action btn-apply" onclick="applyToAll()">Применить ко всем</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+
+    <!-- Футер -->
+    <footer class="site-footer">
+        <div class="footer-columns">
+            <div>
+                <h3 class="footer-column-title">Зелёная полка</h3>
+                <p class="footer-column-text">Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</p>
+            </div>
+            <div>
+                <h3 class="footer-column-title">Модули</h3>
+                <ul class="footer-column-list">
+                    <li>Освещения растений</li>
+                    <li>Сбор данных о растениях</li>
+                    <li>Полив растений</li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="footer-column-title">Контакты</h3>
+                <ul class="footer-column-list">
+                    <li>Почта</li>
+                    <li>Наши сети</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-copyright">
+            2026 Зелёная полка
+        </div>
+    </footer>
+
+    <!-- ВСТАВЬТЕ ЭТОТ СКРИПТ ВМЕСТО СТАРОГО, перед </body> -->
+    <script>
+        (function () {
+            'use strict';
+
+            // ===== КОНФИГУРАЦИЯ =====
+            const DB_KEY = 'greenShelfWateringDB';
+            const LOG_KEY = 'greenShelfWateringLog';
+            const THEME_KEY = 'greenShelfTheme';
+            const PLANTS_KEY = 'myPlants';
+
+            let db = {};
+            let currentValve = 1;
+            let plantsMap = {};
+            let saveTimeout = null;
+            let simulatedScheduleInterval = null;
+
+            // ===== ИНИЦИАЛИЗАЦИЯ =====
+            function init() {
+                loadTheme();
+                loadData();
+                loadPlants();
+                renderSidebar();
+                switchValve(1);
+                setupListeners();
+                updateFormLogic();
+                renderJournal();
+                makeAllButtonsClickable();
+                startScheduleSimulation();
+            }
+
+            // ===== ТЕМА =====
+            function loadTheme() {
+                const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
+                document.body.className = `theme-${savedTheme}`;
+            }
+            function toggleTheme() {
+                const isDark = document.body.classList.contains('theme-dark');
+                const newTheme = isDark ? 'light' : 'dark';
+                document.body.className = `theme-${newTheme}`;
+                localStorage.setItem(THEME_KEY, newTheme);
+            }
+
+            // ===== ДАННЫЕ =====
+            function loadData() {
+                const saved = localStorage.getItem(DB_KEY);
+                db = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(DEFAULT_DB));
+            }
+            function saveData() {
+                localStorage.setItem(DB_KEY, JSON.stringify(db));
+            }
+            function saveAllData() {
+                collectUI(currentValve);
+                saveData();
+                showNotification('Настройки сохранены');
+            }
+            function applyToAll() {
+                collectUI(currentValve);
+                const currentSettings = JSON.parse(JSON.stringify(db[currentValve]));
+                for(let i=1; i<=8; i++) {
+                    if(i !== currentValve) {
+                        db[i].task = JSON.parse(JSON.stringify(currentSettings.task));
+                        db[i].sensor = JSON.parse(JSON.stringify(currentSettings.sensor));
+                        db[i].active = currentSettings.active;
+                    }
+                }
+                saveData();
+                renderSidebar();
+                showNotification('Настройки применены ко всем клапанам');
+            }
+            function loadPlants() {
+                const saved = localStorage.getItem(PLANTS_KEY);
+                if (saved) JSON.parse(saved).forEach(p => { if(p.valve) plantsMap[p.valve] = p.name; });
+            }
+
+            function debounceSave() {
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(() => {
+                    collectUI(currentValve);
+                    saveData();
+                }, 800);
+            }
+
+            // ===== СИМУЛЯЦИЯ РАСПИСАНИЯ =====
+            function startScheduleSimulation() {
+                simulatedScheduleInterval = setInterval(() => {
+                    const now = new Date();
+                    const currentDay = now.getDay() || 7;
+                    const currentTime = now.toTimeString().slice(0,5);
+                    
+                    for (let valveId = 1; valveId <= 8; valveId++) {
+                        const valve = db[valveId];
+                        if (!valve?.active || !valve?.task) continue;
+                        const t = valve.task;
+                        let shouldWater = false, triggerType = 'schedule';
+                        
+                        switch(t.schedule_type) {
+                            case 'daily': if (t.schedule_time === currentTime) shouldWater = true; break;
+                            case 'weekly': 
+                                const days = (t.schedule_days || '').split(',').map(Number);
+                                if (days.includes(currentDay) && t.schedule_time === currentTime) shouldWater = true; 
+                                break;
+                            case 'interval':
+                                if (t.schedule_interval_min > 0 && now.getMinutes() % t.schedule_interval_min === 0 && now.getSeconds() < 10) shouldWater = true;
+                                break;
+                            case 'once': if (t.schedule_time === currentTime) shouldWater = true; break;
+                        }
+                        
+                        if (valve.moisture_mode && valve.sensor?.active) {
+                            const s = valve.sensor;
+                            if (s.last_moisture_percent < s.target_moisture_percent && Math.random() > 0.7) {
+                                shouldWater = true; triggerType = 'sensor';
+                            }
+                        }
+                        
+                        if (shouldWater) {
+                            const taskOp = t.operations.find(op => op.type === 'TASK_SUMMARY');
+                            const waterOp = taskOp?._params || t.operations.find(op => op.type === 'WATER');
+                            addLogEntry({
+                                valve: valveId, type: triggerType,
+                                duration: waterOp?.duration_sec || t.max_duration_sec || 30,
+                                volume: waterOp?.volume_ml || t.max_volume_ml || 200,
+                                status: 'completed'
+                            });
+                            flashValveToggle(valveId);
+                        }
+                    }
+                }, 10000);
+            }
+            function stopScheduleSimulation() { if (simulatedScheduleInterval) clearInterval(simulatedScheduleInterval); }
+            function flashValveToggle(valveId) {
+                const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
+                if (!toggle) return;
+                toggle.style.transform = 'scale(1.2)';
+                toggle.style.transition = 'transform 0.2s';
+                setTimeout(() => toggle.style.transform = 'scale(1)', 400);
+            }
+
+            // ===== РЕНДЕРИНГ САЙДБАРА =====
+            function renderSidebar() {
+                const container = document.getElementById('valvesSidebar');
+                if (!container) return;
+                container.innerHTML = '';
+                for (let i = 1; i <= 8; i++) {
+                    const d = db[i];
+                    const plant = plantsMap[i] || '—';
+                    const statusText = d.active ? (d.moisture_mode ? 'By Moisture' : 'Active') : 'Неактивен';
+                    const statusClass = d.active ? '' : 'inactive';
+                    container.innerHTML += `
+                        <div class="valve-item ${i === currentValve ? 'active' : ''}" data-valve="${i}" onclick="switchValve(${i})">
+                            <div class="valve-header">
+                                <span class="valve-title"><span class="valve-number">${i}</span>Клапан ${i}</span>
+                            </div>
+                            <div class="valve-info">Pin: ${d.pin_number}</div>
+                            <div class="valve-info">Макс: ${d.max_duration_sec} сек</div>
+                            <div class="valve-info">Лимит: ${d.daily_limit_ml > 0 ? d.daily_limit_ml + ' мл' : '—'}</div>
+                            <div class="valve-info">Растение: ${plant}</div>
+                            <span class="valve-status ${statusClass}">${statusText}</span>
+                        </div>`;
+                }
+            }
+
+            // ===== ОБРАБОТКА КЛИКА ПО ЗАЩЁЛКЕ (РУЧНОЙ ПОЛИВ) =====
+            window.handleValveToggle = function(valveId, event) {
+                event?.stopPropagation();
+                const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
+                if (!toggle) return;
+                const isNowOn = !toggle.classList.contains('on');
+                toggle.classList.toggle('on');
+                db[valveId].active = isNowOn ? 1 : 0;
+                saveData();
+                
+                if (isNowOn) {
+                    const valveData = db[valveId];
+                    const t = valveData.task;
+                    const waterOp = t.operations?.find(op => op.type === 'WATER');
+                    addLogEntry({
+                        valve: valveId, type: 'manual',
+                        duration: waterOp?.duration_sec || t.max_duration_sec || 30,
+                        volume: waterOp?.volume_ml || t.max_volume_ml || 200,
+                        status: 'completed'
+                    });
+                    showNotification(`Клапан ${valveId}: ручной полив`);
+                }
+                if (valveId === currentValve) applyUI(valveId);
+                renderSidebar();
+            };
+
+            window.switchValve = function(id) {
+                collectUI(currentValve);
+                currentValve = id;
+                renderSidebar();
+                if (window.initValveEditButtons) window.initValveEditButtons();
+                applyUI(id);
+                updateFormLogic();
+            };
+
+            // ===== ПРИМЕНЕНИЕ ДАННЫХ В ФОРМУ (С ПОЛНЫМ ОТОБРАЖЕНИЕМ ЗАДАЧ) =====
+            function applyUI(id) {
+                const d = db[id]; if (!d) return;
+                const t = d.task, s = d.sensor;
+                const setVal = (id, val) => { const el = document.getElementById(id); if(el) el.value = val ?? ''; };
+                
+                setVal('input-valve-select', id);
+                setVal('input-schedule-type', t.schedule_type);
+                setVal('input-time', t.schedule_time || '');
+                setVal('input-days', t.schedule_days || '');
+                setVal('input-interval', t.schedule_interval_min || '');
+                setVal('input-priority', t.priority);
+                setVal('input-cycles', t.cycle_repeat);
+                setVal('input-task-duration', t.max_duration_sec);
+                setVal('input-max-volume', t.max_volume_ml);
+
+                if (db[id]?.task?.schedule_type === 'weekly' && db[id]?.task?.weekly_days) {
+                    const daysInput = document.getElementById('input-days');
+                    if (daysInput && daysInput.value) {
+                        generateWeeklyDayFields(daysInput.value);
+                    }
+                }
+
+                // === РЕНДЕР ОПЕРАЦИЙ С ПОЛНЫМ ОТОБРАЖЕНИЕМ ПАРАМЕТРОВ ===
+                const opsList = document.getElementById('operations-list');
+                if (opsList) {
+                    opsList.innerHTML = '';
+                    t.operations.forEach((op, idx) => {
+                        // Показываем ТОЛЬКО задачи типа TASK_SUMMARY
+                        if (op.type !== 'TASK_SUMMARY') return;
+                        
+                        const details = op.details || {};
+                        const waterDuration = details.limits?.duration || '—';
+                        const waterVolume = details.limits?.volume || '—';
+                        
+                        const content = `
+                            <div style="background:linear-gradient(135deg, #28a745 0%, #20c997 100%); color:white; padding:16px; border-radius:12px; margin:8px 0; box-shadow:0 2px 8px rgba(0,0,0,0.15);">
+                                <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px;">
+                                    <h4 style="margin:0; font-size:15px;">${op.label || 'Задача'}</h4>
+                                    <button class="btn-delete" onclick="deleteOperation(${idx})" 
+                                            style="background:rgba(255,255,255,0.2); border:none; color:white; 
+                                                border-radius:50%; width:28px; height:28px; cursor:pointer; 
+                                                font-size:18px; line-height:1; display:flex; align-items:center; justify-content:center;">
+                                        ×
+                                    </button>
+                                </div>
+                                
+                                <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; font-size:13px;">
+                                    <div>
+                                        <b>Расписание:</b><br>
+                                        <span style="opacity:0.9;">${details.schedule || '—'}</span>
+                                    </div>
+                                    <div>
+                                        <b>Приоритет:</b><br>
+                                        <span style="opacity:0.9;">${details.priority || '—'}</span>
+                                    </div>
+                                    <div>
+                                        <b>Циклы:</b><br>
+                                        <span style="opacity:0.9;">${details.cycles || '—'}</span>
+                                    </div>
+                                    <div>
+                                        <b>Длит.:</b><br>
+                                        <span style="opacity:0.9;">${waterDuration}</span>
+                                    </div>
+                                    <div>
+                                        <b>Объём:</b><br>
+                                        <span style="opacity:0.9;">${waterVolume}</span>
+                                    </div>
+                                    <div>
+                                        <b>Добавлено:</b><br>
+                                        <span style="opacity:0.9;">${op.timestamp || ''}</span>
+                                    </div>
+                                </div>
+                                
+                                ${op._weeklyDays ? `
+                                <div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.2); font-size:12px;">
+                                    <b>Настройки по дням:</b><br>
+                                    <span style="opacity:0.85;">${Object.keys(op._weeklyDays).length} дн. с индивидуальными параметрами</span>
+                                </div>` : ''}
+                            </div>`;
+                        
+                        opsList.insertAdjacentHTML('beforeend', content);
+                    });
+                    
+                    // Если задач нет
+                    if (t.operations.filter(op => op.type === 'TASK_SUMMARY').length === 0) {
+                        opsList.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b; font-style:italic;">Задач пока нет. Добавьте первую задачу выше.</div>';
+                    }
+                }
+
+                // Датчик
+                const sensorToggle = document.getElementById('input-sensor-active');
+                if (sensorToggle) s.active ? sensorToggle.classList.add('on') : sensorToggle.classList.remove('on');
+                setVal('input-sensor-interval', s.check_interval_min);
+                setVal('input-target-moisture', s.target_moisture_percent);
+                setVal('input-sensor-duration', s.max_watering_duration_sec);
+                setVal('input-min-pause', s.min_pause_hours);
+                setVal('input-last-moisture', s.last_moisture_percent);
+            }
+
+            // ===== ОБНОВЛЕНИЕ ПАРАМЕТРА ОПЕРАЦИИ =====
+            window.updateOperationParam = function(opIdx, param, value) {
+                const numVal = parseFloat(value);
+                if (!isNaN(numVal)) {
+                    db[currentValve].task.operations[opIdx][param] = numVal;
+                    debounceSave();
+                }
+            };
+
+            // ===== ДОБАВЛЕНИЕ ЗАДАЧИ С ПОЛНЫМ НАБОРОМ ПАРАМЕТРОВ =====
+            window.addTaskOperation = function() {
+                const getVal = (id) => document.getElementById(id)?.value || '';
+                const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
+                
+                const valve = getVal('input-valve-select') || currentValve;
+                const scheduleType = getVal('input-schedule-type') || 'daily';
+                const scheduleTime = getVal('input-time') || '08:00';
+                const scheduleDays = getVal('input-days') || '';
+                const interval = getVal('input-interval') || '60';
+                const priority = getNum('input-priority', 5);
+                const cycles = getNum('input-cycles', 1);
+                const maxDuration = getNum('input-task-duration', 600);
+                const maxVolume = getNum('input-max-volume', 1000);
+
+                const waterVolume = getNum('input-water-volume', 200);
+                const waterDuration = getNum('input-water-duration', 30);
+
+                let scheduleDesc = '';
+                switch(scheduleType) {
+                    case 'daily': 
+                        scheduleDesc = `Ежедневно в ${scheduleTime}`; 
+                        break;
+                    case 'weekly': 
+                        scheduleDesc = `Еженедельно: дни ${scheduleDays || '—'}`; 
+                        break;
+                    case 'interval': 
+                        scheduleDesc = `Каждые ${interval} мин`; 
+                        break;
+                    case 'once': 
+                        scheduleDesc = `Однократно: ${scheduleTime}`; 
+                        break;
+                    case 'sunrise': 
+                        scheduleDesc = 'На рассвете (авто)'; 
+                        break;
+                    case 'sunset': 
+                        scheduleDesc = 'На закате (авто)'; 
+                        break;
+                    default: 
+                        scheduleDesc = scheduleType;
+                }
+                
+                let dailyConfigs = null;
+                if (scheduleType === 'weekly' && scheduleDays) {
+                    const days = scheduleDays.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
+                    dailyConfigs = {};
+                    
+                    days.forEach(dayId => {
+                        const timeInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-time`);
+                        const volInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-vol`);
+                        const durInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-dur`);
+                        
+                        if (timeInput && volInput && durInput) {
+                            dailyConfigs[dayId] = {
+                                time: timeInput.value || '08:00',
+                                volume: parseInt(volInput.value) || waterVolume,
+                                duration: parseInt(durInput.value) || waterDuration
+                            };
+                        }
+                    });
+                }
+                
+                // Создаём задачу
+                const task = {
+                    type: 'TASK_SUMMARY',
+                    label: `Задача для Клапана ${valve}`,
+                    details: {
+                        schedule: scheduleDesc,
+                        priority: priority,
+                        cycles: cycles,
+                        limits: { 
+                            duration: waterDuration + ' сек',
+                            volume: waterVolume + ' мл'
+                        }
+                    },
+                    timestamp: new Date().toLocaleString('ru-RU'),
+                    _params: {
+                        valve: parseInt(valve),
+                        schedule_type: scheduleType,
+                        schedule_time: scheduleTime,
+                        schedule_days: scheduleDays,
+                        schedule_interval_min: parseInt(interval),
+                        duration_sec: waterDuration,
+                        volume_ml: waterVolume,
+                        priority: priority,
+                        cycles: cycles,
+                        max_duration_sec: maxDuration,
+                        max_volume_ml: maxVolume
+                    }
+                };
+                
+                if (dailyConfigs && Object.keys(dailyConfigs).length > 0) {
+                    task._dailyConfigs = dailyConfigs;
+                    task.details.schedule += ` (${Object.keys(dailyConfigs).length} дн. с индив. параметрами)`;
+                }
+                
+                db[currentValve].task.operations.push(task);
+                applyUI(currentValve);
+                saveData();
+                
+                const daysCount = dailyConfigs ? Object.keys(dailyConfigs).length : 0;
+                showNotification(`Задача добавлена${daysCount > 0 ? ` (${daysCount} дн.)` : ''}: ${waterVolume} мл / ${waterDuration} сек`);
+                console.log('Добавлена задача:', task);
+            };
+
+            window.addOperation = function() {
+                const type = prompt('Тип: WATER, PAUSE, SENSOR_CHECK', 'WATER')?.toUpperCase();
+                if (!type || !['WATER','PAUSE','SENSOR_CHECK'].includes(type)) return;
+                const defaults = {
+                    WATER: { type:'WATER', duration_sec:30, volume_ml:200 },
+                    PAUSE: { type:'PAUSE', pause_duration_sec:60 },
+                    SENSOR_CHECK: { type:'SENSOR_CHECK', target_moisture_percent:65, volume_ml:150 }
+                };
+                db[currentValve].task.operations.push({ ...defaults[type] });
+                applyUI(currentValve);
+                saveData();
+            };
+
+            window.deleteOperation = function(idx) {
+                if(!confirm('Удалить задачу?')) return;
+                db[currentValve].task.operations.splice(idx, 1);
+                applyUI(currentValve);
+                saveData();
+                showNotification('Задача удалена');
+            };
+
+           // ===== ЛОГИКА ПОЛЕЙ =====
+            window.updateFormLogic = function() {
+                const type = document.getElementById('input-schedule-type')?.value;
+                if (!type) return;
+                
+                const timeGroup = document.getElementById('group-time');
+                const daysGroup = document.getElementById('group-days');
+                const intervalGroup = document.getElementById('group-interval');
+                const weeklyContainer = document.getElementById('weekly-details-container');
+                
+                const toggle = (el, show) => {
+                    if (!el) return;
+                    el.style.display = show ? 'block' : 'none';
+                    el.querySelectorAll('input')?.forEach(inp => inp.disabled = !show);
+                };
+                
+                // Скрыть всё
+                toggle(timeGroup, false);
+                toggle(daysGroup, false);
+                toggle(intervalGroup, false);
+                if (weeklyContainer) { 
+                    weeklyContainer.style.display = 'none'; 
+                    weeklyContainer.innerHTML = ''; 
+                }
+                
+                switch(type) {
+                    case 'daily':
+                    case 'once':
+                        toggle(timeGroup, true);
+                        break;
+                    case 'weekly':
+                        toggle(timeGroup, true);
+                        toggle(daysGroup, true);
+                        if (weeklyContainer) {
+                            const daysInput = document.getElementById('input-days');
+                            if (daysInput?.value.trim()) {
+                                generateWeeklyDayFields(daysInput.value);
+                            } else {
+                                weeklyContainer.style.display = 'block';
+                                weeklyContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-style:italic;">Введите дни недели выше (например: 1,3,5)</div>';
+                            }
+                        }
+                        break;
+                    case 'interval':
+                        toggle(intervalGroup, true);
+                        break;
+                    case 'sunrise':
+                    case 'sunset':
+                        showNotification('Время определяется автоматически');
+                        break;
+                }
+            };
+
+            // ===== ГЕНЕРАЦИЯ ПОЛЕЙ ДЛЯ КАЖДОГО ДНЯ (WEEKLY MODE) =====
+            function generateWeeklyDayFields(daysStr) {
+                const container = document.getElementById('weekly-details-container');
+                if (!container) return;
+                
+                const days = daysStr.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
+                if (days.length === 0) { 
+                    container.style.display = 'none'; 
+                    container.innerHTML = '';
+                    return; 
+                }
+            
+                container.style.display = 'block';
+                
+                const WEEKDAYS = {1:'Пн',2:'Вт',3:'Ср',4:'Чт',5:'Пт',6:'Сб',7:'Вс'};
+                
+                let html = `<div style="background:rgba(33,200,95,0.1); padding:15px; border-radius:12px; margin:15px 0;">
+                    <strong style="color:var(--accent-green); display:block; margin-bottom:12px;">
+                        Индивидуальные настройки для каждого дня:
+                    </strong>
+                </div>`;
+                
+                days.forEach(dayId => {
+                    const existingConfig = db[currentValve]?.task?.weekly_days?.[dayId] || {};
+                    const defaultTime = existingConfig.time || '08:00';
+                    const defaultVolume = existingConfig.volume || 200;
+                    const defaultDuration = existingConfig.duration || 30;
+                    
+                    html += `
+                    <div class="weekly-day-row" data-day="${dayId}" style="
+                        display:grid; grid-template-columns: 70px 1fr 1fr 1fr; gap:10px;
+                        align-items:end; margin:10px 0; padding:15px; background:var(--card-bg);
+                        border-radius:12px; border:2px solid rgba(33,200,95,0.3);
+                        box-shadow:0 2px 8px rgba(0,0,0,0.08);
+                    ">
+                        <div style="font-weight:700; color:var(--accent-green); font-size:15px;">
+                            ${WEEKDAYS[dayId]}
+                        </div>
+                        <div>
+                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Время</label>
+                            <input type="time" class="wd-time" value="${defaultTime}" 
+                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
+                        </div>
+                        <div>
+                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Объём (мл)</label>
+                            <input type="number" class="wd-vol" value="${defaultVolume}" min="10" max="5000" step="10"
+                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
+                        </div>
+                        <div>
+                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Длит. (сек)</label>
+                            <input type="number" class="wd-dur" value="${defaultDuration}" min="1" max="600"
+                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
+                        </div>
+                    </div>`;
+                });
+                
+                container.innerHTML = html;
+                
+                // Авто-сохранение
+                container.querySelectorAll('.wd-time, .wd-vol, .wd-dur').forEach(inp => {
+                    inp.onchange = saveWeeklyConfig;
+                    inp.oninput = debounce(() => saveWeeklyConfig(), 500);
+                });
+            }
+
+            function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn.apply(this,a), ms); }; }
+
+            // Удаление дня из weekly-расписания
+            window.removeWeeklyDay = function(dayId) {
+                const input = document.getElementById('input-days');
+                if (!input) return;
+                
+                const days = input.value.split(',')
+                    .map(d => parseInt(d.trim()))
+                    .filter(d => d !== dayId);
+                
+                input.value = days.join(',');
+                
+                // Удаляем из БД
+                if (db[currentValve]?.task?.weekly_days?.[dayId]) {
+                    delete db[currentValve].task.weekly_days[dayId];
+                }
+                
+                saveData();
+                updateFormLogic(); // Перерисовать форму
+                showNotification(`День ${dayId} удалён`);
+            };
+
+            // Сохранение конфигурации дней в БД
+            function saveWeeklyConfig() {
+                const container = document.getElementById('weekly-details-container');
+                if (!container || !db[currentValve]) return;
+                
+                if (!db[currentValve].task.weekly_days) {
+                    db[currentValve].task.weekly_days = {};
+                }
+                
+                container.querySelectorAll('.weekly-day-row').forEach(row => {
+                    const dayId = parseInt(row.dataset.day);
+                    db[currentValve].task.weekly_days[dayId] = {
+                        time: row.querySelector('.wd-time')?.value || '08:00',
+                        volume: parseInt(row.querySelector('.wd-volume')?.value) || 200,
+                        duration: parseInt(row.querySelector('.wd-duration')?.value) || 60
+                    };
+                });
+                
+                debounceSave();
+            }
+
+            // Debounce-утилита (если ещё нет в коде)
+            function debounce(func, wait) {
+                let timeout;
+                return function(...args) {
+                    clearTimeout(timeout);
+                    timeout = setTimeout(() => func.apply(this, args), wait);
+                };
+            }
+
+            // ===== ЖУРНАЛ =====
+            function renderJournal(filterValve = null) {
+                const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+                const tbody = document.getElementById('journal-tbody');
+                const emptyMsg = document.getElementById('journal-empty');
+                if (!tbody) return;
+                const filtered = filterValve ? logs.filter(l => l.valve === filterValve) : logs;
+                tbody.innerHTML = '';
+                if(filtered.length === 0) { if(emptyMsg) emptyMsg.style.display = 'block'; return; }
+                if(emptyMsg) emptyMsg.style.display = 'none';
+                filtered.sort((a,b)=>new Date(b.ts)-new Date(a.ts)).forEach(log => {
+                    const statusClass = log.status==='completed'?'status-success':(log.status==='failed'?'status-fail':'status-pending');
+                    const typeText = {schedule:'Расписание', sensor:'Датчик', manual:'Вручную'}[log.type]||log.type;
+                    tbody.innerHTML += `<tr><td>${new Date(log.ts).toLocaleString('ru-RU')}</td><td><b>Клапан ${log.valve}</b></td><td>${typeText}</td><td>${log.duration} сек</td><td>${log.volume} мл</td><td><span class="status-badge ${statusClass}">{{completed:'Успешно',failed:'Провалено',pending:'В ожидании'}[log.status]||'?'}</span></td></tr>`;
+                });
+            }
+            function addLogEntry(data) {
+                if(!data?.valve) return;
+                const logs = JSON.parse(localStorage.getItem(LOG_KEY)||'[]');
+                logs.push({ ts:new Date().toISOString(), valve:data.valve, type:data.type, duration:data.duration, volume:data.volume, status:data.status||'completed' });
+                localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+                renderJournal();
+            }
+            window.filterJournalByValve = function(valveId) {
+                const select = document.getElementById('journal-valve-filter');
+                const valve = valveId!==undefined ? parseInt(valveId) : (select?parseInt(select.value):null);
+                renderJournal(valve&&valve>0?valve:null);
+            };
+            window.switchTab = function(tabName) {
+                document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+                document.querySelector(`.tab[data-tab="${tabName}"]`)?.classList.add('active');
+                document.getElementById('configPanel').style.display = tabName==='config'?'block':'none';
+                document.getElementById('journalPanel').style.display = tabName==='journal'?'block':'none';
+                if(tabName==='journal') { ensureJournalFilter(); renderJournal(); }
+            };
+            function ensureJournalFilter() {
+                const panel = document.getElementById('journalPanel'); if(!panel||document.getElementById('journal-valve-filter')) return;
+                panel.insertAdjacentHTML('afterbegin', `<div style="margin:12px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;"><label style="font-size:0.9em; color:var(--text-secondary);">Фильтр:</label><select id="journal-valve-filter" onchange="filterJournalByValve(this.value)" style="padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:var(--card-bg); color:var(--text);">${[0,1,2,3,4,5,6,7,8].map(v=>`<option value="${v}">${v===0?'Все клапаны':'Клапан '+v}</option>`).join('')}</select><button onclick="filterJournalByValve(0)" style="padding:6px 12px; background:var(--accent-green); color:white; border:none; border-radius:6px; cursor:pointer;">Сброс</button></div>`);
+            }
+
+            // ===== СБОР ДАННЫХ ИЗ ФОРМЫ =====
+            function collectUI(id) {
+                const d = db[id]; if(!d) return;
+                const toggle = document.querySelector(`.valve-item[data-valve="${id}"] .valve-toggle`);
+                if(toggle) d.active = toggle.classList.contains('on')?1:0;
+                const t = d.task, s = d.sensor;
+                const getVal = (id)=>document.getElementById(id)?.value;
+                const getNum = (id,def)=>{const v=parseInt(getVal(id)); return isNaN(v)?def:v;};
+                t.schedule_type = getVal('input-schedule-type')||'daily';
+                t.priority = getNum('input-priority',5); t.cycle_repeat = getNum('input-cycles',1);
+                t.max_duration_sec = getNum('input-task-duration',600); t.max_volume_ml = getNum('input-max-volume',1000);
+                const isDisabled = (id)=>document.getElementById(id)?.disabled;
+                t.schedule_time = isDisabled('input-time')?null:getVal('input-time');
+                t.schedule_days = isDisabled('input-days')?'':getVal('input-days');
+                t.schedule_interval_min = isDisabled('input-interval')?0:getNum('input-interval',0);
+                // Операции уже сохранены в db, не перезаписываем их из UI
+                const sensorToggle = document.getElementById('input-sensor-active');
+                s.active = sensorToggle?.classList.contains('on')?1:0;
+                s.check_interval_min = getNum('input-sensor-interval',30);
+                s.target_moisture_percent = getNum('input-target-moisture',65);
+                s.max_watering_duration_sec = getNum('input-sensor-duration',180);
+                s.min_pause_hours = getNum('input-min-pause',2);
+                s.last_moisture_percent = getNum('input-last-moisture',0);
+                if (db[id]?.task?.schedule_type === 'weekly') {
+                    const container = document.getElementById('weekly-details-container');
+                    if (container && db[id]?.task) {
+                        if (!db[id].task.weekly_days) db[id].task.weekly_days = {};
+                        container.querySelectorAll('.weekly-day-row').forEach(row => {
+                            const dayId = parseInt(row.dataset.day);
+                            db[id].task.weekly_days[dayId] = {
+                                time: row.querySelector('.wd-time')?.value || '08:00',
+                                volume: parseInt(row.querySelector('.wd-volume')?.value) || 200,
+                                duration: parseInt(row.querySelector('.wd-duration')?.value) || 60
+                            };
+                        });
+                    }
+                }
+            }
+
+            // ===== СОБЫТИЯ =====
+            function setupListeners() {
+                const themeBtn = document.getElementById('themeSwitcher'); if(themeBtn) themeBtn.onclick = toggleTheme;
+                const sched = document.getElementById('input-schedule-type'); if(sched) sched.onchange = ()=>{updateFormLogic(); debounceSave();};
+                document.querySelectorAll('.tab').forEach(tab=>tab.onclick=function(){switchTab(this.dataset.tab);});
+                const sensTog = document.getElementById('input-sensor-active'); if(sensTog) sensTog.onclick=function(){this.classList.toggle('on'); debounceSave();};
+                const valveSel = document.getElementById('input-valve-select'); if(valveSel) valveSel.onchange=function(){switchValve(+this.value);};
+                document.querySelectorAll('#configPanel input,#configPanel select,#configPanel textarea').forEach(el=>{el.onchange=debounceSave; el.oninput=debounceSave;});
+                const addTaskBtn = findBtn('Добавить задачу'); if(addTaskBtn) addTaskBtn.onclick=(e)=>{e.preventDefault(); addTaskOperation();};
+                const addOpBtn = findBtn('Добавить операцию'); if(addOpBtn) addOpBtn.onclick=(e)=>{e.preventDefault(); addOperation();};
+                const saveBtn = findBtn('Сохранить все'); if(saveBtn) saveBtn.onclick=(e)=>{e.preventDefault(); saveAllData();};
+                const applyBtn = findBtn('Применить ко всем'); if(applyBtn) applyBtn.onclick=(e)=>{e.preventDefault(); applyToAll();};
+                const schedType = document.getElementById('input-schedule-type');
+                if (schedType) {
+                    schedType.onchange = function() {
+                        updateFormLogic();
+                        debounceSave();
+                    };
+                }
+                setTimeout(updateFormLogic, 100);
+            }
+            function findBtn(text){return Array.from(document.querySelectorAll('button,input[type="button"],.btn')).find(b=>b.textContent?.trim().includes(text)||b.value?.includes(text));}
+            function makeAllButtonsClickable(){document.querySelectorAll('button,input[type="button"],input[type="submit"],a[role="button"],.btn,.valve-toggle').forEach(btn=>{if(btn.onclick||btn.href)return; btn.style.cursor='pointer'; btn.addEventListener('click',e=>{const txt=btn.textContent?.trim()||btn.value||''; if(['Добавить задачу','Добавить операцию','Сохранить все','Применить ко всем'].some(t=>txt.includes(t)))return; console.log('Клик:',txt);});});}
+            function showNotification(msg){const ex=document.getElementById('gs-notify'); if(ex)ex.remove(); const n=document.createElement('div'); n.id='gs-notify'; n.style.cssText='position:fixed;top:20px;right:20px;background:var(--accent-green,#28a745);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);font-family:system-ui,sans-serif;'; n.textContent=msg; document.body.appendChild(n); setTimeout(()=>{n.style.opacity='0'; n.style.transition='opacity .3s'; setTimeout(()=>n.remove(),300);},2500);}
+            window.loadUserToHeader=function(){const d=JSON.parse(localStorage.getItem('userData')); if(!d)return; const ut=document.querySelector('.user-pill .user-text'); if(ut)ut.textContent=d.username; const ad=document.querySelector('.user-pill .avatar-dark'), al=document.querySelector('.user-pill .avatar-light'); if(ad)ad.src=d.avatar; if(al)al.src=d.avatar;};
+            window.addEventListener('beforeunload',()=>{stopScheduleSimulation(); collectUI(currentValve); saveData();});
+            document.addEventListener('DOMContentLoaded',()=>{init(); loadUserToHeader();});
+        })();
+
+        (function() {
+            const STORAGE_PREFIX = 'valve_cfg_';
+            let currentValveNum = null;
+            let currentEditor = null;
+
+            const getVal = (v, p) => localStorage.getItem(`${STORAGE_PREFIX}${v}_${p}`) || '';
+            const setVal = (v, p, val) => localStorage.setItem(`${STORAGE_PREFIX}${v}_${p}`, val);
+
+            // Обновление отображения на карточке клапана
+            function updateValveCardDisplay(valveNum) {
+                const valveItem = document.querySelector(`.valve-item[data-valve="${valveNum}"]`);
+                if (!valveItem) return;
+                
+                const maxDur = getVal(valveNum, 'max_duration');
+                const maxVol = getVal(valveNum, 'max_volume');
+                
+                const infoElements = valveItem.querySelectorAll('.valve-info');
+                infoElements.forEach(el => {
+                    const text = el.textContent.trim();
+                    if (text.startsWith('Макс:')) {
+                        el.textContent = `Макс: ${maxDur || '—'} сек`;
+                    } else if (text.startsWith('Лимит:')) {
+                        const volText = maxVol ? `${maxVol} мл` : '—';
+                        el.textContent = `Лимит: ${volText}`;
+                    }
+                });
+            }
+
+            // Добавление кнопки редактирования в карточку клапана
+            function injectEditButton(valveNum) {
+                const valveItem = document.querySelector(`.valve-item[data-valve="${valveNum}"]`);
+                if (!valveItem) return false;
+                
+                if (valveItem.querySelector('.edit-valve-btn')) return true;
+                
+                valveItem.style.position = 'relative';
+                
+                const btn = document.createElement('button');
+                btn.className = 'edit-valve-btn';
+                btn.type = 'button';
+                btn.innerHTML = '✏️';
+                btn.title = `Настроить параметры клапана ${valveNum}`;
+                btn.setAttribute('aria-label', `Редактировать клапан ${valveNum}`);
+                btn.dataset.valve = valveNum;
+                btn.style.cssText = `
+                    position: absolute;
+                    bottom: 12px;
+                    right: 12px;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 50%;
+                    border: none;
+                    background: rgba(33, 200, 95, 0.85);
+                    color: white;
+                    font-size: 16px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    opacity: 0;
+                    transition: all 0.25s ease;
+                    z-index: 15;
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                    padding: 0;
+                    line-height: 1;
+                `;
+                
+                valveItem.addEventListener('mouseenter', () => {
+                    btn.style.opacity = '1';
+                });
+                valveItem.addEventListener('mouseleave', () => {
+                    if (!currentEditor || currentValveNum !== valveNum) {
+                        btn.style.opacity = '0';
+                    }
+                });
+                
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    openEditor(valveNum, btn);
+                });
+                
+                valveItem.appendChild(btn);
+                return true;
+            }
+
+            // Открытие редактора
+            function openEditor(valveNum, triggerBtn) {
+                closeAllEditors();
+                currentValveNum = valveNum;
+                
+                const backdrop = document.createElement('div');
+                backdrop.className = 'valve-editor-backdrop';
+                backdrop.style.cssText = `
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    background-color: rgba(15, 24, 43, 0.6);
+                    backdrop-filter: blur(8px);
+                    -webkit-backdrop-filter: blur(8px);
+                    z-index: 2147483639;
+                `;
+                document.body.appendChild(backdrop);
+
+                const editor = document.createElement('div');
+                editor.className = 'valve-editor-mini';
+                editor.style.cssText = `
+                    position: fixed;
+                    background: var(--card-bg, #ffffff);
+                    padding: 24px 28px;
+                    border-radius: 32px;
+                    width: 90%;
+                    max-width: 320px;
+                    box-shadow: 0 0 30px var(--glow-soft, rgba(33, 200, 95, 0.3));
+                    animation: modalFadeIn 0.3s ease;
+                    z-index: 2147483640;
+                    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    color: var(--text-main, #000);
+                `;
+                
+                const rect = triggerBtn.getBoundingClientRect();
+                const editorWidth = 320;
+                const editorHeight = 280;
+                let left = rect.right - editorWidth;
+                let top = rect.top - editorHeight - 10;
+                
+                if (left < 10) left = 10;
+                if (top < 10) top = rect.bottom + 10;
+                
+                editor.style.left = `${left}px`;
+                editor.style.top = `${top}px`;
+                
+                editor.innerHTML = `
+                    <div class="valve-editor-title" style="
+                        color: var(--accent-green, #21C85F);
+                        font-size: 18px;
+                        font-weight: 600;
+                        margin-bottom: 18px;
+                        text-align: center;
+                    ">Клапан ${valveNum}</div>
+                    <div class="valve-editor-field" style="margin-bottom: 14px;">
+                        <label style="
+                            display: block;
+                            font-size: 13px;
+                            color: var(--text-main, #333);
+                            opacity: 0.85;
+                            margin-bottom: 6px;
+                        ">Макс. длительность (сек)</label>
+                        <input type="number" id="ved-max-dur" min="0" placeholder="300" 
+                               value="${getVal(valveNum, 'max_duration')}" style="
+                            width: 100%;
+                            padding: 12px 16px;
+                            border-radius: 24px;
+                            border: 2px solid var(--accent-green, #21C85F);
+                            background: transparent;
+                            font-size: 14px;
+                            color: var(--accent-green, #21C85F);
+                            box-sizing: border-box;
+                            outline: none;
+                        ">
+                    </div>
+                    <div class="valve-editor-field" style="margin-bottom: 14px;">
+                        <label style="
+                            display: block;
+                            font-size: 13px;
+                            color: var(--text-main, #333);
+                            opacity: 0.85;
+                            margin-bottom: 6px;
+                        ">Лимит объёма (мл)</label>
+                        <input type="number" id="ved-max-vol" min="0" placeholder="5000" 
+                               value="${getVal(valveNum, 'max_volume')}" style="
+                            width: 100%;
+                            padding: 12px 16px;
+                            border-radius: 24px;
+                            border: 2px solid var(--accent-green, #21C85F);
+                            background: transparent;
+                            font-size: 14px;
+                            color: var(--accent-green, #21C85F);
+                            box-sizing: border-box;
+                            outline: none;
+                        ">
+                    </div>
+                    <div class="valve-editor-actions" style="
+                        display: flex;
+                        gap: 10px;
+                        margin-top: 20px;
+                    ">
+                        <button class="valve-cancel-btn" style="
+                            flex: 1;
+                            padding: 12px;
+                            border-radius: 24px;
+                            border: none;
+                            font-size: 14px;
+                            font-weight: 600;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                            background: rgba(255, 255, 255, 0.15);
+                            color: var(--text-main, #333);
+                            border: 1px solid rgba(255, 255, 255, 0.2);
+                        ">Отмена</button>
+                        <button class="valve-save-btn" style="
+                            flex: 1;
+                            padding: 12px;
+                            border-radius: 24px;
+                            border: none;
+                            font-size: 14px;
+                            font-weight: 600;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                            background: var(--accent-green, #21C85F);
+                            color: #ffffff;
+                        ">Сохранить</button>
+                    </div>
+                `;
+                
+                document.body.appendChild(editor);
+                currentEditor = { editor, backdrop, triggerBtn };
+
+                setTimeout(() => editor.querySelector('input').focus(), 100);
+
+                editor.querySelector('.valve-save-btn').addEventListener('click', () => {
+                    const dur = document.getElementById('ved-max-dur').value.trim();
+                    const vol = document.getElementById('ved-max-vol').value.trim();
+                    setVal(valveNum, 'max_duration', dur);
+                    setVal(valveNum, 'max_volume', vol);
+                    
+                    updateValveCardDisplay(valveNum);
+                    
+                    triggerBtn.style.background = '#4CAF50';
+                    setTimeout(() => triggerBtn.style.background = '', 300);
+                    
+                    closeEditor();
+                });
+
+                editor.querySelector('.valve-cancel-btn').addEventListener('click', closeEditor);
+                backdrop.addEventListener('click', closeEditor);
+                
+                const onEsc = (e) => { if (e.key === 'Escape') closeEditor(); };
+                document.addEventListener('keydown', onEsc, { once: true });
+            }
+
+            function closeEditor() {
+                if (currentEditor) {
+                    currentEditor.editor?.remove();
+                    currentEditor.backdrop?.remove();
+                    currentEditor = null;
+                }
+                currentValveNum = null;
+            }
+
+            function closeAllEditors() {
+                document.querySelectorAll('.valve-editor-mini, .valve-editor-backdrop').forEach(el => el.remove());
+                currentEditor = null;
+                currentValveNum = null;
+            }
+
+            // Инициализация кнопок для всех клапанов
+            function initValveEditButtons() {
+                console.log('Добавляю кнопки редактирования для клапанов...');
+                let added = 0;
+                for (let i = 1; i <= 8; i++) {
+                    if (injectEditButton(i)) {
+                        added++;
+                        updateValveCardDisplay(i);
+                    }
+                }
+                console.log(`обавлено кнопок: ${added}/8`);
+            }
+
+            // Делаем функцию глобально доступной
+            window.initValveEditButtons = initValveEditButtons;
+
+            // Запуск после загрузки DOM
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initValveEditButtons);
+            } else {
+                setTimeout(initValveEditButtons, 500);
+            }
+            
+            setTimeout(initValveEditButtons, 1500);
+            setTimeout(initValveEditButtons, 3000);
+        })();
+
+        // ===== РУЧНОЕ УПРАВЛЕНИЕ КЛАПАНОМ — ВСТРОЕННАЯ ВЕРСИЯ =====
+        (function() {
+            'use strict';
+            
+            // ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
+            const DB_KEY = 'greenShelfWateringDB';
+            const LOG_KEY = 'greenShelfWateringLog';
+            let db = {};
+            let manualState = { isActive: false, startTime: null, valveId: null, timerId: null, flowRate: 8.33 };
+            
+            // ===== ЗАГРУЗКА ДАННЫХ =====
+            function loadData() {
+                const saved = localStorage.getItem(DB_KEY);
+                const DEFAULT_DB = {
+                    1: { active: 1, task: { operations: [] } },
+                    2: { active: 0, task: { operations: [] } },
+                    3: { active: 1, task: { operations: [] } },
+                    4: { active: 0, task: { operations: [] } },
+                    5: { active: 1, task: { operations: [] } },
+                    6: { active: 0, task: { operations: [] } },
+                    7: { active: 0, task: { operations: [] } },
+                    8: { active: 1, task: { operations: [] } }
+                };
+                db = saved ? JSON.parse(saved) : DEFAULT_DB;
+            }
+            function saveData() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+            
+            // ===== ФОРМАТИРОВАНИЕ ВРЕМЕНИ =====
+            function fmt(sec) {
+                const m = Math.floor(sec/60).toString().padStart(2,'0');
+                const s = (sec%60).toString().padStart(2,'0');
+                return `${m}:${s}`;
+            }
+            
+            // ===== ОБНОВЛЕНИЕ ПАНЕЛИ =====
+            function updatePanel() {
+                const st = document.getElementById('manual-status');
+                const tm = document.getElementById('manual-timer');
+                const vl = document.getElementById('manual-volume');
+                const on = document.getElementById('btn-manual-on');
+                const off = document.getElementById('btn-manual-off');
+                if (!st || !tm || !vl || !on || !off) return;
+                
+                if (manualState.isActive) {
+                    const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
+                    tm.textContent = fmt(elapsed);
+                    vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
+                    st.textContent = 'Работает'; st.style.color = '#22c55e';
+                    on.disabled = true; off.disabled = false;
+                    on.style.opacity = '0.5'; off.style.opacity = '1';
+                } else {
+                    tm.textContent = '00:00'; vl.textContent = '—';
+                    st.textContent = 'Ожидание'; st.style.color = 'var(--accent-green)';
+                    on.disabled = false; off.disabled = true;
+                    on.style.opacity = '1'; off.style.opacity = '0.5';
+                }
+            }
+            
+            // ===== ВКЛЮЧИТЬ =====
+            window.startWatering = function() {
+                if (manualState.isActive) return;
+                const sel = document.getElementById('manual-valve-select');
+                if (!sel) return;
+                
+                manualState.valveId = parseInt(sel.value);
+                manualState.startTime = Date.now();
+                manualState.isActive = true;
+                
+                if (db[manualState.valveId]) { db[manualState.valveId].active = 1; saveData(); }
+                
+                // МГНОВЕННОЕ обновление переключателя в сайдбаре
+                const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
+                if (toggle) toggle.classList.add('on');
+                
+                // Таймер обновляет UI каждый тик
+                manualState.timerId = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
+                    const tm = document.getElementById('manual-timer');
+                    const vl = document.getElementById('manual-volume');
+                    if (tm) tm.textContent = fmt(elapsed);
+                    if (vl) vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
+                }, 1000);
+                
+                updatePanel();
+                console.log('▶ ВКЛЮЧЕН клапан', manualState.valveId);
+            };
+            
+            // ===== ВЫКЛЮЧИТЬ + ЖУРНАЛ =====
+            window.stopWatering = function() {
+                if (!manualState.isActive) return;
+                
+                clearInterval(manualState.timerId);
+                const duration = Math.floor((Date.now() - manualState.startTime) / 1000);
+                const volume = Math.round(duration * manualState.flowRate);
+                
+                manualState.isActive = false;
+                manualState.timerId = null;
+                
+                if (db[manualState.valveId]) { db[manualState.valveId].active = 0; saveData(); }
+                
+                const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
+                if (toggle) toggle.classList.remove('on');
+                
+                // Запись в журнал
+                const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+                logs.push({
+                    ts: new Date().toISOString(),
+                    valve: manualState.valveId,
+                    type: 'manual',
+                    duration: duration,
+                    volume: volume,
+                    status: 'completed'
+                });
+                localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+                
+                // Обновление журнала на странице
+                const tbody = document.getElementById('journal-tbody');
+                const empty = document.getElementById('journal-empty');
+                if (tbody) {
+                    if (empty) empty.style.display = 'none';
+                    const row = `<tr><td>${new Date().toLocaleString('ru-RU')}</td><td>Клапан ${manualState.valveId}</td><td>Вручную</td><td>${fmt(duration)}</td><td>${volume} мл</td><td><span class="status-badge status-success">Успешно</span></td></tr>`;
+                    tbody.insertAdjacentHTML('afterbegin', row);
+                }
+                
+                updatePanel();
+                alert(`Клапан ${manualState.valveId}: ${fmt(duration)}, ~${volume} мл — записано в журнал`);
+                console.log('■ ВЫКЛЮЧЕН клапан', manualState.valveId);
+            };
+            
+            // ===== ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК =====
+            window.switchTab = function(tabName) {
+                // Скрыть все панели
+                document.getElementById('configPanel').style.display = 'none';
+                document.getElementById('journalPanel').style.display = 'none';
+                document.getElementById('manualPanel').style.display = 'none';
+                
+                // Убрать active у всех табов
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                
+                // Показать нужное
+                if (tabName === 'manual') {
+                    document.getElementById('manualPanel').style.display = 'block';
+                    document.querySelector('.tab[data-tab="manual"]').classList.add('active');
+                    updatePanel();
+                } else if (tabName === 'config') {
+                    document.getElementById('configPanel').style.display = 'block';
+                    document.querySelector('.tab[data-tab="config"]').classList.add('active');
+                } else if (tabName === 'journal') {
+                    document.getElementById('journalPanel').style.display = 'block';
+                    document.querySelector('.tab[data-tab="journal"]').classList.add('active');
+                }
+            };
+            
+            // ===== ИНИЦИАЛИЗАЦИЯ ПОСЛЕ ЗАГРУЗКИ =====
+            document.addEventListener('DOMContentLoaded', function() {
+                loadData();
+                
+                // Прямая привязка кнопок через onclick в HTML уже работает, но добавим для надёжности:
+                const btnOn = document.getElementById('btn-manual-on');
+                const btnOff = document.getElementById('btn-manual-off');
+                if (btnOn) btnOn.onclick = function(e) { e.preventDefault(); window.startWatering(); };
+                if (btnOff) btnOff.onclick = function(e) { e.preventDefault(); window.stopWatering(); };
+                
+                // Привязка табов
+                document.querySelectorAll('.tab').forEach(tab => {
+                    tab.onclick = function(e) {
+                        e.preventDefault();
+                        window.switchTab(this.dataset.tab);
+                    };
+                });
+                
+                // Показать первую панель по умолчанию
+                window.switchTab('config');
+                
+                console.log('Модуль полива инициализирован');
+            });
+        })();
+    </script>
+</body>
+</html>
