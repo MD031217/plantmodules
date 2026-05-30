@@ -46,7 +46,7 @@ WebServer server(80);
 // ==================== SQLite БАЗА ДАННЫХ на SD-карте ====================
 #define DB_FILE "/sd/sensor_log.db"
 
-// === НОВОЕ: Таблицы пользователей и сессий ===
+/*/ === НОВОЕ: Таблицы пользователей и сессий ===
 #define SQL_CREATE_USERS "CREATE TABLE IF NOT EXISTS Users (" \
     "id INTEGER PRIMARY KEY AUTOINCREMENT, " \
     "username TEXT UNIQUE NOT NULL, " \
@@ -62,7 +62,7 @@ WebServer server(80);
     "token TEXT UNIQUE NOT NULL, " \
     "user_id INTEGER NOT NULL, " \
     "created_at INTEGER NOT NULL, " \
-    "FOREIGN KEY(user_id) REFERENCES Users(id));"
+    "FOREIGN KEY(user_id) REFERENCES Users(id));"*/
 
 #define MAX_LOG_ENTRIES 1000
 
@@ -189,6 +189,46 @@ void initDB() {
     Serial.println("Таблица создана/проверена");
   }
   
+    // === Создание/обновление таблицы Users (с проверкой колонок) ===
+    const char* createUsers = 
+    "CREATE TABLE IF NOT EXISTS Users ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "username TEXT UNIQUE NOT NULL, "
+    "password TEXT NOT NULL, "
+    "email TEXT UNIQUE NOT NULL, "
+    "gender TEXT DEFAULT 'female', "
+    "timezone TEXT DEFAULT '(UTC+05:00) Asia/Yekaterinburg', "
+    "avatar TEXT DEFAULT '', "
+    "created_at INTEGER NOT NULL);";
+
+  rc = sqlite3_exec(db, createUsers, NULL, NULL, &zErrMsg);
+  if (rc != SQLITE_OK) {
+    Serial.printf("Ошибка создания Users: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+  }
+
+  // Добавляем колонку username, если её нет (на случай старой таблицы)
+  sqlite3_exec(db, "ALTER TABLE Users ADD COLUMN username TEXT UNIQUE;", NULL, NULL, NULL);
+  sqlite3_exec(db, "ALTER TABLE Users ADD COLUMN avatar TEXT DEFAULT '';", NULL, NULL, NULL);
+
+    // Таблица Sessions
+    const char* sqlSessions = 
+    "CREATE TABLE IF NOT EXISTS Sessions ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "token TEXT UNIQUE NOT NULL, "
+    "user_id INTEGER NOT NULL, "
+    "created_at INTEGER NOT NULL, "
+    "FOREIGN KEY(user_id) REFERENCES Users(id));";
+
+  sqlite3_exec(db, sqlSessions, NULL, NULL, &zErrMsg);
+  if (zErrMsg) {
+    Serial.printf("Sessions error: %s\n", zErrMsg);
+    sqlite3_free(zErrMsg);
+    zErrMsg = nullptr;
+  }
+
+    Serial.println("Все таблицы проверены и готовы");
+
   testDBWrite();
 }
 
