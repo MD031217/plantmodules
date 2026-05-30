@@ -1674,6 +1674,7 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             const password = document.getElementById('passwordInput').value.trim();
             
             // Отправка на сервер для проверки
+            // НОВОЕ: Отправка на сервер для проверки
             fetch('/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -1682,20 +1683,15 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    // === НОВОЕ: Сохраняем ТОЛЬКО токен ===
                     localStorage.setItem('auth_token', data.token);
                     window.location.href = '/profile';
                 } else {
-                    alert('Неверный логин или пароль');
+                    alert(data.message || 'Неверный логин или пароль');
                 }
             })
             .catch(() => {
-                // Если сервер недоступен, проверяем локально
-                if (login === 'admin' && password === 'admin') {
-                    localStorage.setItem('auth_token', 'local_admin');
-                    window.location.href = '/profile';
-                } else {
-                    alert('Неверный логин или пароль');
-                }
+                alert('Ошибка соединения с сервером');
             });
         });
     </script>
@@ -7314,7 +7310,7 @@ void handleIndex() {
   server.send(200, "text/html", ROOT_HTML);
 }
 
-// API для входа
+/*// API для входа
 void handleApiLogin() {
   if (!server.hasArg("login") || !server.hasArg("password")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing fields\"}");
@@ -7330,9 +7326,9 @@ void handleApiLogin() {
   } else {
     server.send(401, "application/json", "{\"success\":false,\"message\":\"Invalid credentials\"}");
   }
-}
+}*/
 
-// API для регистрации
+/*// API для регистрации
 void handleApiRegister() {
   if (!server.hasArg("login") || !server.hasArg("password") || !server.hasArg("email")) {
     server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing fields\"}");
@@ -7345,12 +7341,255 @@ void handleApiRegister() {
   // Здесь должна быть проверка и сохранение в БД
   // Пока просто заглушка
   server.send(200, "application/json", "{\"success\":true,\"token\":\"user_token_456\",\"message\":\"Registration successful\"}");
-}
+}*/
 
 void handleClear() {
   clearDB();
   server.send(200, "text/plain", "OK");
 }
+
+// === НОВОЕ: Обработчик API входа ===
+void handleApiLogin() {
+    if (!server.hasArg("login") || !server.hasArg("password")) {
+        server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing fields\"}");
+        return;
+    }
+    
+    String login = server.arg("login");
+    String password = server.arg("password");
+    
+    // Валидация минимальной длины
+    if (login.length() < 3 || password.length() < 4) {
+        server.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid input\"}");
+        return;
+    }
+    
+    String response = loginUser(login, password);
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.send(response.startsWith("{\"success\":true") ? 200 : 401, "application/json", response);
+}
+
+
+// === НОВОЕ: Обработчик API регистрации ===
+void handleApiRegister() {
+    if (!server.hasArg("login") || !server.hasArg("password") || !server.hasArg("email")) {
+        server.send(400, "application/json", "{\"success\":false,\"message\":\"Missing fields\"}");
+        return;
+    }
+    
+    String login = server.arg("login");
+    String password = server.arg("password");
+    String email = server.arg("email");
+    
+    // Валидация
+    if (login.length() < 3 || password.length() < 4 || !email.indexOf('@')) {
+        server.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid input\"}");
+        return;
+    }
+    
+    bool success = registerUser(login, password, email);
+    
+    if (success) {
+        server.send(200, "application/json", "{\"success\":true,\"message\":\"Registration successful\"}");
+    } else {
+        server.send(409, "application/json", "{\"success\":false,\"message\":\"User already exists\"}");
+    }
+}
+
+// === НОВОЕ: Получение профиля ===
+void handleGetProfile() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    String profile = getProfileByToken(token);
+    
+    if (profile == "{}") {
+        server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+    } else {
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        server.send(200, "application/json", profile);
+    }
+}
+
+// === НОВОЕ: Обновление профиля ===
+void handleUpdateProfile() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ") || !server.hasArg("plain")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    if (!getUserIdByToken(token)) {
+        server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+        return;
+    }
+    
+    // Парсинг JSON body
+    DynamicJsonDocument doc(512);
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    if (err) {
+        server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    String username = doc["username"] | "";
+    String email = doc["email"] | "";
+    String gender = doc["gender"] | "female";
+    String timezone = doc["timezone"] | "";
+    String avatar = doc["avatar"] | "";
+    
+    bool success = updateProfileByToken(token, username, email, gender, timezone, avatar);
+    
+    if (success) {
+        server.send(200, "application/json", "{\"success\":true}");
+    } else {
+        server.send(500, "application/json", "{\"error\":\"Update failed\"}");
+    }
+}
+
+// === НОВОЕ: Загрузка аватара (chunked) ===
+void handleAvatarUpload() {
+    HTTPUpload& upload = server.upload();
+    
+    if (upload.status == UPLOAD_FILE_START) {
+        // Валидация токена
+        String auth = server.header("Authorization");
+        if (!auth.startsWith("Bearer ")) {
+            server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+            return;
+        }
+        
+        String token = auth.substring(7);
+        pendingUserId = getUserIdByToken(token);
+        if (!pendingUserId) {
+            server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+            return;
+        }
+        
+        // Сохраняем старый путь для удаления
+        pendingOldAvatarPath = getCurrentAvatarPath(pendingUserId);
+        
+        // Генерируем имя файла
+        pendingNewAvatarPath = "/sd/avatars/av_" + String(millis()) + ".jpg";
+        Serial.printf("Uploading avatar: %s\n", pendingNewAvatarPath.c_str());
+        
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        // Потоковая запись на SD - НЕ грузим в RAM!
+        File f = SD.open(pendingNewAvatarPath, FILE_WRITE);
+        if (f) {
+            f.write(upload.buf, upload.currentSize);
+            f.close();
+        } else {
+            Serial.printf("Failed to open %s for write\n", pendingNewAvatarPath.c_str());
+        }
+        
+    } else if (upload.status == UPLOAD_FILE_END) {
+        // Проверка: файл записан?
+        if (SD.exists(pendingNewAvatarPath)) {
+            // Удаляем старый файл ТОЛЬКО если это локальный путь
+            if (pendingOldAvatarPath.length() > 0 && !pendingOldAvatarPath.startsWith("http")) {
+                String oldFullPath = "/sd/" + pendingOldAvatarPath;
+                if (SD.exists(oldFullPath)) {
+                    SD.remove(oldFullPath);
+                    Serial.printf("Deleted old avatar: %s\n", oldFullPath.c_str());
+                }
+            }
+            
+            // Обновляем БД: относительный путь "avatars/av_..."
+            String relPath = "avatars/av_" + String(millis()) + ".jpg";
+            // Исправляем: берём имя из реально записанного файла
+            int lastSlash = pendingNewAvatarPath.lastIndexOf('/');
+            if (lastSlash >= 0) {
+                relPath = "avatars/" + pendingNewAvatarPath.substring(lastSlash + 1);
+            }
+            
+            if (updateUserAvatarInDB(server.header("Authorization").substring(7), relPath)) {
+                DynamicJsonDocument doc(128);
+                doc["success"] = true;
+                doc["avatar"] = relPath;
+                String out;
+                serializeJson(doc, out);
+                server.send(200, "application/json", out);
+                Serial.println("Avatar upload complete");
+            } else {
+                server.send(500, "application/json", "{\"error\":\"DB update failed\"}");
+            }
+        } else {
+            server.send(500, "application/json", "{\"error\":\"File write failed\"}");
+        }
+        
+        // Сброс глобальных переменных
+        pendingUserId = 0;
+        pendingOldAvatarPath = "";
+        pendingNewAvatarPath = "";
+    }
+}
+
+// === НОВОЕ: Получение файла аватара ===
+void handleGetAvatar() {
+    if (!server.hasArg("file")) {
+        server.send(400, "text/plain", "Missing 'file' parameter");
+        return;
+    }
+    
+    String fileArg = server.arg("file");
+    // Защита от path traversal
+    if (fileArg.indexOf("..") >= 0 || fileArg.indexOf("//") >= 0) {
+        server.send(400, "text/plain", "Invalid path");
+        return;
+    }
+    
+    String fullPath = "/sd/" + fileArg;
+    if (!SD.exists(fullPath)) {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+    
+    // Определяем MIME-type
+    String contentType = "image/jpeg";
+    if (fileArg.endsWith(".png")) contentType = "image/png";
+    else if (fileArg.endsWith(".gif")) contentType = "image/gif";
+    
+    server.sendHeader("Cache-Control", "public, max-age=86400");
+    server.sendHeader("Content-Type", contentType);
+    
+    // Потоковая отправка файла
+    File f = SD.open(fullPath, FILE_READ);
+    if (f) {
+        server.streamFile(f, contentType);
+        f.close();
+    } else {
+        server.send(500, "text/plain", "Failed to open file");
+    }
+}
+
+// === НОВОЕ: Логаут ===
+void handleApiLogout() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    if (db && getUserIdByToken(token)) {
+        const char* sql = "DELETE FROM Sessions WHERE token=?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, token.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+    
+    server.send(200, "application/json", "{\"success\":true}");
+}
+
 
 void handleNotFound() {
   handleRoot();
