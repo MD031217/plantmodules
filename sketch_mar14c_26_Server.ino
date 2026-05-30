@@ -2028,23 +2028,25 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    localStorage.setItem('auth_token', data.token);
-                    window.location.href = '/profile';
+                    // === НОВОЕ: После регистрации сразу логинимся для получения токена ===
+                    return fetch('/api/login', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: 'login=' + encodeURIComponent(login) + '&password=' + encodeURIComponent(pass)
+                    });
                 } else {
-                    alert(data.message || 'Ошибка регистрации');
+                    throw new Error(data.message || 'Ошибка регистрации');
                 }
             })
-            .catch(() => {
-                // Локальная регистрация если сервер недоступен
-                let users = JSON.parse(localStorage.getItem('users') || '{}');
-                if (users[login]) {
-                    alert('Такой логин уже занят');
-                    return;
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    localStorage.setItem('auth_token', data.token);
+                    window.location.href = '/profile';
                 }
-                users[login] = { pass: pass, email: email };
-                localStorage.setItem('users', JSON.stringify(users));
-                localStorage.setItem('auth_token', 'local_' + login);
-                window.location.href = '/profile';
+            })
+            .catch(err => {
+                alert(err.message || 'Ошибка');
             });
         });
     </script>
@@ -2620,6 +2622,37 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
+        // === НОВОЕ: Хелпер для разрешения пути к аватару ===
+        function resolveAvatarPath(path) {
+            if (!path) return '';
+            if (path.startsWith('http')) return path;
+            return '/api/avatar/file?file=' + encodeURIComponent(path);
+        }
+
+        // === НОВОЕ: Загрузка профиля с сервера ===
+        async function loadProfileFromServer() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                window.location.href = '/login';
+                return null;
+            }
+            
+            try {
+                const res = await fetch('/api/profile', {
+                    headers: {'Authorization': 'Bearer ' + token}
+                });
+                if (res.status === 401) {
+                    localStorage.removeItem('auth_token');
+                    window.location.href = '/login';
+                    return null;
+                }
+                return await res.json();
+            } catch (e) {
+                console.error('Profile load error:', e);
+                return null;
+            }
+        }
+
         function toggleTheme() {
             document.body.classList.toggle('theme-light');
             document.body.classList.toggle('theme-dark');
@@ -3454,6 +3487,37 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
+            // === НОВОЕ: Хелпер для разрешения пути к аватару ===
+        function resolveAvatarPath(path) {
+            if (!path) return '';
+            if (path.startsWith('http')) return path;
+            return '/api/avatar/file?file=' + encodeURIComponent(path);
+        }
+
+        // === НОВОЕ: Загрузка профиля с сервера ===
+        async function loadProfileFromServer() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                window.location.href = '/login';
+                return null;
+            }
+            
+            try {
+                const res = await fetch('/api/profile', {
+                    headers: {'Authorization': 'Bearer ' + token}
+                });
+                if (res.status === 401) {
+                    localStorage.removeItem('auth_token');
+                    window.location.href = '/login';
+                    return null;
+                }
+                return await res.json();
+            } catch (e) {
+                console.error('Profile load error:', e);
+                return null;
+            }
+        }
+        
         let tempAvatarData = null;
 
         function toggleTheme() {
