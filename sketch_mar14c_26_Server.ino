@@ -2622,99 +2622,92 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
-        // === НОВОЕ: Хелпер для разрешения пути к аватару ===
-        function resolveAvatarPath(path) {
+        // === ИСПРАВЛЕННЫЙ JavaScript ===
+        const resolveAvatarPath = (path) => {
             if (!path) return '';
             if (path.startsWith('http')) return path;
             return '/api/avatar/file?file=' + encodeURIComponent(path);
-        }
+        };
 
-        // === НОВОЕ: Загрузка профиля с сервера ===
-        async function loadProfileFromServer() {
+        const loadProfileFromServer = () => {
             const token = localStorage.getItem('auth_token');
             if (!token) {
                 window.location.href = '/login';
-                return null;
+                return Promise.resolve(null);
             }
-            
-            try {
-                const res = await fetch('/api/profile', {
-                    headers: {'Authorization': 'Bearer ' + token}
-                });
+            return fetch('/api/profile', {
+                headers: {'Authorization': 'Bearer ' + token}
+            })
+            .then(res => {
                 if (res.status === 401) {
                     localStorage.removeItem('auth_token');
                     window.location.href = '/login';
                     return null;
                 }
-                return await res.json();
-            } catch (e) {
+                return res.json();
+            })
+            .catch(e => {
                 console.error('Profile load error:', e);
                 return null;
-            }
-        }
+            });
+        };
 
-        function toggleTheme() {
+        const toggleTheme = () => {
             document.body.classList.toggle('theme-light');
             document.body.classList.toggle('theme-dark');
             const theme = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
             localStorage.setItem('theme', theme);
-        }
-        
+        };
 
-        document.addEventListener('DOMContentLoaded', async function() {
-            // === НОВОЕ: Проверяем токен и загружаем профиль ===
-            const profile = await loadProfileFromServer();
-            if (!profile) return;
+        const logout = () => {
+            if (!confirm('Вы уверены, что хотите выйти?')) return;
             
-            // Заполняем поля из серверного ответа
-            const fields = {
-                'header-username': profile.username,
-                'profile-name': profile.username,
-                'profile-email': profile.email,
-                'profile-timezone': profile.timezone,
-                'edit-username': profile.username,
-                'edit-email': profile.email,
-                'edit-timezone': profile.timezone
-            };
-            
-            Object.keys(fields).forEach(id => {
-                const el = document.getElementById(id);
-                if (el && fields[id]) el.textContent = fields[id];
-            });
-            
-            // === НОВОЕ: Аватары через resolveAvatarPath ===
-            const avatarSrc = resolveAvatarPath(profile.avatar);
-            ['header-avatar-dark', 'header-avatar-light', 'profile-avatar'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.src = avatarSrc || el.dataset.default || el.src;
-            });
-            
-            // Пол
-            if (profile.gender) {
-                document.getElementById('view-gender-female')?.classList.toggle('selected', profile.gender === 'female');
-                document.getElementById('view-gender-male')?.classList.toggle('selected', profile.gender === 'male');
-                document.getElementById('edit-gender-female')?.classList.toggle('selected', profile.gender === 'female');
-                document.getElementById('edit-gender-male')?.classList.toggle('selected', profile.gender === 'male');
+            const token = localStorage.getItem('auth_token');
+            if (token) {
+                fetch('/api/logout', {
+                    method: 'POST',
+                    headers: {'Authorization': 'Bearer ' + token}
+                }).catch(() => {});
             }
-            
-            // Тема
-            const savedTheme = localStorage.getItem('theme') || 'dark';
-            document.body.classList.remove('theme-dark', 'theme-light');
-            document.body.classList.add('theme-' + savedTheme);
-        });
+            localStorage.removeItem('auth_token');
+            window.location.href = '/login';
+        };
 
-        function logout() {
-            if (confirm('Вы уверены, что хотите выйти?')) {
-                window.location.href = '/login';
-            }
-        }
-
-        function deleteAccount() {
+        const deleteAccount = () => {
             if (confirm('Вы уверены, что хотите удалить аккаунт? Это действие нельзя отменить.')) {
                 localStorage.removeItem('userData');
                 window.location.href = '/register';
             }
-        }
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadProfileFromServer().then(profile => {
+                if (!profile) return;
+                
+                const fields = {
+                    'header-username': profile.username,
+                    'profile-name': profile.username,
+                    'profile-email': profile.email,
+                    'profile-timezone': profile.timezone
+                };
+                
+                Object.keys(fields).forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el && fields[id]) el.textContent = fields[id];
+                });
+                
+                const avatarSrc = resolveAvatarPath(profile.avatar);
+                ['header-avatar-dark', 'header-avatar-light', 'profile-avatar'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.src = avatarSrc || el.src;
+                });
+                
+                if (profile.gender) {
+                    document.getElementById('view-gender-female')?.classList.toggle('selected', profile.gender === 'female');
+                    document.getElementById('view-gender-male')?.classList.toggle('selected', profile.gender === 'male');
+                }
+            });
+        });
     </script>
 </body>
 </html>
@@ -3551,25 +3544,46 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             document.getElementById('edit-gender-male').classList.toggle('selected', g === 'male');
         }
 
-        document.addEventListener('DOMContentLoaded', function() {
-            const defaultData = {
-                username: 'User_login',
-                email: 'name_mail@email.com',
-                avatar: 'https://i.imgur.com/8KxHqJp.jpg',
-                gender: 'female',
-                timezone: '(UTC+05:00) Asian/Yekaterinburg'
+        document.addEventListener('DOMContentLoaded', async function() {
+            // === НОВОЕ: Проверяем токен и загружаем профиль ===
+            const profile = await loadProfileFromServer();
+            if (!profile) return;
+            
+            // Заполняем поля из серверного ответа
+            const fields = {
+                'header-username': profile.username,
+                'profile-name': profile.username,
+                'profile-email': profile.email,
+                'profile-timezone': profile.timezone,
+                'edit-username': profile.username,
+                'edit-email': profile.email,
+                'edit-timezone': profile.timezone
             };
-            const userData = JSON.parse(localStorage.getItem('userData')) || defaultData;
-
-            document.getElementById('header-avatar-dark').src = userData.avatar;
-            document.getElementById('header-avatar-light').src = userData.avatar;
-            document.getElementById('header-username').textContent = userData.username;
-
-            document.getElementById('profile-avatar').src = userData.avatar;
-            document.getElementById('edit-username').value = userData.username;
-            document.getElementById('edit-email').value = userData.email;
-            document.getElementById('edit-timezone').value = userData.timezone;
-            selectGender(userData.gender);
+            
+            Object.keys(fields).forEach(id => {
+                const el = document.getElementById(id);
+                if (el && fields[id]) el.textContent = fields[id];
+            });
+            
+            // === НОВОЕ: Аватары через resolveAvatarPath ===
+            const avatarSrc = resolveAvatarPath(profile.avatar);
+            ['header-avatar-dark', 'header-avatar-light', 'profile-avatar'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.src = avatarSrc || el.dataset.default || el.src;
+            });
+            
+            // Пол
+            if (profile.gender) {
+                document.getElementById('view-gender-female')?.classList.toggle('selected', profile.gender === 'female');
+                document.getElementById('view-gender-male')?.classList.toggle('selected', profile.gender === 'male');
+                document.getElementById('edit-gender-female')?.classList.toggle('selected', profile.gender === 'female');
+                document.getElementById('edit-gender-male')?.classList.toggle('selected', profile.gender === 'male');
+            }
+            
+            // Тема
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add('theme-' + savedTheme);
         });
 
         function openAvatarModal() {
@@ -3597,40 +3611,72 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             reader.readAsDataURL(file);
         });
 
-        function confirmAvatarUpload() {
-            if (tempAvatarData) {
-                document.getElementById('profile-avatar').src = tempAvatarData;
-                document.getElementById('header-avatar-dark').src = tempAvatarData;
-                document.getElementById('header-avatar-light').src = tempAvatarData;
-                closeAvatarModal();
+        const confirmAvatarUpload = async () => {
+            const token = localStorage.getItem('auth_token');
+            if (!token || !tempAvatarData) return;
+            
+            const formData = new FormData();
+            // Конвертируем dataURL в Blob
+            const response = await fetch(tempAvatarData);
+            const blob = await response.blob();
+            formData.append('file', blob, 'avatar.jpg');
+            
+            try {
+                const res = await fetch('/api/avatar', {
+                    method: 'POST',
+                    headers: {'Authorization': 'Bearer ' + token},
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    // === НОВОЕ: Обновляем src через resolveAvatarPath ===
+                    const newSrc = resolveAvatarPath(data.avatar);
+                    document.getElementById('profile-avatar').src = newSrc;
+                    document.getElementById('header-avatar-dark').src = newSrc;
+                    document.getElementById('header-avatar-light').src = newSrc;
+                    closeAvatarModal();
+                } else {
+                    alert('Ошибка загрузки: ' + (data.error || 'Unknown'));
+                }
+            } catch (e) {
+                alert('Ошибка сети');
             }
         }
 
-        function saveChanges() {
+        async function saveChanges() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) { window.location.href = '/login'; return; }
+            
             const username = document.getElementById('edit-username').value.trim();
             const email = document.getElementById('edit-email').value.trim();
-            const pass = document.getElementById('new-password').value;
-            const conf = document.getElementById('confirm-password').value;
             const timezone = document.getElementById('edit-timezone').value;
             const gender = document.getElementById('edit-gender-female').classList.contains('selected') ? 'female' : 'male';
-            const avatar = tempAvatarData || document.getElementById('profile-avatar').src;
-
-            if (!username) { alert('Введите имя'); return; }
-            if (!email.includes('@')) { alert('Введите корректный email'); return; }
-            if (pass && pass.length < 6) {
-                alert('Пароль минимум 6 символов');
-                document.getElementById('pass-warn-1').style.display = 'block';
-                return;
+            
+            if (!username || !email.includes('@')) {
+                alert('Проверьте поля'); return;
             }
-            if (pass && pass !== conf) {
-                alert('Пароли не совпадают');
-                document.getElementById('pass-warn-2').style.display = 'block';
-                return;
+            
+            const payload = { username, email, gender, timezone };
+            
+            try {
+                const res = await fetch('/api/profile', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('Сохранено!');
+                    window.location.href = '/profile';
+                } else {
+                    alert('Ошибка: ' + (data.error || 'Unknown'));
+                }
+            } catch (e) {
+                alert('Ошибка сети');
             }
-
-            localStorage.setItem('userData', JSON.stringify({ username, email, avatar, gender, timezone }));
-            alert('Сохранено!');
-            window.location.href = '/profile';
         }
     </script>
 </body>
@@ -4542,63 +4588,56 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <script>
-        (function () {
+        // === ИСПРАВЛЕННЫЙ JAVASCRIPT БЕЗ IIFE ===
+
+        const initThemes = () => {
+            // Первый инициализатор темы
             const toggle = document.getElementById('themeToggle');
-            const body   = document.body;
-            const KEY    = 'theme'; 
+            const body = document.body;
+            const KEY = 'theme';
             const saved = localStorage.getItem(KEY) || 'dark';
             body.classList.remove('theme-dark', 'theme-light');
             body.classList.add('theme-' + saved);
             if (toggle) toggle.checked = (saved === 'light');
+
             if (toggle) {
-                toggle.addEventListener('change', function () {
+                toggle.addEventListener('change', () => {
                     const next = toggle.checked ? 'light' : 'dark';
                     body.classList.remove('theme-dark', 'theme-light');
                     body.classList.add('theme-' + next);
                     localStorage.setItem(KEY, next);
                 });
             }
-        })();
+        };
 
-        function() {
+        // Второй инициализатор темы
+        const initThemeSwitcher = () => {
             const body = document.body;
-            const savedTheme = localStorage.getItem('theme') || 'dark';
+            let savedTheme = localStorage.getItem('theme') || 'dark';
             body.classList.remove('theme-light', 'theme-dark');
             body.classList.add('theme-' + savedTheme);
 
-            function toggleTheme() {
-                const isDark = body.classList.contains('theme-dark');
-                const nextTheme = isDark ? 'light' : 'dark';
-                body.classList.remove('theme-dark', 'theme-light');
-                body.classList.add('theme-' + nextTheme);
-                localStorage.setItem('theme', nextTheme);
+            const themeBtn = document.getElementById('themeSwitcher');
+            if (savedTheme) {
+                body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
             }
 
-            document.addEventListener('DOMContentLoaded', () => {
-                const themeBtn = document.getElementById('themeSwitcher'); 
-                const body = document.body;
-                const savedTheme = localStorage.getItem('theme');
-                if (savedTheme) {
-                    body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
-                }
+            if (themeBtn) {
+                themeBtn.addEventListener('click', () => {
+                    if (body.classList.contains('theme-light')) {
+                        body.className = 'theme-dark';
+                        localStorage.setItem('theme', 'dark');
+                    } else {
+                        body.className = 'theme-light';
+                        localStorage.setItem('theme', 'light');
+                    }
+                });
+            }
+        };
 
-                if(themeBtn) {
-                    themeBtn.addEventListener('click', () => {
-                        if (body.classList.contains('theme-light')) {
-                            body.className = 'theme-dark';
-                            localStorage.setItem('theme', 'dark');
-                            updateEyeSource(); 
-                        } else {
-                            body.className = 'theme-light';
-                            localStorage.setItem('theme', 'light');
-                        }
-                    });
-                }
-            });
-        })();
-
+        // Остальные функции
         let isScanned = false;
-        function toggleScan() {
+        const toggleScan = () => {
             const btn = document.getElementById('scanBtn');
             const list = document.getElementById('networkList');
             if (!isScanned) {
@@ -4610,57 +4649,71 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                 void list.offsetWidth;
                 list.style.display = 'block';
             }
-        }
-        
-        const passwordInput = document.getElementById('modalPasswordInput');
-        const eyeBtn = document.getElementById('eyeBtn');
-        const eyeImg = document.getElementById('eyeImg');
+        };
+
         let passwordVisible = false;
-        function updateEyeSource() {
-            
+        const updateEyeSource = () => {
+            const eyeImg = document.getElementById('eyeImg');
             if (passwordVisible) {
-                eyeImg.src ='Закрытый.png';
+                eyeImg.src = 'Закрытый.png';
                 eyeImg.alt = 'Скрыть пароль';
             } else {
                 eyeImg.src = 'Открытый.png';
                 eyeImg.alt = 'Показать пароль';
             }
-        }
-        eyeBtn.addEventListener('click', function() {
-            passwordVisible = !passwordVisible;
-            passwordInput.type = passwordVisible ? 'text' : 'password';
-            updateEyeSource(); 
-        });
+        };
 
-        function openModal(networkName) {
+        const openModal = (networkName) => {
             const modal = document.getElementById('passwordModal');
             document.getElementById('modalNetworkName').textContent = networkName;
             modal.classList.add('active');
             passwordVisible = false;
-            passwordInput.type = 'password';
-            updateEyeSource(); 
-        }
-        document.getElementById('passwordModal').addEventListener('click', (e) => {
-            if (e.target === e.currentTarget) closeModal();
-        });
+            document.getElementById('modalPasswordInput').type = 'password';
+            updateEyeSource();
+        };
 
-        function closeModal() {
+        const closeModal = () => {
             document.getElementById('passwordModal').classList.remove('active');
-        }
+        };
 
-         function loadUserToHeader() {
-            const data = JSON.parse(localStorage.getItem('userData'));
-            if (!data) return; 
+        const loadUserToHeader = () => {
+            const data = JSON.parse(localStorage.getItem('userData') || '{}');
             const userText = document.querySelector('.user-pill .user-text');
-            if (userText) userText.textContent = data.username;
+            if (userText) userText.textContent = data.username || 'User_login';
 
             const avDark = document.querySelector('.user-pill .avatar-dark');
             const avLight = document.querySelector('.user-pill .avatar-light');
-            if (avDark) avDark.src = data.avatar;
-            if (avLight) avLight.src = data.avatar;
-        }
+            if (avDark) avDark.src = data.avatar || '';
+            if (avLight) avLight.src = data.avatar || '';
+        };
 
-        document.addEventListener('DOMContentLoaded', loadUserToHeader);
+        // Запуск всего после загрузки страницы
+        document.addEventListener('DOMContentLoaded', () => {
+            initThemes();
+            initThemeSwitcher();
+            loadUserToHeader();
+
+            // Обработчик для eyeBtn
+            const eyeBtn = document.getElementById('eyeBtn');
+            if (eyeBtn) {
+                eyeBtn.addEventListener('click', () => {
+                    passwordVisible = !passwordVisible;
+                    const passwordInput = document.getElementById('modalPasswordInput');
+                    if (passwordInput) {
+                        passwordInput.type = passwordVisible ? 'text' : 'password';
+                    }
+                    updateEyeSource();
+                });
+            }
+
+            // Обработчик закрытия модального окна
+            const modal = document.getElementById('passwordModal');
+            if (modal) {
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) closeModal();
+                });
+            }
+        });
     </script>
 </body>
 </html>
@@ -7720,7 +7773,7 @@ void setup() {
   
   // Инициализация SD-карты и БД
   initDB();
-  
+
   if (!db) {
     Serial.println("Критическая ошибка: БД не инициализирована!");
     while (1) {
@@ -7729,6 +7782,11 @@ void setup() {
     }
   }
   
+if (!SD.exists("/sd/avatars")) {
+    SD.mkdir("/sd/avatars");
+    Serial.println("Created /sd/avatars directory");
+}
+
   // Инициализация SPI для BME280 и e-paper
   SPI.begin();
   
@@ -7768,6 +7826,19 @@ void setup() {
   server.on("/plant", handlePlant);
   server.on("/index", handleIndex);
   server.onNotFound(handleNotFound);
+  // === НОВОЕ: Регистрация новых API маршрутов ===
+server.on("/api/profile", HTTP_GET, handleGetProfile);
+server.on("/api/profile", HTTP_POST, handleUpdateProfile);
+server.on("/api/avatar", HTTP_POST, [](){ 
+    // Пустой обработчик для инициализации upload
+    server.send(200, "application/json", "{}"); 
+}, handleAvatarUpload);
+server.on("/api/avatar/file", HTTP_GET, handleGetAvatar);
+server.on("/api/logout", HTTP_POST, handleApiLogout);
+
+// Обновляем существующие обработчики
+server.on("/api/login", HTTP_POST, handleApiLogin);      // ЗАМЕНИТЬ старую версию
+server.on("/api/register", HTTP_POST, handleApiRegister); // ЗАМЕНИТЬ старую версию
   server.begin();
   Serial.println("Web server started");
   
