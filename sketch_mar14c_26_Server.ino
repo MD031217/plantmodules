@@ -2661,35 +2661,46 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
         }
         
 
-        document.addEventListener('DOMContentLoaded', function() {
-            const defaultData = {
-                username: 'User_login',
-                email: 'name_mail@email.com',
-                avatar: 'https://i.imgur.com/8KxHqJp.jpg',
-                gender: 'female',
-                timezone: '(UTC+05:00) Asian/Yekaterinburg'
+        document.addEventListener('DOMContentLoaded', async function() {
+            // === НОВОЕ: Проверяем токен и загружаем профиль ===
+            const profile = await loadProfileFromServer();
+            if (!profile) return;
+            
+            // Заполняем поля из серверного ответа
+            const fields = {
+                'header-username': profile.username,
+                'profile-name': profile.username,
+                'profile-email': profile.email,
+                'profile-timezone': profile.timezone,
+                'edit-username': profile.username,
+                'edit-email': profile.email,
+                'edit-timezone': profile.timezone
             };
-
-            const userData = JSON.parse(localStorage.getItem('userData')) || defaultData;
-
-            document.getElementById('header-avatar-dark').src = userData.avatar;
-            document.getElementById('header-avatar-light').src = userData.avatar;
-            document.getElementById('header-username').textContent = userData.username;
-            document.getElementById('profile-avatar').src = userData.avatar;
-            document.getElementById('profile-name').textContent = userData.username;
-            document.getElementById('profile-email').textContent = userData.email;
-            document.getElementById('profile-timezone').textContent = userData.timezone;
-            const femaleOpt = document.getElementById('view-gender-female');
-            const maleOpt = document.getElementById('view-gender-male');
             
-            femaleOpt.classList.remove('selected');
-            maleOpt.classList.remove('selected');
+            Object.keys(fields).forEach(id => {
+                const el = document.getElementById(id);
+                if (el && fields[id]) el.textContent = fields[id];
+            });
             
-            if (userData.gender === 'female') {
-                femaleOpt.classList.add('selected');
-            } else {
-                maleOpt.classList.add('selected');
+            // === НОВОЕ: Аватары через resolveAvatarPath ===
+            const avatarSrc = resolveAvatarPath(profile.avatar);
+            ['header-avatar-dark', 'header-avatar-light', 'profile-avatar'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.src = avatarSrc || el.dataset.default || el.src;
+            });
+            
+            // Пол
+            if (profile.gender) {
+                document.getElementById('view-gender-female')?.classList.toggle('selected', profile.gender === 'female');
+                document.getElementById('view-gender-male')?.classList.toggle('selected', profile.gender === 'male');
+                document.getElementById('edit-gender-female')?.classList.toggle('selected', profile.gender === 'female');
+                document.getElementById('edit-gender-male')?.classList.toggle('selected', profile.gender === 'male');
             }
+            
+            // Тема
+            const savedTheme = localStorage.getItem('theme') || 'dark';
+            document.body.classList.remove('theme-dark', 'theme-light');
+            document.body.classList.add('theme-' + savedTheme);
         });
 
         function logout() {
@@ -4549,7 +4560,7 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             }
         })();
 
-        (function() {
+        function() {
             const body = document.body;
             const savedTheme = localStorage.getItem('theme') || 'dark';
             body.classList.remove('theme-light', 'theme-dark');
