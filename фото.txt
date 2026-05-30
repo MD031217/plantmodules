@@ -1,0 +1,230 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <SD.h>
+
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASS";
+const int SD_CS_PIN = 5;
+
+WebServer server(80);
+
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SD Photo Manager</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
+    .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .photo-item { margin: 10px; text-align: center; display: inline-block; }
+    img { width: 150px; height: 150px; object-fit: cover; border: 1px solid #ccc; background: #eee; }
+    #gallery { display: flex; flex-wrap: wrap; margin-top: 15px; }
+    button { padding: 8px 16px; cursor: pointer; margin-top: 5px; }
+    .delete-btn { background: #d32f2f; color: white; border: none; }
+    .delete-btn:hover { background: #b71c1c; }
+    input[type="file"] { margin-right: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Upload Photo to SD</h2>
+    <input type="file" id="fileInput" accept="image/*">
+    <button onclick="uploadPhoto()">Upload</button>
+    <hr>
+    <h2>Gallery</h2>
+    <div id="gallery">Loading...</div>
+  </div>
+
+  <script>
+    async function uploadPhoto() {
+      const file = document.getElementById('fileInput').files[0];
+      if (!file) return alert('Select a file!');
+      
+      const formData = new FormData();
+      formData.append('photo', file);
+      
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: formData });
+        if (res.ok) { alert('Uploaded successfully!'); loadGallery(); }
+        else alert('Upload error: ' + await res.text());
+      } catch(e) { alert('Network error'); }
+    }
+
+    async function deletePhoto(filename) {
+      if (!confirm('Delete ' + filename + '?')) return;
+      try {
+        const res = await fetch('/delete?name=' + encodeURIComponent(filename), { method: 'DELETE' });
+        if (res.ok) loadGallery();
+        else alert('Delete error: ' + await res.text());
+      } catch(e) { alert('Network error'); }
+    }
+
+    async function loadGallery() {
+      try {
+        const res = await fetch('/list');
+        const files = await res.json();
+        const gal = document.getElementById('gallery');
+        gal.innerHTML = '';
+        if (files.length === 0) { gal.textContent = 'No photos'; return; }
+        
+        files.forEach(f => {
+          const div = document.createElement('div');
+          div.className = 'photo-item';
+          const img = document.createElement('img');
+          img.src = '/photo?name=' + encodeURIComponent(f);
+          img.alt = f;
+          const btn = document.createElement('button');
+          btn.className = 'delete-btn';
+          btn.textContent = 'Delete';
+          btn.onclick = () => deletePhoto(f);
+          div.appendChild(img);
+          div.appendChild(btn);
+          gal.appendChild(div);
+        });
+      } catch(e) { document.getElementById('gallery').textContent = 'Error loading list'; }
+    }
+    window.onload = loadGallery;
+  </script>
+</body>
+</html>
+)rawliteral";
+
+File uploadFile;
+String uploadFilename;
+
+void handleRoot() {
+  Serial.println("[INFO] Client requested main page");
+  server.send_P(200, "text/html", index_html);
+}
+
+void handleFileUpload() {
+  HTTPUpload& upload = server.upload();
+  
+  if (upload.status == UPLOAD_FILE_START) {
+    uploadFilename = "/" + upload.filename;
+    uploadFilename.replace("../", "");
+    if (!uploadFilename.endsWith(".jpg") && !uploadFilename.endsWith(".png")) {
+      uploadFilename += ".jpg";
+    }
+    Serial.println("[UPLOAD] Started: " + uploadFilename);
+    uploadFile = SD.open(uploadFilename, FILE_WRITE);
+  } 
+  else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (uploadFile) uploadFile.write(upload.buf, upload.currentSize);
+  } 
+  else if (upload.status == UPLOAD_FILE_END) {
+    if (uploadFile) {
+      uploadFile.close();
+      Serial.println("[UPLOAD] Completed: " + uploadFilename + " (" + String(upload.totalSize) + " bytes)");
+    }
+  }
+}
+
+void handleUploadResponse() {
+  server.send(200, "text/plain", "OK");
+}
+
+void handleList() {
+  Serial.println("[LIST] Client requested file list");
+  File root = SD.open("/");
+  String json = "[";
+  bool first = true;
+  int count = 0;
+
+  while (count < 100) {
+    File entry = root.openNextFile();
+    if (!entry) break;
+    
+    if (!entry.isDirectory()) {
+      String name = String(entry.name());
+      if (name.endsWith(".jpg") || name.endsWith(".png")) {
+        if (!first) json += ",";
+        json += "\"" + name.substring(1) + "\"";
+        first = false;
+        count++;
+      }
+    }
+    entry.close();
+  }
+  json += "]";
+  root.close();
+  
+  server.send(200, "application/json", json);
+}
+
+void handlePhoto() {
+  String name = "/" + server.arg("name");
+  Serial.println("[PHOTO] Client requested: " + name);
+  
+  if (!SD.exists(name)) {
+    server.send(404, "text/plain", "Not Found");
+    return;
+  }
+
+  File file = SD.open(name, FILE_READ);
+  String contentType = "image/jpeg";
+  if (name.endsWith(".png")) contentType = "image/png";
+
+  server.sendHeader("Content-Length", String(file.size()));
+  server.sendHeader("Content-Type", contentType);
+  server.streamFile(file, contentType);
+  file.close();
+}
+
+void handleDelete() {
+  String name = "/" + server.arg("name");
+  Serial.println("[DELETE] Client requested: " + name);
+  
+  if (name.indexOf("..") != -1) {
+    Serial.println("[DELETE] Blocked: path traversal attempt");
+    server.send(400, "text/plain", "Invalid path");
+    return;
+  }
+  
+  if (!SD.exists(name)) {
+    Serial.println("[DELETE] Failed: file not found");
+    server.send(404, "text/plain", "File not found");
+    return;
+  }
+
+  if (SD.remove(name)) {
+    Serial.println("[DELETE] Success: " + name);
+    server.send(200, "text/plain", "OK");
+  } else {
+    Serial.println("[DELETE] Failed: SD.remove() returned false");
+    server.send(500, "text/plain", "Delete failed");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Booting...");
+  
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected. IP: " + WiFi.localIP().toString());
+
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("[ERROR] SD card initialization failed");
+    while(1);
+  }
+  Serial.println("[INFO] SD card initialized");
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/upload", HTTP_POST, handleUploadResponse, handleFileUpload);
+  server.on("/list", HTTP_GET, handleList);
+  server.on("/photo", HTTP_GET, handlePhoto);
+  server.on("/delete", HTTP_DELETE, handleDelete);
+
+  server.begin();
+  Serial.println("[INFO] HTTP server started on port 80");
+}
+
+void loop() {
+  server.handleClient();
+}
