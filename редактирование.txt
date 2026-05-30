@@ -14,8 +14,6 @@ const char* password = "";
 WebServer server(80);
 
 // ===== СТРАНИЦА ПРОФИЛЯ (ВСТАВЛЕНА БЕЗ ИЗМЕНЕНИЙ) =====
-// Все ссылки на изображения в этом коде остаются как в вашем файле:
-// Т.пол.png, Св.пол.png, Светлая.png, Тёмная.png, тема.png, warning-icon.png
 const char PAGE_PROFILE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
@@ -26,47 +24,27 @@ const char PAGE_PROFILE[] PROGMEM = R"rawliteral(
     <link rel="stylesheet" href="profile-style.css">
     <style>
         :root {
-            --page-bg: #0F182B;
-            --text-main: #ffffff;
-            --accent-green: #21C85F;
-            --card-bg: rgba(255, 255, 255, 0.95);
-            --card-text: #333333;
-            --glow-color: rgba(33, 200, 95, 0.6);
-            --glow-soft: rgba(33, 200, 95, 0.3);
-            --user-pill-bg: #1a2d45;
-            --user-pill-text: #a0aab5;
-            --nav-bg: #21C85F;
-            --nav-btn-bg: rgba(255, 255, 255, 0.25);
-            --label-bg: rgba(33, 200, 95, 0.15);
-            --label-text: #21C85F;
-            --footer-bg: #21C85F;
-            --footer-text: #ffffff;
-            --footer-column-title: #ffffff;
-            --footer-column-text: #ffffff;
-            --footer-copy: #ffffff;
-            --switcher-bg: #1a2d45;
+            --page-bg: #0F182B; --text-main: #ffffff; --accent-green: #21C85F;
+            --card-bg: rgba(255, 255, 255, 0.95); --card-text: #333333;
+            --glow-color: rgba(33, 200, 95, 0.6); --glow-soft: rgba(33, 200, 95, 0.3);
+            --user-pill-bg: #1a2d45; --user-pill-text: #a0aab5;
+            --nav-bg: #21C85F; --nav-btn-bg: rgba(255, 255, 255, 0.25);
+            --label-bg: rgba(33, 200, 95, 0.15); --label-text: #21C85F;
+            --footer-bg: #21C85F; --footer-text: #ffffff;
+            --footer-column-title: #ffffff; --footer-column-text: #ffffff;
+            --footer-copy: #ffffff; --switcher-bg: #1a2d45;
             --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
         }
         .theme-light {
-            --page-bg: #E8F0F2;
-            --text-main: #333333;
-            --accent-green: #10B981;
-            --card-bg: #ffffff;
-            --card-text: #333333;
-            --glow-color: rgba(16, 185, 129, 0.4);
-            --glow-soft: rgba(16, 185, 129, 0.2);
-            --user-pill-bg: #ffffff;
-            --user-pill-text: #8899aa;
-            --nav-bg: #10B981;
-            --nav-btn-bg: rgba(255, 255, 255, 0.3);
-            --label-bg: rgba(16, 185, 129, 0.15);
-            --label-text: #10B981;
-            --footer-bg: #10B981;
-            --footer-text: #ffffff;
-            --footer-column-title: #ffffff;
-            --footer-column-text: #ffffff;
-            --footer-copy: #ffffff;
-            --switcher-bg: #ffffff;
+            --page-bg: #E8F0F2; --text-main: #333333; --accent-green: #10B981;
+            --card-bg: #ffffff; --card-text: #333333;
+            --glow-color: rgba(16, 185, 129, 0.4); --glow-soft: rgba(16, 185, 129, 0.2);
+            --user-pill-bg: #ffffff; --user-pill-text: #8899aa;
+            --nav-bg: #10B981; --nav-btn-bg: rgba(255, 255, 255, 0.3);
+            --label-bg: rgba(16, 185, 129, 0.15); --label-text: #10B981;
+            --footer-bg: #10B981; --footer-text: #ffffff;
+            --footer-column-title: #ffffff; --footer-column-text: #ffffff;
+            --footer-copy: #ffffff; --switcher-bg: #ffffff;
             --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.1);
         }
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -384,7 +362,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
 <body>
 <h2>Управление изображениями профиля</h2>
 <div id="status">Ожидание...</div>
-
 <div class="slot">
   <h4>Аватар пользователя (тёмная тема)</h4>
   <div class="slot-name">Имя файла: Т.пол.png</div>
@@ -395,7 +372,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/Т.пол.png?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <div class="slot">
   <h4>Аватар пользователя (светлая тема)</h4>
   <div class="slot-name">Имя файла: Св.пол.png</div>
@@ -406,7 +382,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/Св.пол.png?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <div class="slot">
   <h4>Логотип (тёмная тема)</h4>
   <div class="slot-name">Имя файла: Светлая.png</div>
@@ -417,7 +392,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/Светлая.png?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <div class="slot">
   <h4>Логотип (светлая тема)</h4>
   <div class="slot-name">Имя файла: Тёмная.png</div>
@@ -428,7 +402,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/Тёмная.png?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <div class="slot">
   <h4>Иконка темы</h4>
   <div class="slot-name">Имя файла: тема.png</div>
@@ -439,7 +412,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/тема.png?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <div class="slot">
   <h4>Иконка предупреждения пароля</h4>
   <div class="slot-name">Имя файла: warning-icon.png</div>
@@ -450,11 +422,9 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/warning-icon.png?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <div class="slot">
-  <h4>Основной аватар профиля (замена imgur)</h4>
+  <h4>Основной аватар профиля</h4>
   <div class="slot-name">Имя файла: profile_avatar.jpg</div>
-  <p style="font-size:12px;color:#666">Чтобы использовать это изображение, замените в HTML src="https://i.imgur.com/..." на src="/img/profile_avatar.jpg"</p>
   <form action="/upload" method="POST" enctype="multipart/form-data">
     <input type="hidden" name="filename" value="profile_avatar.jpg">
     <input type="file" name="file" accept="image/*" required>
@@ -462,7 +432,6 @@ img{max-width:150px;margin:8px 0;border:1px solid #ddd}
   </form>
   <img src="/img/profile_avatar.jpg?ts=0" alt="Preview" onerror="this.style.display='none'">
 </div>
-
 <script>
 function setStatus(msg,err=false){const el=document.getElementById('status');el.textContent=msg;el.style.background=err?'#ffebee':'#e8f5e9';el.style.color=err?'#c62828':'#2e7d32';}
 async function refreshPreviews(){const t=Date.now();document.querySelectorAll('img[src^="/img/"]').forEach(img=>{img.src=img.src.split('?')[0]+'?ts='+t;});setStatus('Превью обновлены');}
@@ -489,7 +458,6 @@ void handleAdmin() {
 
 void handleFileUpload() {
   HTTPUpload& upload = server.upload();
-  
   if (upload.status == UPLOAD_FILE_START) {
     targetFilename = server.arg("filename");
     if (targetFilename.indexOf("..") != -1 || targetFilename.indexOf("\\") != -1) {
@@ -500,11 +468,9 @@ void handleFileUpload() {
     targetFilename = "/img/" + targetFilename;
     Serial.println("[UPLOAD] Target: " + targetFilename);
     uploadFile = SD.open(targetFilename, FILE_WRITE);
-  } 
-  else if (upload.status == UPLOAD_FILE_WRITE) {
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (uploadFile) uploadFile.write(upload.buf, upload.currentSize);
-  } 
-  else if (upload.status == UPLOAD_FILE_END) {
+  } else if (upload.status == UPLOAD_FILE_END) {
     if (uploadFile) {
       uploadFile.close();
       Serial.println("[UPLOAD] Saved: " + targetFilename + " (" + String(upload.totalSize) + " bytes)");
@@ -517,7 +483,7 @@ void handleFileUpload() {
 }
 
 void handleServeImage() {
-  String filename = server.pathArg(0);
+  String filename = server.arg(0);
   if (filename.indexOf("..") != -1 || filename.indexOf("\\") != -1) {
     server.send(400, "text/plain", "Invalid path");
     return;
@@ -540,7 +506,33 @@ void handleServeImage() {
 }
 
 void handleNotFound() {
-  Serial.println("[HTTP] 404: " + server.uri());
+  String uri = server.uri();
+  Serial.println("[HTTP] 404 fallback: " + uri);
+  
+  // Проверяем, является ли запрос изображением (по расширению)
+  if (uri.endsWith(".png") || uri.endsWith(".jpg") || uri.endsWith(".jpeg")) {
+    // Извлекаем имя файла из пути (убираем ведущий /)
+    String filename = uri;
+    if (filename.startsWith("/")) filename = filename.substring(1);
+    
+    // Проверяем, есть ли файл в /img/
+    String fullPath = "/img/" + filename;
+    if (SD.exists(fullPath)) {
+      Serial.println("[HTTP] Intercepted image: " + fullPath);
+      File file = SD.open(fullPath, FILE_READ);
+      String ct = "image/jpeg";
+      String lower = filename; lower.toLowerCase();
+      if (lower.endsWith(".png")) ct = "image/png";
+      server.sendHeader("Content-Length", String(file.size()));
+      server.sendHeader("Content-Type", ct);
+      server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      server.streamFile(file, ct);
+      file.close();
+      return;
+    }
+  }
+  
+  // Если не изображение или файл не найден — стандартная 404
   server.send(404, "text/plain", "Not found");
 }
 
@@ -571,17 +563,13 @@ void setup() {
 
   if (!SD.exists("/img")) { SD.mkdir("/img"); Serial.println("[SD] Created /img"); }
 
+  // Регистрация маршрутов (без regex!)
   server.on("/profile", HTTP_GET, handleProfile);
   server.on("/admin", HTTP_GET, handleAdmin);
   server.on("/upload", HTTP_POST, [](){}, handleFileUpload);
-  server.on("/img/([^/]+)", HTTP_GET, handleServeImage);
-  server.on("/([^/]+\\.(png|jpg|jpeg))", HTTP_GET, [](String filename){
-    // Перехват запросов типа /Т.пол.png и перенаправление на /img/Т.пол.png
-    Serial.println("[HTTP] Intercepted image request: /" + filename);
-    handleServeImage();
-  });
+  server.on("/img", HTTP_GET, handleServeImage); // для /img?name=filename
   server.on("/", HTTP_GET, [](){ server.sendHeader("Location", "/profile"); server.send(302); });
-  server.onNotFound(handleNotFound);
+  server.onNotFound(handleNotFound); // перехват всех остальных запросов
 
   server.begin();
   Serial.println("[HTTP] Server started on port 80");
