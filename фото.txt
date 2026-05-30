@@ -4,134 +4,89 @@
 #include <FS.h>
 #include <SPI.h>
 
-// ===== КОНФИГУРАЦИЯ =====
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASS";
-
-// Пин CS SD-модуля. Измените, если ваша схема использует другой пин (часто 5, 15, 17, 33)
-#define SD_CS_PIN 5
-
-// Частота SPI. 4 МГц подходит для большинства модулей. При ошибке код автоматически перейдёт на 1 МГц.
+const char* ssid = "linksys";
+const char* password = "";
+#define SD_CS_PIN SS
 #define SPI_FREQ_INIT 4000000
 
 WebServer server(80);
 
-// ===== HTML+JS ИНТЕРФЕЙС =====
-const char index_html[] PROGMEM = R"rawliteral(
+const char PAGE_ADMIN[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SD Photo Manager</title>
+  <title>Admin - Photo Gallery</title>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 20px; background: #f0f2f5; }
-    .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    h2 { margin-top: 0; color: #333; }
+    body { font-family: system-ui, sans-serif; margin: 20px; background: #f4f6f8; }
+    .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; color: #222; }
     .controls { margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
     input[type="file"] { margin-right: 10px; }
     button { padding: 8px 16px; cursor: pointer; border: none; border-radius: 4px; background: #0056b3; color: #fff; }
     button:hover { background: #004494; }
-    button.delete-btn { background: #dc3545; margin-top: 5px; width: 100%; }
-    button.delete-btn:hover { background: #b02a37; }
+    button.del-btn { background: #dc3545; margin-top: 5px; width: 100%; }
+    button.del-btn:hover { background: #b02a37; }
     #gallery { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px; }
     .photo-item { background: #fafafa; border: 1px solid #ddd; border-radius: 6px; padding: 10px; text-align: center; width: 160px; }
     .photo-item img { width: 140px; height: 140px; object-fit: cover; border-radius: 4px; background: #e9ecef; }
     .photo-name { font-size: 12px; margin-top: 5px; word-break: break-all; color: #555; }
     #status { margin-top: 10px; font-size: 14px; color: #666; min-height: 20px; }
+    nav { margin-bottom: 15px; }
+    nav a { margin-right: 15px; text-decoration: none; color: #0056b3; font-weight: 500; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h2>Upload Photo</h2>
+    <nav><a href="/">Gallery</a> | <a href="/profile">Profile</a></nav>
+    <h2>Admin Gallery Management</h2>
     <div class="controls">
       <input type="file" id="fileInput" accept="image/*">
-      <button onclick="uploadPhoto()">Upload</button>
+      <button onclick="uploadAdmin()">Upload Admin Photo</button>
       <div id="status"></div>
     </div>
-
     <h2>Gallery</h2>
     <div id="gallery">Loading...</div>
   </div>
-
   <script>
     const statusEl = document.getElementById('status');
     const galleryEl = document.getElementById('gallery');
-
-    function setStatus(msg, isError = false) {
-      statusEl.textContent = msg;
-      statusEl.style.color = isError ? '#dc3545' : '#28a745';
-    }
-
-    async function uploadPhoto() {
-      const file = document.getElementById('fileInput').files[0];
-      if (!file) { setStatus('Select a file first.', true); return; }
-      
+    function setStatus(msg, err=false) { statusEl.textContent=msg; statusEl.style.color=err?'#dc3545':'#28a745'; }
+    async function uploadAdmin() {
+      const f = document.getElementById('fileInput').files[0];
+      if(!f) return setStatus('Select a file first.', true);
       setStatus('Uploading...');
-      const formData = new FormData();
-      formData.append('photo', file);
-      
+      const fd = new FormData(); fd.append('photo', f);
       try {
-        const res = await fetch('/upload', { method: 'POST', body: formData });
-        const text = await res.text();
-        if (res.ok) {
-          setStatus('Upload successful.');
-          document.getElementById('fileInput').value = '';
-          loadGallery();
-        } else {
-          setStatus('Upload failed: ' + text, true);
-        }
-      } catch(e) {
-        setStatus('Network error.', true);
-      }
+        const r = await fetch('/upload_admin', {method:'POST', body:fd});
+        if(r.ok) { setStatus('Admin photo uploaded.'); loadGallery(); }
+        else setStatus('Upload failed: '+await r.text(), true);
+      } catch(e) { setStatus('Network error.', true); }
     }
-
-    async function deletePhoto(filename) {
-      if (!confirm('Delete file: ' + filename + '?')) return;
+    async function deleteAdmin(name) {
+      if(!confirm('Delete admin photo: '+name+'?')) return;
       try {
-        const res = await fetch('/delete?name=' + encodeURIComponent(filename), { method: 'DELETE' });
-        if (res.ok) {
-          setStatus('File deleted.');
-          loadGallery();
-        } else {
-          setStatus('Delete failed: ' + await res.text(), true);
-        }
-      } catch(e) {
-        setStatus('Network error during delete.', true);
-      }
+        const r = await fetch('/delete_admin?name='+encodeURIComponent(name), {method:'DELETE'});
+        if(r.ok) { setStatus('Deleted.'); loadGallery(); }
+        else setStatus('Delete failed: '+await r.text(), true);
+      } catch(e) { setStatus('Network error.', true); }
     }
-
     async function loadGallery() {
-      galleryEl.innerHTML = 'Loading list...';
+      galleryEl.innerHTML = 'Loading...';
       try {
-        const res = await fetch('/list');
-        const files = await res.json();
+        const r = await fetch('/list_gallery');
+        const files = await r.json();
         galleryEl.innerHTML = '';
-        if (files.length === 0) {
-          galleryEl.innerHTML = '<p style="width:100%; text-align:center; color:#777;">No photos on SD card.</p>';
-          return;
-        }
+        if(files.length===0) { galleryEl.innerHTML='<p style="width:100%;text-align:center;color:#777;">No admin photos.</p>'; return; }
         files.forEach(f => {
-          const div = document.createElement('div');
-          div.className = 'photo-item';
-          const img = document.createElement('img');
-          img.src = '/photo?name=' + encodeURIComponent(f);
-          img.alt = f;
-          const name = document.createElement('div');
-          name.className = 'photo-name';
-          name.textContent = f;
-          const btn = document.createElement('button');
-          btn.className = 'delete-btn';
-          btn.textContent = 'Delete';
-          btn.onclick = () => deletePhoto(f);
-          div.appendChild(img);
-          div.appendChild(name);
-          div.appendChild(btn);
-          galleryEl.appendChild(div);
+          const d = document.createElement('div'); d.className='photo-item';
+          const i = document.createElement('img'); i.src='/photo?name='+encodeURIComponent(f); i.alt=f;
+          const n = document.createElement('div'); n.className='photo-name'; n.textContent=f;
+          const b = document.createElement('button'); b.className='del-btn'; b.textContent='Delete'; b.onclick=()=>deleteAdmin(f);
+          d.appendChild(i); d.appendChild(n); d.appendChild(b); galleryEl.appendChild(d);
         });
-      } catch(e) {
-        galleryEl.innerHTML = '<p style="color:red;">Error loading gallery.</p>';
-      }
+      } catch(e) { galleryEl.innerHTML='<p style="color:red;">Error loading gallery.</p>'; }
     }
     window.onload = loadGallery;
   </script>
@@ -139,72 +94,142 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ЗАГРУЗКИ =====
+// ===== СТРАНИЦА ПРОФИЛЯ (на основе вашего файла) =====
+const char PAGE_PROFILE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; background: #f4f6f8; }
+    .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    nav { margin-bottom: 15px; }
+    nav a { margin-right: 15px; text-decoration: none; color: #0056b3; font-weight: 500; }
+    h2 { margin-top: 0; color: #222; }
+    .profile-img-box { width: 150px; height: 150px; border-radius: 50%; background: #e9ecef; overflow: hidden; margin: 15px auto; border: 3px solid #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.15); }
+    .profile-img-box img { width: 100%; height: 100%; object-fit: cover; }
+    .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+    .info-label { font-weight: 500; color: #555; }
+    .upload-box { text-align: center; margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 6px; }
+    button { padding: 8px 16px; cursor: pointer; border: none; border-radius: 4px; background: #0056b3; color: #fff; }
+    #pstatus { margin-top: 10px; font-size: 14px; min-height: 20px; }
+    .footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; color: #666; font-size: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav><a href="/">Gallery</a> | <a href="/profile">Profile</a></nav>
+    <h2>Профиль пользователя</h2>
+    <div class="profile-img-box">
+      <img id="pimg" src="/photo?name=profile.jpg" alt="Profile" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect fill=%22%23ccc%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22%23666%22>No Photo</text></svg>'">
+    </div>
+    <div class="upload-box">
+      <input type="file" id="pfile" accept="image/*" style="margin-bottom:10px;">
+      <br><button onclick="uploadProfile()">Update Profile Photo</button>
+      <div id="pstatus"></div>
+    </div>
+    <div class="info-row"><span class="info-label">Часовой пояс</span><span>(UTC+05:00) Asian/Yekaterinburg</span></div>
+    <div class="info-row"><span class="info-label">User login</span><span>User_login</span></div>
+    <div class="info-row"><span class="info-label">Email</span><span>name_mail@email.com</span></div>
+    <div class="info-row"><span class="info-label">Пол</span><span>Женский / Мужской</span></div>
+    <div class="info-row"><span class="info-label">Статус</span><span>Зелёная полка</span></div>
+    <div class="footer">
+      Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.<br>
+      Модули: Освещения растений | Сбор данных о растениях | Полив растений<br>
+      Контакты | Почта | Наши сети<br>
+      2026 Зелёная полка
+    </div>
+  </div>
+  <script>
+    const ps = document.getElementById('pstatus');
+    function setP(msg, err=false) { ps.textContent=msg; ps.style.color=err?'#dc3545':'#28a745'; }
+    async function uploadProfile() {
+      const f = document.getElementById('pfile').files[0];
+      if(!f) return setP('Select a photo first.', true);
+      setP('Uploading profile photo...');
+      const fd = new FormData(); fd.append('photo', f);
+      try {
+        const r = await fetch('/upload_profile', {method:'POST', body:fd});
+        if(r.ok) { setP('Profile photo updated.'); document.getElementById('pimg').src='/photo?name=profile.jpg?ts='+Date.now(); }
+        else setP('Failed: '+await r.text(), true);
+      } catch(e) { setP('Network error.', true); }
+    }
+  </script>
+</body>
+</html>
+)rawliteral";
+
+// ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
 File uploadFile;
 String uploadFilename;
 
 // ===== ОБРАБОТЧИКИ ЗАПРОСОВ =====
 void handleRoot() {
-  Serial.println("[HTTP] Client requested main page");
-  server.send_P(200, "text/html", index_html);
+  Serial.println("[HTTP] Admin page requested");
+  server.send_P(200, "text/html", PAGE_ADMIN);
 }
 
-void handleFileUpload() {
+void handleProfile() {
+  Serial.println("[HTTP] Profile page requested");
+  server.send_P(200, "text/html", PAGE_PROFILE);
+}
+
+// Загрузка админ-фото в /gallery/
+void handleAdminUpload() {
   HTTPUpload& upload = server.upload();
-  
   if (upload.status == UPLOAD_FILE_START) {
-    uploadFilename = "/" + upload.filename;
-    uploadFilename.replace("../", ""); // Защита от path traversal
-    if (!uploadFilename.endsWith(".jpg") && !uploadFilename.endsWith(".png") && !uploadFilename.endsWith(".jpeg")) {
-      uploadFilename += ".jpg";
-    }
-    Serial.println("[UPLOAD] Starting: " + uploadFilename);
+    uploadFilename = "/gallery/" + upload.filename;
+    uploadFilename.replace("../", "");
+    if (!uploadFilename.endsWith(".jpg") && !uploadFilename.endsWith(".png") && !uploadFilename.endsWith(".jpeg")) uploadFilename += ".jpg";
+    Serial.println("[ADMIN] Upload started: " + uploadFilename);
     uploadFile = SD.open(uploadFilename, FILE_WRITE);
-  } 
-  else if (upload.status == UPLOAD_FILE_WRITE) {
-    if (uploadFile) {
-      uploadFile.write(upload.buf, upload.currentSize);
-    }
-  } 
-  else if (upload.status == UPLOAD_FILE_END) {
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (uploadFile) uploadFile.write(upload.buf, upload.currentSize);
+  } else if (upload.status == UPLOAD_FILE_END) {
     if (uploadFile) {
       uploadFile.close();
-      Serial.println("[UPLOAD] Finished: " + uploadFilename + " (" + String(upload.totalSize) + " bytes)");
-    } else {
-      Serial.println("[UPLOAD] Failed: File handle closed unexpectedly");
+      Serial.println("[ADMIN] Upload finished: " + uploadFilename + " (" + String(upload.totalSize) + " bytes)");
     }
   }
 }
+void handleAdminResponse() { server.send(200, "text/plain", "OK"); }
 
-void handleUploadResponse() {
-  server.send(200, "text/plain", "OK");
+// Загрузка фото профиля (только /profile.jpg)
+void handleProfileUpload() {
+  HTTPUpload& upload = server.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    uploadFilename = "/profile.jpg";
+    Serial.println("[PROFILE] Profile photo upload started");
+    uploadFile = SD.open(uploadFilename, FILE_WRITE);
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (uploadFile) uploadFile.write(upload.buf, upload.currentSize);
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (uploadFile) {
+      uploadFile.close();
+      Serial.println("[PROFILE] Profile photo updated successfully");
+    }
+  }
 }
+void handleProfileResponse() { server.send(200, "text/plain", "OK"); }
 
-void handleList() {
-  Serial.println("[HTTP] Client requested file list");
-  File root = SD.open("/");
+// Список только админ-фото
+void handleListGallery() {
+  Serial.println("[HTTP] Gallery list requested");
+  File root = SD.open("/gallery");
+  if (!root) { server.send(500, "text/plain", "Failed to open gallery dir"); return; }
   String json = "[";
   bool first = true;
   int count = 0;
-  const int MAX_FILES = 50; // Ограничение для экономии памяти
-
-  if (!root) {
-    server.send(500, "text/plain", "Failed to open SD root");
-    return;
-  }
-
-  while (count < MAX_FILES) {
+  while (count < 50) {
     File entry = root.openNextFile();
     if (!entry) break;
-    
     if (!entry.isDirectory()) {
       String name = String(entry.name());
-      String lower = name;
-      lower.toLowerCase();
+      String lower = name; lower.toLowerCase();
       if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")) {
         if (!first) json += ",";
-        // Убираем начальный /, если он есть
-        if (name.startsWith("/")) name = name.substring(1);
         json += "\"" + name + "\"";
         first = false;
         count++;
@@ -214,111 +239,109 @@ void handleList() {
   }
   json += "]";
   root.close();
-  
   server.send(200, "application/json", json);
 }
 
+// Отдача изображений с защитой от traversal
 void handlePhoto() {
-  String name = "/" + server.arg("name");
-  Serial.println("[HTTP] Client requested photo: " + name);
-  
-  if (!SD.exists(name)) {
-    server.send(404, "text/plain", "Not Found");
+  String name = server.arg("name");
+  if (name.indexOf("..") != -1 || name.indexOf("\\") != -1) {
+    server.send(400, "text/plain", "Invalid path");
     return;
   }
-
-  File file = SD.open(name, FILE_READ);
-  String contentType = "image/jpeg";
-  String lower = name;
-  lower.toLowerCase();
-  if (lower.endsWith(".png")) contentType = "image/png";
-
+  // Разрешаем только /gallery/* и /profile.jpg
+  bool allowed = (name.startsWith("gallery/") || name == "profile.jpg");
+  String fullPath = "/" + name;
+  if (!allowed || !SD.exists(fullPath)) {
+    server.send(404, "text/plain", "Not found or access denied");
+    return;
+  }
+  Serial.println("[HTTP] Photo requested: " + fullPath);
+  File file = SD.open(fullPath, FILE_READ);
+  String ct = "image/jpeg";
+  String lower = fullPath; lower.toLowerCase();
+  if (lower.endsWith(".png")) ct = "image/png";
   server.sendHeader("Content-Length", String(file.size()));
-  server.sendHeader("Content-Type", contentType);
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.streamFile(file, contentType);
+  server.sendHeader("Content-Type", ct);
+  server.sendHeader("Cache-Control", "no-cache, must-revalidate");
+  server.streamFile(file, ct);
   file.close();
 }
 
-void handleDelete() {
-  String name = "/" + server.arg("name");
-  Serial.println("[HTTP] Client requested delete: " + name);
-  
+// Удаление только из /gallery/
+void handleDeleteAdmin() {
+  String name = server.arg("name");
   if (name.indexOf("..") != -1 || name.indexOf("\\") != -1) {
-    Serial.println("[DELETE] Blocked: Invalid path characters");
+    Serial.println("[ADMIN] Delete blocked: invalid path");
     server.send(400, "text/plain", "Invalid filename");
     return;
   }
-  
-  if (!SD.exists(name)) {
-    Serial.println("[DELETE] Failed: File not found on SD");
+  String fullPath = "/gallery/" + name;
+  Serial.println("[ADMIN] Delete requested: " + fullPath);
+  if (!SD.exists(fullPath)) {
+    Serial.println("[ADMIN] Delete failed: not found");
     server.send(404, "text/plain", "File not found");
     return;
   }
-
-  if (SD.remove(name)) {
-    Serial.println("[DELETE] Success: " + name);
+  if (SD.remove(fullPath)) {
+    Serial.println("[ADMIN] Deleted successfully: " + fullPath);
     server.send(200, "text/plain", "OK");
   } else {
-    Serial.println("[DELETE] Failed: SD.remove() error");
+    Serial.println("[ADMIN] Delete failed: SD error");
     server.send(500, "text/plain", "SD write error");
   }
 }
 
-// ===== ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА =====
+// ===== ИНИЦИАЛИЗАЦИЯ =====
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n[SYSTEM] ESP32 Booting...");
 
-  // 1. Подключение к Wi-Fi
+  // Wi-Fi
   Serial.print("[WIFI] Connecting to: " + String(ssid));
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
   Serial.println("\n[WIFI] Connected. IP: " + WiFi.localIP().toString());
 
-  // 2. Надёжная инициализация SD-карты
+  // SD Инициализация (надёжная, с fallback)
   Serial.println("[SD] Initializing with CS pin: " + String(SD_CS_PIN));
   if (!SD.begin(SD_CS_PIN, SPI, SPI_FREQ_INIT)) {
-    Serial.println("[SD] Mount failed at " + String(SPI_FREQ_INIT/1000000) + " MHz. Trying fallback 1 MHz...");
+    Serial.println("[SD] Mount failed at 4 MHz. Trying 1 MHz fallback...");
     if (!SD.begin(SD_CS_PIN, SPI, 1000000)) {
       Serial.println("[CRITICAL] SD card initialization FAILED.");
       Serial.println("Checklist:");
-      Serial.println("1. Verify SD_CS_PIN matches your hardware wiring");
-      Serial.println("2. Format card to FAT32 (for <=32GB) or exFAT (for >32GB)");
-      Serial.println("3. Check power supply (3.3V stable) and wiring length (<15cm)");
-      Serial.println("4. Ensure module has logic level shifter if powered by 5V");
-      while (1) { delay(1000); }
+      Serial.println("1. Verify SD_CS_PIN matches hardware");
+      Serial.println("2. Format card to FAT32 (<=32GB) or exFAT (>32GB)");
+      Serial.println("3. Check 3.3V power and wiring (<15cm)");
+      while(1) delay(1000);
     }
   }
   Serial.println("[SD] Mount successful");
+  uint8_t ct = SD.cardType();
+  Serial.print("[SD] Type: ");
+  if(ct==CARD_MMC) Serial.println("MMC"); else if(ct==CARD_SD) Serial.println("SDSC"); else if(ct==CARD_SDHC) Serial.println("SDHC/SDXC"); else Serial.println("UNKNOWN");
+  Serial.print("[SD] Capacity: "); Serial.print(SD.cardSize()/(1024*1024)); Serial.println(" MB");
 
-  // Диагностика карты
-  uint8_t cardType = SD.cardType();
-  Serial.print("[SD] Card Type: ");
-  switch (cardType) {
-    case CARD_MMC:  Serial.println("MMC"); break;
-    case CARD_SD:   Serial.println("SDSC (<=2GB)"); break;
-    case CARD_SDHC: Serial.println("SDHC/SDXC (>2GB)"); break;
-    default:        Serial.println("UNKNOWN"); break;
+  // Создание директорий
+  if (!SD.exists("/gallery")) {
+    SD.mkdir("/gallery");
+    Serial.println("[SD] Created /gallery directory");
   }
-  Serial.print("[SD] Capacity: "); Serial.print(SD.cardSize() / (1024 * 1024)); Serial.println(" MB");
-  Serial.print("[SD] Total space: "); Serial.print(SD.totalBytes() / (1024 * 1024)); Serial.println(" MB");
-  Serial.print("[SD] Used space: "); Serial.print(SD.usedBytes() / (1024 * 1024)); Serial.println(" MB");
 
-  // 3. Регистрация HTTP-маршрутов
+  // Регистрация маршрутов
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/upload", HTTP_POST, handleUploadResponse, handleFileUpload);
-  server.on("/list", HTTP_GET, handleList);
+  server.on("/profile", HTTP_GET, handleProfile);
+  server.on("/upload_admin", HTTP_POST, handleAdminResponse, handleAdminUpload);
+  server.on("/upload_profile", HTTP_POST, handleProfileResponse, handleProfileUpload);
+  server.on("/list_gallery", HTTP_GET, handleListGallery);
   server.on("/photo", HTTP_GET, handlePhoto);
-  server.on("/delete", HTTP_DELETE, handleDelete);
+  server.on("/delete_admin", HTTP_DELETE, handleDeleteAdmin);
 
   server.begin();
-  Serial.println("[HTTP] Web server started on port 80");
-  Serial.println("[INFO] Open http://" + WiFi.localIP().toString() + " in browser");
+  Serial.println("[HTTP] Server started on port 80");
+  Serial.println("[INFO] Admin: http://" + WiFi.localIP().toString());
+  Serial.println("[INFO] Profile: http://" + WiFi.localIP().toString() + "/profile");
 }
 
 void loop() {
