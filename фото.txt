@@ -8,11 +8,11 @@
 const char* ssid = "linksys";
 const char* password = "";
 
-// Пин CS SD-модуля. Измените, если ваша схема использует другой пин (часто 5, 15, 17, 33)
 #define SD_CS_PIN SS
-
-// Частота SPI. 4 МГц подходит для большинства модулей. При ошибке код автоматически перейдёт на 1 МГц.
 #define SPI_FREQ_INIT 4000000
+
+const char* FOLDERS[] = {"image", "avatar", "plant"};
+const int FOLDER_COUNT = 3;
 
 WebServer server(80);
 
@@ -30,122 +30,202 @@ const char index_html[] PROGMEM = R"rawliteral(
     h2 { margin-top: 0; color: #333; }
     .controls { margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
     input[type="file"] { margin-right: 10px; }
+    select { padding: 8px; margin-right: 10px; border-radius: 4px; border: 1px solid #ccc; }
     button { padding: 8px 16px; cursor: pointer; border: none; border-radius: 4px; background: #0056b3; color: #fff; }
     button:hover { background: #004494; }
     button.delete-btn { background: #dc3545; margin-top: 5px; width: 100%; }
     button.delete-btn:hover { background: #b02a37; }
     #gallery { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px; }
-    .photo-item { background: #fafafa; border: 1px solid #ddd; border-radius: 6px; padding: 10px; text-align: center; width: 160px; }
+    .photo-item { background: #fafafa; border: 1px solid #ddd; border-radius: 6px; padding: 10px; text-align: center; width: 180px; }
     .photo-item img { width: 140px; height: 140px; object-fit: cover; border-radius: 4px; background: #e9ecef; }
-    .photo-name { font-size: 12px; margin-top: 5px; word-break: break-all; color: #555; }
+    .photo-name { font-size: 11px; margin: 5px 0; word-break: break-all; color: #555; }
+    .folder-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; margin-bottom: 5px; }
+    .folder-image { background: #e3f2fd; color: #1976d2; }
+    .folder-avatar { background: #f3e5f5; color: #7b1fa2; }
+    .folder-plant { background: #e8f5e9; color: #388e3c; }
     #status { margin-top: 10px; font-size: 14px; color: #666; min-height: 20px; }
+    .filter-controls { margin-bottom: 15px; }
+    .filter-controls button { margin-right: 5px; background: #6c757d; }
+    .filter-controls button.active { background: #0056b3; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h2>Upload Photo</h2>
+    <h2>📤 Загрузка фото</h2>
     <div class="controls">
       <input type="file" id="fileInput" accept="image/*">
-      <button onclick="uploadPhoto()">Upload</button>
+      <select id="folderSelect">
+        <option value="image">🖼️ image</option>
+        <option value="avatar">👤 avatar</option>
+        <option value="plant">🌿 plant</option>
+      </select>
+      <button onclick="uploadPhoto()">Загрузить</button>
       <div id="status"></div>
     </div>
 
-    <h2>Gallery</h2>
-    <div id="gallery">Loading...</div>
+    <h2>📁 Галерея</h2>
+    <div class="filter-controls">
+      <button class="filter-btn active" data-folder="all">Все</button>
+      <button class="filter-btn" data-folder="image">image</button>
+      <button class="filter-btn" data-folder="avatar">avatar</button>
+      <button class="filter-btn" data-folder="plant">plant</button>
+    </div>
+    <div id="gallery">Загрузка...</div>
   </div>
 
   <script>
     const statusEl = document.getElementById('status');
     const galleryEl = document.getElementById('gallery');
+    let currentFilter = 'all';
 
     function setStatus(msg, isError = false) {
       statusEl.textContent = msg;
       statusEl.style.color = isError ? '#dc3545' : '#28a745';
     }
 
+    function getFolderClass(folder) {
+      return 'folder-' + folder;
+    }
+
     async function uploadPhoto() {
       const file = document.getElementById('fileInput').files[0];
-      if (!file) { setStatus('Select a file first.', true); return; }
+      const folder = document.getElementById('folderSelect').value;
+      if (!file) { setStatus('Выберите файл!', true); return; }
       
-      setStatus('Uploading...');
+      setStatus('Загрузка в /' + folder + '/ как "' + file.name + '"...');
       const formData = new FormData();
       formData.append('photo', file);
+      formData.append('folder', folder);
       
       try {
         const res = await fetch('/upload', { method: 'POST', body: formData });
         const text = await res.text();
         if (res.ok) {
-          setStatus('Upload successful.');
+          setStatus('✅ Сохранено: /' + folder + '/' + file.name);
           document.getElementById('fileInput').value = '';
-          loadGallery();
+          loadGallery(currentFilter);
         } else {
-          setStatus('Upload failed: ' + text, true);
+          setStatus('❌ Ошибка: ' + text, true);
         }
       } catch(e) {
-        setStatus('Network error.', true);
+        setStatus('❌ Сетевая ошибка', true);
       }
     }
 
-    async function deletePhoto(filename) {
-      if (!confirm('Delete file: ' + filename + '?')) return;
+    async function deletePhoto(filepath) {
+      if (!confirm('Удалить: ' + filepath + '?')) return;
       try {
-        const res = await fetch('/delete?name=' + encodeURIComponent(filename), { method: 'DELETE' });
+        const res = await fetch('/delete?path=' + encodeURIComponent(filepath), { method: 'DELETE' });
         if (res.ok) {
-          setStatus('File deleted.');
-          loadGallery();
+          setStatus('✅ Удалено');
+          loadGallery(currentFilter);
         } else {
-          setStatus('Delete failed: ' + await res.text(), true);
+          setStatus('❌ Ошибка: ' + await res.text(), true);
         }
       } catch(e) {
-        setStatus('Network error during delete.', true);
+        setStatus('❌ Сетевая ошибка', true);
       }
     }
 
-    async function loadGallery() {
-      galleryEl.innerHTML = 'Loading list...';
+    async function loadGallery(filter = 'all') {
+      galleryEl.innerHTML = 'Загрузка...';
       try {
-        const res = await fetch('/list');
-        const files = await res.json();
+        const res = await fetch('/list?folder=' + filter);
+        const data = await res.json();
         galleryEl.innerHTML = '';
+        
+        const files = data.files || [];
         if (files.length === 0) {
-          galleryEl.innerHTML = '<p style="width:100%; text-align:center; color:#777;">No photos on SD card.</p>';
+          galleryEl.innerHTML = '<p style="width:100%;text-align:center;color:#777;">Нет фото</p>';
           return;
         }
-        files.forEach(f => {
+        
+        files.forEach(item => {
           const div = document.createElement('div');
           div.className = 'photo-item';
+          
+          const tag = document.createElement('span');
+          tag.className = 'folder-tag ' + getFolderClass(item.folder);
+          tag.textContent = item.folder;
+          
           const img = document.createElement('img');
-          img.src = '/photo?name=' + encodeURIComponent(f);
-          img.alt = f;
+          img.src = '/photo?path=' + encodeURIComponent(item.path);
+          img.alt = item.name;
+          img.onerror = () => { img.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140"><rect fill="#e9ecef" width="100%" height="100%"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#999">❌</text></svg>'; };
+          
           const name = document.createElement('div');
           name.className = 'photo-name';
-          name.textContent = f;
+          name.textContent = item.name;
+          
           const btn = document.createElement('button');
           btn.className = 'delete-btn';
-          btn.textContent = 'Delete';
-          btn.onclick = () => deletePhoto(f);
+          btn.textContent = '🗑️ Удалить';
+          btn.onclick = () => deletePhoto(item.path);
+          
+          div.appendChild(tag);
           div.appendChild(img);
           div.appendChild(name);
           div.appendChild(btn);
           galleryEl.appendChild(div);
         });
       } catch(e) {
-        galleryEl.innerHTML = '<p style="color:red;">Error loading gallery.</p>';
+        galleryEl.innerHTML = '<p style="color:red;">❌ Ошибка</p>';
       }
     }
-    window.onload = loadGallery;
+
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+        currentFilter = e.target.dataset.folder;
+        loadGallery(currentFilter);
+      });
+    });
+
+    window.onload = () => loadGallery('all');
   </script>
 </body>
 </html>
 )rawliteral";
 
-// ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ЗАГРУЗКИ =====
+// ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
 File uploadFile;
-String uploadFilename;
+String uploadPath;
 
-// ===== ОБРАБОТЧИКИ ЗАПРОСОВ =====
+// ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+// Базовая защита: убираем только ../ и \, но НЕ меняем имя файла
+String protectPath(String folder, String filename) {
+  // Убираем опасные последовательности
+  filename.replace("../", "");
+  filename.replace("..\\", "");
+  filename.replace("\\", "/");
+  
+  // Если в имени остались слеши — берём только имя файла (последняя часть)
+  if (filename.indexOf('/') != -1) {
+    int last = filename.lastIndexOf('/');
+    filename = filename.substring(last + 1);
+  }
+  
+  return "/" + folder + "/" + filename;
+}
+
+bool isValidFolder(String folder) {
+  for (int i = 0; i < FOLDER_COUNT; i++) {
+    if (folder == FOLDERS[i]) return true;
+  }
+  return false;
+}
+
+void ensureFolderExists(String folder) {
+  String path = "/" + folder;
+  if (!SD.exists(path)) {
+    SD.mkdir(path);
+    Serial.println("[SD] Created: " + path);
+  }
+}
+
+// ===== ОБРАБОТЧИКИ =====
 void handleRoot() {
-  Serial.println("[HTTP] Client requested main page");
   server.send_P(200, "text/html", index_html);
 }
 
@@ -153,13 +233,21 @@ void handleFileUpload() {
   HTTPUpload& upload = server.upload();
   
   if (upload.status == UPLOAD_FILE_START) {
-    uploadFilename = "/" + upload.filename;
-    uploadFilename.replace("../", ""); // Защита от path traversal
-    if (!uploadFilename.endsWith(".jpg") && !uploadFilename.endsWith(".png") && !uploadFilename.endsWith(".jpeg")) {
-      uploadFilename += ".jpg";
+    String folder = server.arg("folder");
+    if (!isValidFolder(folder)) folder = "image";
+    
+    // ⚠️ ИМЯ ФАЙЛА НЕ МЕНЯЕМ — сохраняем как есть!
+    String filename = upload.filename;
+    
+    uploadPath = protectPath(folder, filename);
+    Serial.println("[UPLOAD] Saving: " + uploadPath + " (original name: " + filename + ")");
+    
+    ensureFolderExists(folder);
+    uploadFile = SD.open(uploadPath, FILE_WRITE);
+    
+    if (!uploadFile) {
+      Serial.println("[UPLOAD] ERROR: Cannot create " + uploadPath);
     }
-    Serial.println("[UPLOAD] Starting: " + uploadFilename);
-    uploadFile = SD.open(uploadFilename, FILE_WRITE);
   } 
   else if (upload.status == UPLOAD_FILE_WRITE) {
     if (uploadFile) {
@@ -169,9 +257,7 @@ void handleFileUpload() {
   else if (upload.status == UPLOAD_FILE_END) {
     if (uploadFile) {
       uploadFile.close();
-      Serial.println("[UPLOAD] Finished: " + uploadFilename + " (" + String(upload.totalSize) + " bytes)");
-    } else {
-      Serial.println("[UPLOAD] Failed: File handle closed unexpectedly");
+      Serial.println("[UPLOAD] Done: " + uploadPath + " (" + String(upload.totalSize) + " B)");
     }
   }
 }
@@ -181,135 +267,120 @@ void handleUploadResponse() {
 }
 
 void handleList() {
-  Serial.println("[HTTP] Client requested file list");
-  File root = SD.open("/");
-  String json = "[";
+  String filter = server.arg("folder");
+  String json = "{\"files\":[";
   bool first = true;
   int count = 0;
-  const int MAX_FILES = 50; // Ограничение для экономии памяти
+  const int MAX_FILES = 100;
 
-  if (!root) {
-    server.send(500, "text/plain", "Failed to open SD root");
-    return;
-  }
-
-  while (count < MAX_FILES) {
-    File entry = root.openNextFile();
-    if (!entry) break;
+  for (int f = 0; f < FOLDER_COUNT; f++) {
+    String folder = FOLDERS[f];
+    if (filter != "all" && filter != folder) continue;
     
-    if (!entry.isDirectory()) {
-      String name = String(entry.name());
-      String lower = name;
-      lower.toLowerCase();
-      if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")) {
+    File dir = SD.open("/" + folder);
+    if (!dir || !dir.isDirectory()) { if (dir) dir.close(); continue; }
+    
+    while (count < MAX_FILES) {
+      File entry = dir.openNextFile();
+      if (!entry) break;
+      
+      if (!entry.isDirectory()) {
+        String name = String(entry.name());
+        // Показываем ВСЕ файлы, не только картинки (как вы просили)
         if (!first) json += ",";
-        // Убираем начальный /, если он есть
-        if (name.startsWith("/")) name = name.substring(1);
-        json += "\"" + name + "\"";
+        String fullPath = "/" + folder + "/" + name;
+        json += "{\"name\":\"" + name + "\",";
+        json += "\"folder\":\"" + folder + "\",";
+        json += "\"path\":\"" + fullPath + "\"}";
         first = false;
         count++;
       }
+      entry.close();
     }
-    entry.close();
+    dir.close();
   }
-  json += "]";
-  root.close();
-  
+  json += "]}";
   server.send(200, "application/json", json);
 }
 
 void handlePhoto() {
-  String name = "/" + server.arg("name");
-  Serial.println("[HTTP] Client requested photo: " + name);
+  String path = server.arg("path");
+  if (!path.startsWith("/")) path = "/" + path;
   
-  if (!SD.exists(name)) {
+  if (path.indexOf("..") != -1) {
+    server.send(400, "text/plain", "Invalid path");
+    return;
+  }
+  if (!SD.exists(path)) {
     server.send(404, "text/plain", "Not Found");
     return;
   }
 
-  File file = SD.open(name, FILE_READ);
-  String contentType = "image/jpeg";
-  String lower = name;
-  lower.toLowerCase();
-  if (lower.endsWith(".png")) contentType = "image/png";
-
+  File file = SD.open(path, FILE_READ);
+  if (!file) { server.send(500, "text/plain", "Error"); return; }
+  
+  String ct = "image/jpeg";
+  String l = path; l.toLowerCase();
+  if (l.endsWith(".png")) ct = "image/png";
+  else if (l.endsWith(".gif")) ct = "image/gif";
+  
   server.sendHeader("Content-Length", String(file.size()));
-  server.sendHeader("Content-Type", contentType);
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.streamFile(file, contentType);
+  server.sendHeader("Content-Type", ct);
+  server.sendHeader("Cache-Control", "no-cache");
+  server.streamFile(file, ct);
   file.close();
 }
 
 void handleDelete() {
-  String name = "/" + server.arg("name");
-  Serial.println("[HTTP] Client requested delete: " + name);
+  String path = server.arg("path");
+  if (!path.startsWith("/")) path = "/" + path;
   
-  if (name.indexOf("..") != -1 || name.indexOf("\\") != -1) {
-    Serial.println("[DELETE] Blocked: Invalid path characters");
-    server.send(400, "text/plain", "Invalid filename");
+  if (path.indexOf("..") != -1 || path.indexOf("\\") != -1) {
+    server.send(400, "text/plain", "Invalid");
     return;
   }
   
-  if (!SD.exists(name)) {
-    Serial.println("[DELETE] Failed: File not found on SD");
-    server.send(404, "text/plain", "File not found");
-    return;
+  bool allowed = false;
+  for (int i = 0; i < FOLDER_COUNT; i++) {
+    if (path.startsWith("/" + FOLDERS[i] + "/")) { allowed = true; break; }
   }
-
-  if (SD.remove(name)) {
-    Serial.println("[DELETE] Success: " + name);
+  if (!allowed) { server.send(403, "text/plain", "Denied"); return; }
+  
+  if (!SD.exists(path)) { server.send(404, "text/plain", "Not found"); return; }
+  
+  if (SD.remove(path)) {
+    Serial.println("[DELETE] OK: " + path);
     server.send(200, "text/plain", "OK");
   } else {
-    Serial.println("[DELETE] Failed: SD.remove() error");
-    server.send(500, "text/plain", "SD write error");
+    server.send(500, "text/plain", "SD error");
   }
 }
 
-// ===== ИНИЦИАЛИЗАЦИЯ И НАСТРОЙКА =====
+// ===== SETUP =====
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\n[SYSTEM] ESP32 Booting...");
+  Serial.println("\n[BOOT] ESP32 starting...");
 
-  // 1. Подключение к Wi-Fi
-  Serial.print("[WIFI] Connecting to: " + String(ssid));
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\n[WIFI] Connected. IP: " + WiFi.localIP().toString());
+  Serial.print("[WiFi] Connecting");
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  Serial.println("\n[WiFi] OK: " + WiFi.localIP().toString());
 
-  // 2. Надёжная инициализация SD-карты
-  Serial.println("[SD] Initializing with CS pin: " + String(SD_CS_PIN));
   if (!SD.begin(SD_CS_PIN, SPI, SPI_FREQ_INIT)) {
-    Serial.println("[SD] Mount failed at " + String(SPI_FREQ_INIT/1000000) + " MHz. Trying fallback 1 MHz...");
+    Serial.println("[SD] Retry at 1MHz...");
     if (!SD.begin(SD_CS_PIN, SPI, 1000000)) {
-      Serial.println("[CRITICAL] SD card initialization FAILED.");
-      Serial.println("Checklist:");
-      Serial.println("1. Verify SD_CS_PIN matches your hardware wiring");
-      Serial.println("2. Format card to FAT32 (for <=32GB) or exFAT (for >32GB)");
-      Serial.println("3. Check power supply (3.3V stable) and wiring length (<15cm)");
-      Serial.println("4. Ensure module has logic level shifter if powered by 5V");
-      while (1) { delay(1000); }
+      Serial.println("[SD] FAILED!");
+      while(1) delay(1000);
     }
   }
-  Serial.println("[SD] Mount successful");
+  Serial.println("[SD] OK");
 
-  // Диагностика карты
-  uint8_t cardType = SD.cardType();
-  Serial.print("[SD] Card Type: ");
-  switch (cardType) {
-    case CARD_MMC:  Serial.println("MMC"); break;
-    case CARD_SD:   Serial.println("SDSC (<=2GB)"); break;
-    case CARD_SDHC: Serial.println("SDHC/SDXC (>2GB)"); break;
-    default:        Serial.println("UNKNOWN"); break;
+  // Создаём папки при старте
+  for (int i = 0; i < FOLDER_COUNT; i++) {
+    ensureFolderExists(FOLDERS[i]);
   }
-  Serial.print("[SD] Capacity: "); Serial.print(SD.cardSize() / (1024 * 1024)); Serial.println(" MB");
-  Serial.print("[SD] Total space: "); Serial.print(SD.totalBytes() / (1024 * 1024)); Serial.println(" MB");
-  Serial.print("[SD] Used space: "); Serial.print(SD.usedBytes() / (1024 * 1024)); Serial.println(" MB");
 
-  // 3. Регистрация HTTP-маршрутов
   server.on("/", HTTP_GET, handleRoot);
   server.on("/upload", HTTP_POST, handleUploadResponse, handleFileUpload);
   server.on("/list", HTTP_GET, handleList);
@@ -317,8 +388,7 @@ void setup() {
   server.on("/delete", HTTP_DELETE, handleDelete);
 
   server.begin();
-  Serial.println("[HTTP] Web server started on port 80");
-  Serial.println("[INFO] Open http://" + WiFi.localIP().toString() + " in browser");
+  Serial.println("[HTTP] Ready: http://" + WiFi.localIP().toString());
 }
 
 void loop() {
