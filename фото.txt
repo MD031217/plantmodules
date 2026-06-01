@@ -11,6 +11,7 @@ const char* password = "";
 #define SD_CS_PIN SS
 #define SPI_FREQ_INIT 4000000
 
+// Папки для хранения фото
 const char* FOLDERS[] = {"image", "avatar", "plant"};
 const int FOLDER_COUNT = 3;
 
@@ -169,7 +170,7 @@ const char index_html[] PROGMEM = R"rawliteral(
           galleryEl.appendChild(div);
         });
       } catch(e) {
-        galleryEl.innerHTML = '<p style="color:red;">❌ Ошибка</p>';
+        galleryEl.innerHTML = '<p style="color:red;">❌ Ошибка загрузки галереи</p>';
       }
     }
 
@@ -193,20 +194,16 @@ File uploadFile;
 String uploadPath;
 
 // ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
-// Базовая защита: убираем только ../ и \, но НЕ меняем имя файла
 String protectPath(String folder, String filename) {
-  // Убираем опасные последовательности
   filename.replace("../", "");
   filename.replace("..\\", "");
   filename.replace("\\", "/");
-  
-  // Если в имени остались слеши — берём только имя файла (последняя часть)
   if (filename.indexOf('/') != -1) {
     int last = filename.lastIndexOf('/');
     filename = filename.substring(last + 1);
   }
-  
-  return "/" + folder + "/" + filename;
+  // ✅ Явное преобразование в String для безопасной конкатенации
+  return String("/") + folder + "/" + filename;
 }
 
 bool isValidFolder(String folder) {
@@ -217,14 +214,14 @@ bool isValidFolder(String folder) {
 }
 
 void ensureFolderExists(String folder) {
-  String path = "/" + folder;
+  String path = String("/") + folder;
   if (!SD.exists(path)) {
     SD.mkdir(path);
     Serial.println("[SD] Created: " + path);
   }
 }
 
-// ===== ОБРАБОТЧИКИ =====
+// ===== ОБРАБОТЧИКИ ЗАПРОСОВ =====
 void handleRoot() {
   server.send_P(200, "text/html", index_html);
 }
@@ -234,19 +231,17 @@ void handleFileUpload() {
   
   if (upload.status == UPLOAD_FILE_START) {
     String folder = server.arg("folder");
-    if (!isValidFolder(folder)) folder = "image";
+    if (!isValidFolder(folder)) folder = FOLDERS[0];
     
-    // ⚠️ ИМЯ ФАЙЛА НЕ МЕНЯЕМ — сохраняем как есть!
     String filename = upload.filename;
-    
     uploadPath = protectPath(folder, filename);
-    Serial.println("[UPLOAD] Saving: " + uploadPath + " (original name: " + filename + ")");
+    Serial.println("[UPLOAD] Saving: " + uploadPath + " (original: " + filename + ")");
     
     ensureFolderExists(folder);
-    uploadFile = SD.open(uploadPath, FILE_WRITE);
+    uploadFile = SD.open(uploadPath.c_str(), FILE_WRITE);
     
     if (!uploadFile) {
-      Serial.println("[UPLOAD] ERROR: Cannot create " + uploadPath);
+      Serial.println("[UPLOAD] ERROR: Cannot create file");
     }
   } 
   else if (upload.status == UPLOAD_FILE_WRITE) {
@@ -277,7 +272,8 @@ void handleList() {
     String folder = FOLDERS[f];
     if (filter != "all" && filter != folder) continue;
     
-    File dir = SD.open("/" + folder);
+    String dirPath = String("/") + folder;
+    File dir = SD.open(dirPath.c_str());
     if (!dir || !dir.isDirectory()) { if (dir) dir.close(); continue; }
     
     while (count < MAX_FILES) {
@@ -286,12 +282,13 @@ void handleList() {
       
       if (!entry.isDirectory()) {
         String name = String(entry.name());
-        // Показываем ВСЕ файлы, не только картинки (как вы просили)
         if (!first) json += ",";
-        String fullPath = "/" + folder + "/" + name;
+        
+        String fullPath = String("/") + folder + "/" + name;
         json += "{\"name\":\"" + name + "\",";
         json += "\"folder\":\"" + folder + "\",";
         json += "\"path\":\"" + fullPath + "\"}";
+        
         first = false;
         count++;
       }
@@ -305,7 +302,7 @@ void handleList() {
 
 void handlePhoto() {
   String path = server.arg("path");
-  if (!path.startsWith("/")) path = "/" + path;
+  if (!path.startsWith("/")) path = String("/") + path;
   
   if (path.indexOf("..") != -1) {
     server.send(400, "text/plain", "Invalid path");
@@ -316,7 +313,7 @@ void handlePhoto() {
     return;
   }
 
-  File file = SD.open(path, FILE_READ);
+  File file = SD.open(path.c_str(), FILE_READ);
   if (!file) { server.send(500, "text/plain", "Error"); return; }
   
   String ct = "image/jpeg";
@@ -331,27 +328,42 @@ void handlePhoto() {
   file.close();
 }
 
+// ✅ ИСПРАВЛЕНА ОШИБКА КОМПИЛЯЦИИ ЗДЕСЬ
 void handleDelete() {
   String path = server.arg("path");
-  if (!path.startsWith("/")) path = "/" + path;
+  if (!path.startsWith("/")) path = String("/") + path;
+  
+  Serial.println("[HTTP] Delete requested: " + path);
   
   if (path.indexOf("..") != -1 || path.indexOf("\\") != -1) {
-    server.send(400, "text/plain", "Invalid");
+    server.send(400, "text/plain", "Invalid path");
     return;
   }
   
+  // ✅ Исправлено: используем String() для конкатенации const char* массивов
   bool allowed = false;
   for (int i = 0; i < FOLDER_COUNT; i++) {
-    if (path.startsWith("/" + FOLDERS[i] + "/")) { allowed = true; break; }
+    String folderPath = String("/") + FOLDERS[i] + "/";
+    if (path.startsWith(folderPath)) {
+      allowed = true;
+      break;
+    }
   }
-  if (!allowed) { server.send(403, "text/plain", "Denied"); return; }
+  if (!allowed) {
+    server.send(403, "text/plain", "Access denied");
+    return;
+  }
   
-  if (!SD.exists(path)) { server.send(404, "text/plain", "Not found"); return; }
-  
+  if (!SD.exists(path)) {
+    server.send(404, "text/plain", "File not found");
+    return;
+  }
+
   if (SD.remove(path)) {
-    Serial.println("[DELETE] OK: " + path);
+    Serial.println("[DELETE] Success: " + path);
     server.send(200, "text/plain", "OK");
   } else {
+    Serial.println("[DELETE] Failed");
     server.send(500, "text/plain", "SD error");
   }
 }
@@ -376,7 +388,7 @@ void setup() {
   }
   Serial.println("[SD] OK");
 
-  // Создаём папки при старте
+  // Автоматическое создание папок при старте
   for (int i = 0; i < FOLDER_COUNT; i++) {
     ensureFolderExists(FOLDERS[i]);
   }
