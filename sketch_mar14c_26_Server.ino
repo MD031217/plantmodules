@@ -145,6 +145,26 @@ bool initSDCard() {
   return true;
 }
 
+
+// Добавь эту функцию где-то после initSDCard()
+void createSDDirectories() {
+  Serial.println("=== Создание папок на SD-карте ===");
+  
+  const char* folders[] = {"/sd/image", "/sd/avatars", "/sd/plant"};
+  
+  for (int i = 0; i < 3; i++) {
+    if (!SD.exists(folders[i])) {
+      if (SD.mkdir(folders[i])) {
+        Serial.printf("Создана папка: %s\n", folders[i]);
+      } else {
+        Serial.printf("Не удалось создать папку: %s\n", folders[i]);
+      }
+    } else {
+      Serial.printf("Папка уже существует: %s\n", folders[i]);
+    }
+  }
+}
+
 // ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
 void initDB() {
   Serial.println("=== Инициализация SQLite БД ===");
@@ -7620,12 +7640,11 @@ void handleUpdateProfile() {
     }
 }
 
-// === НОВОЕ: Загрузка аватара (chunked) ===
+// === УЛУЧШЕННАЯ ЗАГРУЗКА АВАТАРА ===
 void handleAvatarUpload() {
     HTTPUpload& upload = server.upload();
     
     if (upload.status == UPLOAD_FILE_START) {
-        // Валидация токена
         String auth = server.header("Authorization");
         if (!auth.startsWith("Bearer ")) {
             server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
@@ -7638,60 +7657,54 @@ void handleAvatarUpload() {
             server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
             return;
         }
-        
-        // Сохраняем старый путь для удаления
+
+        // Получаем и сохраняем старый аватар для удаления
         pendingOldAvatarPath = getCurrentAvatarPath(pendingUserId);
         
-        // Генерируем имя файла
+        // Новое имя файла
         pendingNewAvatarPath = "/sd/avatars/av_" + String(millis()) + ".jpg";
-        Serial.printf("Uploading avatar: %s\n", pendingNewAvatarPath.c_str());
-        
+        Serial.printf("→ Загрузка аватара: %s\n", pendingNewAvatarPath.c_str());
+
     } else if (upload.status == UPLOAD_FILE_WRITE) {
-        // Потоковая запись на SD - НЕ грузим в RAM!
+        if (pendingNewAvatarPath.length() == 0) return;
+        
         File f = SD.open(pendingNewAvatarPath, FILE_WRITE);
         if (f) {
             f.write(upload.buf, upload.currentSize);
             f.close();
         } else {
-            Serial.printf("Failed to open %s for write\n", pendingNewAvatarPath.c_str());
+            Serial.printf("Ошибка записи: %s\n", pendingNewAvatarPath.c_str());
         }
-        
+
     } else if (upload.status == UPLOAD_FILE_END) {
-        // Проверка: файл записан?
         if (SD.exists(pendingNewAvatarPath)) {
-            // Удаляем старый файл ТОЛЬКО если это локальный путь
+            // Удаляем старый аватар
             if (pendingOldAvatarPath.length() > 0 && !pendingOldAvatarPath.startsWith("http")) {
-                String oldFullPath = "/sd/" + pendingOldAvatarPath;
-                if (SD.exists(oldFullPath)) {
-                    SD.remove(oldFullPath);
-                    Serial.printf("Deleted old avatar: %s\n", oldFullPath.c_str());
+                String oldFull = "/sd/" + pendingOldAvatarPath;
+                if (SD.exists(oldFull)) {
+                    SD.remove(oldFull);
+                    Serial.printf("Удалён старый аватар: %s\n", oldFull.c_str());
                 }
             }
-            
-            // Обновляем БД: относительный путь "avatars/av_..."
-            String relPath = "avatars/av_" + String(millis()) + ".jpg";
-            // Исправляем: берём имя из реально записанного файла
-            int lastSlash = pendingNewAvatarPath.lastIndexOf('/');
-            if (lastSlash >= 0) {
-                relPath = "avatars/" + pendingNewAvatarPath.substring(lastSlash + 1);
-            }
-            
+
+            // Относительный путь для БД
+            String relPath = "avatars/" + pendingNewAvatarPath.substring(12); // после /sd/avatars/
+
             if (updateUserAvatarInDB(server.header("Authorization").substring(7), relPath)) {
-                DynamicJsonDocument doc(128);
+                DynamicJsonDocument doc(256);
                 doc["success"] = true;
                 doc["avatar"] = relPath;
-                String out;
-                serializeJson(doc, out);
-                server.send(200, "application/json", out);
-                Serial.println("Avatar upload complete");
+                String json;
+                serializeJson(doc, json);
+                server.send(200, "application/json", json);
             } else {
                 server.send(500, "application/json", "{\"error\":\"DB update failed\"}");
             }
         } else {
-            server.send(500, "application/json", "{\"error\":\"File write failed\"}");
+            server.send(500, "application/json", "{\"error\":\"File not saved\"}");
         }
-        
-        // Сброс глобальных переменных
+
+        // Сброс
         pendingUserId = 0;
         pendingOldAvatarPath = "";
         pendingNewAvatarPath = "";
@@ -7813,6 +7826,7 @@ void setup() {
   
   // Инициализация SD-карты и БД
   initDB();
+  createSDDirectories();
 
   if (!db) {
     Serial.println("Критическая ошибка: БД не инициализирована!");
