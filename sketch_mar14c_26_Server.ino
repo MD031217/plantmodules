@@ -2582,20 +2582,20 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
     <div class="top-sticky-wrapper">
         <header class="site-header">
             <a href="/profile" class="user-pill">
-                <img src="Т.пол.png" alt="Avatar Dark" class="user-avatar avatar-dark" id="header-avatar-dark">
-                <img src="Св.пол.png" alt="Avatar Light" class="user-avatar avatar-light" id="header-avatar-light">
+                <img src="/image/Т.пол.png" alt="Avatar Dark" class="user-avatar avatar-dark" id="header-avatar-dark">
+                <img src="/image/Св.пол.png" alt="Avatar Light" class="user-avatar avatar-light" id="header-avatar-light">
                 <span class="user-text" id="header-username">User_login</span>
             </a>
 
             <div class="logo-container">
-                <img src="Светлая.png" alt="Зелёная полка (Dark)" class="main-logo logo-dark">
-                <img src="Тёмная.png" alt="Зелёная полка (Light)" class="main-logo logo-light">
+                <img src="/image/Светлая.png" alt="Зелёная полка (Dark)" class="main-logo logo-dark">
+                <img src="/image/Тёмная.png" alt="Зелёная полка (Light)" class="main-logo logo-light">
             </div>
 
             <div class="theme-switcher" onclick="toggleTheme()">
                 <input type="checkbox" id="theme-toggle" class="mode-toggle">
                 <label for="theme-toggle">
-                    <img src="тема.png" alt="Тема" class="theme-icon-img">
+                    <img src="/image/тема.png" alt="Тема" class="theme-icon-img">
                 </label>
             </div>
         </header>
@@ -2611,10 +2611,10 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
         <div class="card">
             <a href="/login" class="add-link" style="text-decoration: none;">
                 <div class="logout-icon" onclick="logout()" title="Выйти">
-                    <img src="ненаведдверьтем.png" alt="Выйти" class="logout-img logout-dark-default">
-                    <img src="наведдверьтем.png" alt="Выйти при наведении" class="logout-img logout-dark-hover">
-                    <img src="ненаведдверьсвет.png" alt="Выйти" class="logout-img logout-light-default">
-                    <img src="наведдверьсвет.png" alt="Выйти при наведении" class="logout-img logout-light-hover">
+                    <img src="/image/ненаведдверьтем.png" alt="Выйти" class="logout-img logout-dark-default">
+                    <img src="/image/наведдверьтем.png" alt="Выйти при наведении" class="logout-img logout-dark-hover">
+                    <img src="/image/ненаведдверьсвет.png" alt="Выйти" class="logout-img logout-light-default">
+                    <img src="/image/наведдверьсвет.png" alt="Выйти при наведении" class="logout-img logout-light-hover">
                 </div>
             </a>
 
@@ -3419,20 +3419,20 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
     <div class="top-sticky-wrapper">
         <header class="site-header">
             <div class="user-pill">
-                <img src="Т.пол.png" alt="User" class="user-avatar avatar-dark" id="header-avatar-dark">
-                <img src="Св.пол.png" alt="User" class="user-avatar avatar-light" id="header-avatar-light">
+                <img src="/image/Т.пол.png" alt="User" class="user-avatar avatar-dark" id="header-avatar-dark">
+                <img src="/image/Св.пол.png" alt="User" class="user-avatar avatar-light" id="header-avatar-light">
                 <span class="user-text" id="header-username">User_login</span>
             </div>
             
             <div class="logo-container">
-                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
-                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="/image/Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="/image/Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
             
             <div class="theme-switcher" onclick="toggleTheme()">
                 <input type="checkbox" id="theme-toggle" class="mode-toggle">
                 <label for="theme-toggle">
-                    <img src="тема.png" alt="Theme" class="theme-icon-img">
+                    <img src="/image/тема.png" alt="Theme" class="theme-icon-img">
                 </label>
             </div>
         </header>
@@ -3482,11 +3482,11 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
                 <div class="edit-password-inputs">
                     <div class="password-input-wrapper">
                         <input type="password" id="new-password" placeholder="Новый пароль">
-                        <img src="warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-1" style="display:none;">
+                        <img src="/image/warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-1" style="display:none;">
                     </div>
                     <div class="password-input-wrapper">
                         <input type="password" id="confirm-password" placeholder="Подтверждение нового пароль">
-                        <img src="warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-2" style="display:none;">
+                        <img src="/image/warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-2" style="display:none;">
                     </div>
                 </div>
             </div>
@@ -4499,18 +4499,18 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
     <div class="top-sticky-wrapper">
         <header class="site-header">
             <a href="/profile" class="user-pill" aria-label="Профиль">
-                <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
-                <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
+                <img src="/image/Т.пол.png" alt="" class="user-avatar avatar-dark">
+                <img src="/image/Св.пол.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">User_login</span>
             </a>
 
             <div class="logo-container">
-                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
-                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="/image/Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="/image/Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
 
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
-                <img src="тема.png" alt="" class="theme-icon-img">
+                <img src="/image/тема.png" alt="" class="theme-icon-img">
             </label>
         </header>
         <!-- ВАЖНО: чекбокс вынесен за пределы header -->
@@ -4526,8 +4526,8 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
         <main class="main-content">
             <div class="scan-card">
                 <div class="wifi-icon">
-                    <img src="Светлая_большая.png" alt="WiFi" class="wifi-img wifi-light">
-                    <img src="Тёмная_большая.png" alt="WiFi" class="wifi-img wifi-dark">
+                    <img src="/image/Светлая_большая.png" alt="WiFi" class="wifi-img wifi-light">
+                    <img src="/image/Тёмная_большая.png" alt="WiFi" class="wifi-img wifi-dark">
                 </div>
 
                 <h1 class="scan-title">Сканирование сетей</h1>
@@ -4537,8 +4537,8 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                 <div class="network-list-section" id="networkList" style="display: none;">
                     <div class="network-item">
                         <div class="network-icon">
-                            <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                            <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                            <img src="/image/Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                            <img src="/image/Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
                         </div>
                         <span class="network-name">HONOR 7</span>
                         <span class="network-security">Защищено/Общедоступная</span>
@@ -4547,8 +4547,8 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
 
                     <div class="network-item">
                         <div class="network-icon">
-                            <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                            <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                            <img src="/image/Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                            <img src="/image/Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
                         </div>
                         <span class="network-name">iPhone</span>
                         <span class="network-security">Защищено/Общедоступная</span>
@@ -4557,8 +4557,8 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
 
                     <div class="network-item empty">
                         <div class="network-icon">
-                            <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                            <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                            <img src="/image/Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                            <img src="/image/Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
                         </div>
                         <span class="network-name" style="visibility: hidden;">—</span>
                         <span class="network-security"></span>
@@ -4630,8 +4630,8 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
         <div class="modal-card">
             <div class="modal-network-row">
                 <div class="network-icon">
-                    <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                    <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                    <img src="/image/Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                    <img src="/image/Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
                 </div>
                 <span class="modal-network-name" id="modalNetworkName">iPhone</span>
                 <span class="modal-network-security">Защищено</span>
@@ -4641,7 +4641,7 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             <div class="modal-input-wrapper">
                 <input type="password" class="modal-input" id="modalPasswordInput">
                 <button type="button" class="modal-eye-btn" id="eyeBtn">
-                    <img src="Открытый.png" id="eyeImg" alt="Показать пароль">
+                    <img src="/image/Открытый.png" id="eyeImg" alt="Показать пароль">
                 </button>
             </div>
         </div>
@@ -4715,10 +4715,10 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
         const updateEyeSource = () => {
             const eyeImg = document.getElementById('eyeImg');
             if (passwordVisible) {
-                eyeImg.src = 'Закрытый.png';
+                eyeImg.src = '/image/Закрытый.png';
                 eyeImg.alt = 'Скрыть пароль';
             } else {
-                eyeImg.src = 'Открытый.png';
+                eyeImg.src = '/image/Открытый.png';
                 eyeImg.alt = 'Показать пароль';
             }
         };
@@ -5646,18 +5646,18 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
         
         <header class="site-header">
             <a href="/profile" class="user-pill" aria-label="Профиль">
-                <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
-                <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
+                <img src="/image/Т.пол.png" alt="" class="user-avatar avatar-dark">
+                <img src="/image/Св.пол.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">User_login</span>
             </a>
 
             <div class="logo-container">
-                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
-                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="/image/Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="/image/Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
 
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
-                <img src="тема.png" alt="" class="theme-icon-img">
+                <img src="/image/тема.png" alt="" class="theme-icon-img">
             </label>
         </header>
         <input type="checkbox" id="themeToggle" class="mode-toggle">
@@ -5674,14 +5674,14 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
         <div class="cards-area">
             <div id="plants-container" class="plants-container"></div>
             <div class="plant-card glowing" data-plant-name="Фикус" data-params='{}'>
-                <img src="Фикус.png" alt="Фикус" class="plant-img">
+                <img src="/image/Фикус.png" alt="Фикус" class="plant-img">
                 <a href="/app" class="plant-label">Фикус</a>
                 <button class="edit-plant-btn" title="Редактировать">f</button>
                 <button class="delete-plant-btn" onclick="deletePlant(this, 'Фикус')" title="Удалить растение">×</button>
             </div>
             
             <div class="plant-card glowing" data-plant-name="Монстера" data-params='{}'>
-                <img src="Монстера.png" alt="Монстера" class="plant-img">
+                <img src="/image/Монстера.png" alt="Монстера" class="plant-img">
                 <a href="/app" class="plant-label">Монстера</a>
                 <button class="edit-plant-btn" title="Редактировать">f</button>
                 <button class="delete-plant-btn" onclick="deletePlant(this, 'Монстера')" title="Удалить растение">×</button>
@@ -5689,8 +5689,8 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
             
             <div class="plant-card add-card glowing" id="addPlantCard">
                 <div class="add-link">
-                    <img src="Тёмная_иконка.png" alt="Добавить" class="plus-icon icon-dark">
-                    <img src="Светлая_иконка.png" alt="Добавить" class="plus-icon icon-light">
+                    <img src="/image/Тёмная_иконка.png" alt="Добавить" class="plus-icon icon-dark">
+                    <img src="/image/Светлая_иконка.png" alt="Добавить" class="plus-icon icon-light">
                 </div>
             </div>
         </div>
@@ -7272,18 +7272,18 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
     <div class="top-sticky-wrapper">
         <header class="site-header">
             <a href="/profile" class="user-pill" aria-label="Профиль">
-                <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
-                <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
+                <img src="/image/Т.пол.png" alt="" class="user-avatar avatar-dark">
+                <img src="/image/Св.пол.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">User_login</span>
             </a>
 
             <div class="logo-container">
-                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
-                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="/image/Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="/image/Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
 
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
-                <img src="тема.png" alt="" class="theme-icon-img">
+                <img src="/image/тема.png" alt="" class="theme-icon-img">
             </label>
         </header>
 <!-- ВАЖНО: input вынесен за пределы header, чтобы не ломать flex-верстку и CSS-селекторы темы -->
@@ -7297,8 +7297,8 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="page-wrapper">
-        <img src="Лево.png" alt="Leaf Decor" class="deco-leaf leaf-left">
-        <img src="Право.png" alt="Leaf Decor" class="deco-leaf leaf-right">
+        <img src="/image/Лево.png" alt="Leaf Decor" class="deco-leaf leaf-left">
+        <img src="/image/Право.png" alt="Leaf Decor" class="deco-leaf leaf-right">
         
         <div class="content-block">
             <h1 class="hero-title">Мы любим то,<br>что делаем</h1>
@@ -7325,7 +7325,7 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
 
         <div class="modules-gallery">
             <div class="module-card">
-                <img src="Осветительный.png" alt="Освещение" class="module-icon">
+                <img src="/image/Осветительный.png" alt="Освещение" class="module-icon">
                 <h3 class="module-title">Освещение растений</h3>
                 <p class="module-description">
                     Автоматическая подсветка с регулировкой интенсивности и спектра для оптимального фотосинтеза
@@ -7333,7 +7333,7 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="module-card">
-                <img src="Полив.png" alt="Полив" class="module-icon">
+                <img src="/image/Полив.png" alt="Полив" class="module-icon">
                 <h3 class="module-title">Полив растений</h3>
                 <p class="module-description">
                     Умная система полива с контролем влажности почвы и автоматическим дозированием воды
@@ -7776,7 +7776,30 @@ void handleNotFound() {
   handleRoot();
 }
 
+// === Отдача статических изображений с SD-карты ===
+void handleStaticImage() {
+  String filePath = server.uri();           // например: /image/Т.пол.png
+  String fullPath = "/sd" + filePath;       // → /sd/image/Т.пол.png
 
+  if (!SD.exists(fullPath)) {
+    server.send(404, "text/plain", "Image not found");
+    return;
+  }
+
+  String contentType = "image/jpeg";
+  if (filePath.endsWith(".png")) contentType = "image/png";
+  else if (filePath.endsWith(".gif")) contentType = "image/gif";
+  else if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) contentType = "image/jpeg";
+
+  server.sendHeader("Cache-Control", "public, max-age=31536000"); // кэшировать на год
+  File file = SD.open(fullPath, FILE_READ);
+  if (file) {
+    server.streamFile(file, contentType);
+    file.close();
+  } else {
+    server.send(500, "text/plain", "Failed to open file");
+  }
+}
 
 // ====================== SETUP ======================
 void setup() {
@@ -7894,6 +7917,8 @@ server.on("/api/logout", HTTP_POST, handleApiLogout);
 server.on("/api/login", HTTP_POST, handleApiLogin);      // ЗАМЕНИТЬ старую версию
 server.on("/api/register", HTTP_POST, handleApiRegister); // ЗАМЕНИТЬ старую версию
   server.begin();
+  server.on("/image/*", HTTP_GET, handleStaticImage);
+  server.onNotFound(handleNotFound); // уже должно быть
   Serial.println("Web server started");
   
   // Настройка OTA
