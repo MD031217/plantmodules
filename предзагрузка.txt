@@ -5,11 +5,10 @@
 WebServer server(80);
 Preferences prefs;
 
-// Точка доступа для первоначальной настройки
 const char* apSSID = "GreenShelf_Setup";
-const char* apPASS = "12345678"; 
+const char* apPASS = "12345678";  // Минимум 8 символов
 
-// Ваш HTML встроен через raw literal (не требует экранирования)
+// Ваш HTML + JS встроен через raw literal. Дизайн сохранён 1:1.
 const char settings_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
@@ -151,6 +150,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
         }
         .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
         .btn-scan:active { transform: translateY(0); }
+        .btn-scan:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
         .network-list-section {
             background: var(--section-list-bg); border-radius: 16px; padding: 20px;
             margin-top: 35px; box-shadow: var(--section-list-shadow);
@@ -183,6 +183,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
         }
         .btn-add-network:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
         .btn-add-network:active { transform: translateY(0); }
+        .btn-add-network:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
         .manual-section {
             background: var(--manual-section-bg); border-radius: var(--card-radius); padding: 50px 50px 55px;
             box-shadow: var(--card-shadow); margin-bottom: 30px;
@@ -209,13 +210,13 @@ const char settings_html[] PROGMEM = R"rawliteral(
         .form-group { display: flex; flex-direction: column; }
         .form-group.full-width { grid-column: 1 / -1; }
         .form-label { font-size: 16px; color: var(--label-color); margin-bottom: 10px; font-weight: 400; transition: color var(--transition-speed) ease; }
-        .form-input {
+        .form-input, .form-select {
             border: 2px solid var(--input-border); border-radius: 20px; padding: 16px 22px;
             font-size: 16px; color: var(--title-color); background: var(--input-bg);
             outline: none; transition: border-color 0.3s ease, background var(--transition-speed) ease, color var(--transition-speed) ease;
         }
         .form-input::placeholder { color: var(--label-color); }
-        .form-input:focus { border-color: var(--input-focus-border); }
+        .form-input:focus, .form-select:focus { border-color: var(--input-focus-border); }
         .site-footer { background: var(--footer-bg); color: var(--footer-text); padding: 36px 40px 0; transition: background var(--transition-speed) ease; flex-shrink: 0; }
         .footer-columns { display: grid; grid-template-columns: 1.3fr 1fr 0.8fr; gap: 30px; max-width: 900px; margin: 0 auto; padding-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.2); }
         .footer-column-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: var(--footer-column-title); }
@@ -293,6 +294,10 @@ const char settings_html[] PROGMEM = R"rawliteral(
         .network-item:nth-child(1) { animation-delay: 0.1s; }
         .network-item:nth-child(2) { animation-delay: 0.2s; }
         .network-item:nth-child(3) { animation-delay: 0.3s; }
+        /* Статус подключения */
+        #connectStatus { margin-top: 12px; font-size: 14px; text-align: center; min-height: 20px; }
+        #connectStatus.success { color: var(--accent-green); }
+        #connectStatus.error { color: var(--danger); }
     </style>
 </head>
 <body class="theme-dark">
@@ -330,6 +335,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 <button class="btn-scan" id="scanBtn">Начать сканирование</button>
                 <div class="network-list-section" id="networkList" style="display: none;"></div>
             </div>
+
             <div class="manual-section">
                 <h2 class="manual-title">
                     <span class="plus-icon">
@@ -347,7 +353,12 @@ const char settings_html[] PROGMEM = R"rawliteral(
                     </div>
                     <div class="form-group">
                         <label class="form-label">Тип безопасности</label>
-                        <input type="text" id="wifiSec" class="form-input" placeholder="WPA2">
+                        <select id="wifiSec" class="form-select">
+                            <option value="WPA2">WPA/WPA2-Personal</option>
+                            <option value="WPA">WPA-Personal</option>
+                            <option value="WEP">WEP</option>
+                            <option value="OPEN">Открытая (без пароля)</option>
+                        </select>
                     </div>
                     <div class="form-group full-width">
                         <label class="form-label">Пароль</label>
@@ -357,6 +368,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
                         <button type="button" class="btn-add-network" id="addNetworkBtn">Добавить</button>
                     </div>
                 </div>
+                <div id="connectStatus"></div>
             </div>
         </main>
         <footer class="site-footer">
@@ -384,6 +396,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
             <div class="footer-copyright">2026 Зелёная полка</div>
         </footer>
     </div>
+
     <div class="modal-overlay" id="passwordModal">
         <div class="modal-card">
             <div class="modal-network-row">
@@ -403,161 +416,241 @@ const char settings_html[] PROGMEM = R"rawliteral(
             </div>
         </div>
     </div>
+
     <script>
-        (function () {
-            const toggle = document.getElementById('themeToggle');
-            const body   = document.body;
-            const KEY    = 'theme'; 
-            const saved = localStorage.getItem(KEY) || 'dark';
-            body.classList.remove('theme-dark', 'theme-light');
-            body.classList.add('theme-' + saved);
-            if (toggle) toggle.checked = (saved === 'light');
-            if (toggle) {
-                toggle.addEventListener('change', function () {
-                    const next = toggle.checked ? 'light' : 'dark';
-                    body.classList.remove('theme-dark', 'theme-light');
-                    body.classList.add('theme-' + next);
-                    localStorage.setItem(KEY, next);
-                });
-            }
-        })();
-        const passwordInput = document.getElementById('modalPasswordInput');
-        const eyeBtn = document.getElementById('eyeBtn');
-        const eyeImg = document.getElementById('eyeImg');
-        let passwordVisible = false;
-        function updateEyeSource() {
-            if (passwordVisible) { eyeImg.src ='Closed.png'; eyeImg.alt = 'Скрыть пароль'; }
-            else { eyeImg.src = 'Open.png'; eyeImg.alt = 'Показать пароль'; }
-        }
-        eyeBtn.addEventListener('click', function() {
-            passwordVisible = !passwordVisible;
-            passwordInput.type = passwordVisible ? 'text' : 'password';
-            updateEyeSource(); 
-        });
-        function openModal(networkName) {
-            const modal = document.getElementById('passwordModal');
-            document.getElementById('modalNetworkName').textContent = networkName;
-            modal.classList.add('active');
-            passwordVisible = false;
-            passwordInput.type = 'password';
-            updateEyeSource(); 
-        }
-        document.getElementById('passwordModal').addEventListener('click', (e) => {
-            if (e.target === e.currentTarget) closeModal();
-        });
-        function closeModal() {
-            document.getElementById('passwordModal').classList.remove('active');
-        }
-        function loadUserToHeader() {
-            const data = JSON.parse(localStorage.getItem('userData'));
-            if (!data) return; 
-            const userText = document.querySelector('.user-pill .user-text');
-            if (userText) userText.textContent = data.username;
-            const avDark = document.querySelector('.user-pill .avatar-dark');
-            const avLight = document.querySelector('.user-pill .avatar-light');
-            if (avDark) avDark.src = data.avatar;
-            if (avLight) avLight.src = data.avatar;
-        }
-        document.addEventListener('DOMContentLoaded', loadUserToHeader);
-        const scanBtn = document.getElementById('scanBtn');
-        const networkList = document.getElementById('networkList');
-        const addNetworkBtn = document.getElementById('addNetworkBtn');
-        const ssidInput = document.getElementById('wifiSsid');
-        const passInput = document.getElementById('wifiPass');
-        scanBtn.addEventListener('click', async () => {
-            scanBtn.disabled = true;
-            scanBtn.textContent = '⏳ Сканирование...';
-            networkList.style.display = 'block';
-            networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Поиск сетей...</span></div>';
-            try {
-                const res = await fetch('/api/scan');
-                const nets = await res.json();
-                if (!nets.length) {
-                    networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Сети не найдены</span></div>';
-                } else {
-                    networkList.innerHTML = nets.map(n => `
-                        <div class="network-item">
-                            <div class="network-icon">
-                                <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                                <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
-                            </div>
-                            <span class="network-name">${n.ssid}</span>
-                            <span class="network-security">${n.secure ? 'Защищено' : 'Открытая'}</span>
-                            <button class="btn-connect" onclick="selectNetwork('${n.ssid.replace(/'/g, "\\'")}')">Выбрать</button>
-                        </div>
-                    `).join('');
+        // === Инициализация после загрузки DOM ===
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[JS] DOM loaded, initializing...');
+            
+            // Тема (ваш код)
+            (function () {
+                const toggle = document.getElementById('themeToggle');
+                const body = document.body;
+                const KEY = 'theme'; 
+                const saved = localStorage.getItem(KEY) || 'dark';
+                body.classList.remove('theme-dark', 'theme-light');
+                body.classList.add('theme-' + saved);
+                if (toggle) toggle.checked = (saved === 'light');
+                if (toggle) {
+                    toggle.addEventListener('change', function () {
+                        const next = toggle.checked ? 'light' : 'dark';
+                        body.classList.remove('theme-dark', 'theme-light');
+                        body.classList.add('theme-' + next);
+                        localStorage.setItem(KEY, next);
+                        console.log('[Theme] Switched to ' + next);
+                    });
                 }
-            } catch (e) {
-                networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--danger); padding:10px;">Ошибка сканирования</span></div>';
-            } finally {
-                scanBtn.disabled = false;
-                scanBtn.textContent = 'Обновить список';
+            })();
+
+            // Модалка пароля (ваш код)
+            const passwordInput = document.getElementById('modalPasswordInput');
+            const eyeBtn = document.getElementById('eyeBtn');
+            const eyeImg = document.getElementById('eyeImg');
+            let passwordVisible = false;
+            function updateEyeSource() {
+                if (passwordVisible) { eyeImg.src ='Closed.png'; eyeImg.alt = 'Скрыть пароль'; }
+                else { eyeImg.src = 'Open.png'; eyeImg.alt = 'Показать пароль'; }
             }
-        });
-        window.selectNetwork = (ssid) => {
-            ssidInput.value = ssid;
-            passInput.focus();
-            document.querySelector('.manual-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        };
-        addNetworkBtn.addEventListener('click', async () => {
-            const ssid = ssidInput.value.trim();
-            const pass = passInput.value;
-            if (!ssid) { alert('Введите название сети'); return; }
-            addNetworkBtn.disabled = true;
-            addNetworkBtn.textContent = '⏳ Подключение...';
-            const formData = new URLSearchParams();
-            formData.append('ssid', ssid);
-            formData.append('pass', pass);
-            try {
-                const res = await fetch('/api/configure', {
-                    method: 'POST',
-                    body: formData,
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            if(eyeBtn) eyeBtn.addEventListener('click', function() {
+                passwordVisible = !passwordVisible;
+                passwordInput.type = passwordVisible ? 'text' : 'password';
+                updateEyeSource(); 
+            });
+            function openModal(networkName) {
+                const modal = document.getElementById('passwordModal');
+                document.getElementById('modalNetworkName').textContent = networkName;
+                modal.classList.add('active');
+                passwordVisible = false;
+                passwordInput.type = 'password';
+                updateEyeSource(); 
+            }
+            const modalOverlay = document.getElementById('passwordModal');
+            if(modalOverlay) {
+                modalOverlay.addEventListener('click', (e) => {
+                    if (e.target === e.currentTarget) closeModal();
                 });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    addNetworkBtn.textContent = '✅ Готово!';
-                    setTimeout(() => { window.location.href = `http://${data.ip}/profile.html`; }, 1500);
-                } else {
-                    alert(`❌ ${data.message}`);
+            }
+            function closeModal() {
+                document.getElementById('passwordModal').classList.remove('active');
+            }
+            window.openModal = openModal;
+            window.closeModal = closeModal;
+
+            // Загрузка пользователя (ваш код)
+            function loadUserToHeader() {
+                try {
+                    const data = JSON.parse(localStorage.getItem('userData'));
+                    if (!data) return; 
+                    const userText = document.querySelector('.user-pill .user-text');
+                    if (userText) userText.textContent = data.username;
+                    const avDark = document.querySelector('.user-pill .avatar-dark');
+                    const avLight = document.querySelector('.user-pill .avatar-light');
+                    if (avDark) avDark.src = data.avatar;
+                    if (avLight) avLight.src = data.avatar;
+                } catch(e) { console.log('[User] No saved user data'); }
+            }
+            loadUserToHeader();
+
+            // === НОВЫЙ ФУНКЦИОНАЛ: Wi-Fi ===
+            const scanBtn = document.getElementById('scanBtn');
+            const networkList = document.getElementById('networkList');
+            const addNetworkBtn = document.getElementById('addNetworkBtn');
+            const ssidInput = document.getElementById('wifiSsid');
+            const passInput = document.getElementById('wifiPass');
+            const secSelect = document.getElementById('wifiSec');
+            const statusDiv = document.getElementById('connectStatus');
+
+            // Сканирование сетей
+            if(scanBtn) scanBtn.addEventListener('click', async () => {
+                console.log('[WiFi] Scan button clicked');
+                scanBtn.disabled = true;
+                scanBtn.textContent = '⏳ Сканирование...';
+                networkList.style.display = 'block';
+                networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Поиск сетей...</span></div>';
+                
+                try {
+                    console.log('[WiFi] Fetching /api/scan');
+                    const res = await fetch('/api/scan', { cache: 'no-store' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const nets = await res.json();
+                    console.log('[WiFi] Found networks:', nets);
+                    
+                    if (!nets.length) {
+                        networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Сети не найдены</span></div>';
+                    } else {
+                        networkList.innerHTML = nets.map(n => {
+                            const sec = n.encryption !== 'OPEN' ? 'Защищено' : 'Открытая';
+                            const escapedSsid = n.ssid.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            return `
+                                <div class="network-item">
+                                    <div class="network-icon">
+                                        <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
+                                        <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                                    </div>
+                                    <span class="network-name">${escapedSsid}</span>
+                                    <span class="network-security">${sec}</span>
+                                    <button class="btn-connect" onclick="selectNetwork('${escapedSsid}')">Выбрать</button>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                } catch (e) {
+                    console.error('[WiFi] Scan error:', e);
+                    networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--danger); padding:10px;">Ошибка: ' + e.message + '</span></div>';
+                } finally {
+                    scanBtn.disabled = false;
+                    scanBtn.textContent = 'Обновить список';
+                }
+            });
+
+            // Выбор сети из списка
+            window.selectNetwork = function(ssid) {
+                console.log('[WiFi] Selected network:', ssid);
+                ssidInput.value = ssid;
+                passInput.focus();
+                document.querySelector('.manual-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            // Подключение к сети
+            if(addNetworkBtn) addNetworkBtn.addEventListener('click', async () => {
+                const ssid = ssidInput.value.trim();
+                const pass = passInput.value;
+                const sec = secSelect.value;
+                
+                console.log('[WiFi] Connect attempt:', { ssid, sec, passLen: pass.length });
+                
+                if (!ssid) { 
+                    alert('Введите название сети'); 
+                    return; 
+                }
+                if (sec !== 'OPEN' && !pass) {
+                    alert('Введите пароль для защищённой сети');
+                    return;
+                }
+
+                addNetworkBtn.disabled = true;
+                addNetworkBtn.textContent = '⏳ Подключение...';
+                statusDiv.textContent = '';
+                statusDiv.className = '';
+
+                const formData = new URLSearchParams();
+                formData.append('ssid', ssid);
+                formData.append('pass', pass);
+                formData.append('sec', sec);
+
+                try {
+                    console.log('[WiFi] Sending POST /api/configure');
+                    const res = await fetch('/api/configure', {
+                        method: 'POST',
+                        body: formData,
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                    });
+                    const data = await res.json();
+                    console.log('[WiFi] Response:', data);
+
+                    if (data.status === 'success') {
+                        statusDiv.textContent = '✅ Подключено! Переход в профиль...';
+                        statusDiv.className = 'success';
+                        // Ждём 1.5 сек для переключения сети и редиректим
+                        setTimeout(() => {
+                            console.log('[WiFi] Redirecting to http://' + data.ip + '/profile.html');
+                            window.location.href = 'http://' + data.ip + '/profile.html';
+                        }, 1500);
+                    } else {
+                        statusDiv.textContent = '❌ ' + (data.message || 'Ошибка подключения');
+                        statusDiv.className = 'error';
+                        addNetworkBtn.textContent = 'Добавить';
+                    }
+                } catch (e) {
+                    console.error('[WiFi] Connect error:', e);
+                    statusDiv.textContent = '❌ Ошибка соединения: ' + e.message;
+                    statusDiv.className = 'error';
                     addNetworkBtn.textContent = 'Добавить';
+                } finally {
+                    if (statusDiv.className !== 'success') {
+                        addNetworkBtn.disabled = false;
+                    }
                 }
-            } catch (e) {
-                alert('❌ Ошибка соединения с модулем');
-                addNetworkBtn.textContent = 'Добавить';
-            } finally {
-                addNetworkBtn.disabled = false;
-            }
+            });
+
+            console.log('[JS] Initialization complete');
         });
     </script>
 </body>
 </html>
 )rawliteral";
 
-// Обработчик сканирования сетей
+// === Обработчики API ===
+
 void handleScan() {
+    Serial.println("[API] /api/scan requested");
     int n = WiFi.scanNetworks();
     String json = "[";
     for (int i = 0; i < n; ++i) {
         String ssid = WiFi.SSID(i);
-        ssid.replace("\"", "\\\""); // Экранирование для JSON
-        json += "{\"ssid\":\"" + ssid + "\",\"secure\":" + String(WiFi.encryptionType(i) != WIFI_AUTH_OPEN) + "}";
+        ssid.replace("\"", "\\\"");
+        String enc = WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "OPEN" : "WPA2";
+        json += "{\"ssid\":\"" + ssid + "\",\"encryption\":\"" + enc + "\"}";
         if (i < n - 1) json += ",";
     }
     json += "]";
     WiFi.scanDelete();
     server.send(200, "application/json", json);
+    Serial.println("[API] Scan response sent");
 }
 
-// Обработчик подключения к сети
 void handleConfigure() {
-    if (!server.hasArg("ssid") || !server.hasArg("pass")) {
-        server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Отсутствуют данные\"}");
+    Serial.println("[API] /api/configure requested");
+    if (!server.hasArg("ssid")) {
+        server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Отсутствует SSID\"}");
         return;
     }
     
     String ssid = server.arg("ssid");
     String pass = server.arg("pass");
+    String sec = server.arg("sec"); // не используется в ESP32, но можно логировать
+    
+    Serial.println("[WiFi] Connecting to: " + ssid + " (sec: " + sec + ")");
     
     // Сохраняем в NVS
     prefs.putString("ssid", ssid);
@@ -568,41 +661,51 @@ void handleConfigure() {
     delay(500);
     WiFi.begin(ssid.c_str(), pass.c_str());
     
-    // Ждём подключения до 20 сек
+    // Ждём подключения до 25 сек
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 50) {
         delay(500);
         attempts++;
+        Serial.print(".");
     }
+    Serial.println();
     
     if (WiFi.status() == WL_CONNECTED) {
         String ip = WiFi.localIP().toString();
+        Serial.println("[WiFi] Connected! IP: " + ip);
         server.send(200, "application/json", "{\"status\":\"success\",\"ip\":\"" + ip + "\",\"message\":\"Подключено!\"}");
     } else {
+        Serial.println("[WiFi] Connection failed");
         server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Не удалось подключиться. Проверьте пароль.\"}");
     }
 }
 
 void setup() {
     Serial.begin(115200);
+    Serial.println("\n[Setup] Starting...");
+    
     prefs.begin("wifi-config", false);
     
-    // Режим AP+STA: не рвёт соединение с клиентом при переключении
+    // Режим AP+STA
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(apSSID, apPASS);
-    Serial.println("AP: " + String(apSSID) + " | IP: " + WiFi.softAPIP().toString());
+    Serial.println("[WiFi] AP started: " + String(apSSID) + " | IP: " + WiFi.softAPIP().toString());
     
     // Автоподключение к сохранённой сети
     String s = prefs.getString("ssid", ""), p = prefs.getString("pass", "");
-    if (s.length()) {
+    if (s.length() > 0) {
+        Serial.println("[WiFi] Auto-connecting to saved network: " + s);
         WiFi.begin(s.c_str(), p.c_str());
         if (WiFi.waitForConnectResult(5000) == WL_CONNECTED) {
-            Serial.println("STA connected: " + WiFi.localIP().toString());
+            Serial.println("[WiFi] STA connected: " + WiFi.localIP().toString());
+        } else {
+            Serial.println("[WiFi] STA auto-connect failed");
         }
     }
     
     // Роуты
     server.on("/settings.html", HTTP_GET, [](){
+        Serial.println("[HTTP] Serving /settings.html");
         server.send(200, "text/html", settings_html);
     });
     server.on("/api/scan", HTTP_GET, handleScan);
@@ -613,7 +716,7 @@ void setup() {
     });
     
     server.begin();
-    Serial.println("Web server started");
+    Serial.println("[Setup] Web server started on port 80");
 }
 
 void loop() {
