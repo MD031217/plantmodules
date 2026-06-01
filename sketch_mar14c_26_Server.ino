@@ -3674,38 +3674,60 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
-            // === НОВОЕ: Хелпер для разрешения пути к аватару ===
+        // === ИСПРАВЛЕННЫЙ Хелпер для разрешения пути к аватару ===
         function resolveAvatarPath(path) {
-            if (!path) return '';
+            if (!path || path === '') {
+                console.log('📷 Нет пути аватара, использую дефолтный');
+                return '/image/default-avatar.jpg';
+            }
             if (path.startsWith('http')) return path;
-            return '/api/avatar/file?file=' + encodeURIComponent(path);
+            // Убираем возможные дублирующиеся слеши и нормализуем путь
+            let cleanPath = path.replace(/^\/+/, '');
+            console.log('📷 Аватар путь:', cleanPath);
+            return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
         }
 
-        // === НОВОЕ: Загрузка профиля с сервера ===
+        // === ИСПРАВЛЕННАЯ Загрузка профиля с сервера ===
         async function loadProfileFromServer() {
             const token = localStorage.getItem('auth_token');
             if (!token) {
+                console.log('❌ Нет токена, перенаправление на логин');
                 window.location.href = '/login';
                 return null;
             }
             
             try {
+                console.log('🔄 Загружаю профиль...');
                 const res = await fetch('/api/profile', {
                     headers: {'Authorization': 'Bearer ' + token}
                 });
+                
                 if (res.status === 401) {
+                    console.log('❌ Токен недействителен');
                     localStorage.removeItem('auth_token');
                     window.location.href = '/login';
                     return null;
                 }
-                return await res.json();
+                
+                const profile = await res.json();
+                console.log('✅ Профиль загружен:', profile);
+                
+                // Проверяем аватар
+                if (profile.avatar) {
+                    console.log('📷 Аватар в БД:', profile.avatar);
+                } else {
+                    console.log('📷 Аватар не указан в БД');
+                }
+                
+                return profile;
             } catch (e) {
-                console.error('Profile load error:', e);
+                console.error('❌ Profile load error:', e);
                 return null;
             }
         }
         
         let tempAvatarData = null;
+        let tempAvatarFile = null; // Добавляем переменную для файла
 
         function toggleTheme() {
             document.body.classList.toggle('theme-light');
@@ -3713,6 +3735,7 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             const theme = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
             localStorage.setItem('theme', theme);
         }
+        
         function loadTheme() {
             const savedTheme = localStorage.getItem('theme') || 'light';
             if (savedTheme === 'dark') {
@@ -3728,7 +3751,16 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
         }
 
         document.addEventListener('DOMContentLoaded', async function() {
-            // === НОВОЕ: Проверяем токен и загружаем профиль ===
+            console.log('🚀 Страница загружена, загружаем профиль...');
+            
+            // Проверяем токен при загрузке
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.log('❌ Нет токена, перенаправление на /login');
+                window.location.href = '/login';
+                return;
+            }
+            
             const profile = await loadProfileFromServer();
             if (!profile) return;
             
@@ -3745,22 +3777,52 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             
             Object.keys(fields).forEach(id => {
                 const el = document.getElementById(id);
-                if (el && fields[id]) el.textContent = fields[id];
+                if (el && fields[id]) {
+                    if (id === 'edit-timezone' || id === 'profile-timezone') {
+                        el.value = fields[id];
+                    } else {
+                        el.textContent = fields[id];
+                    }
+                }
             });
             
-            // === НОВОЕ: Аватары через resolveAvatarPath ===
+            // === ИСПРАВЛЕННО: Аватары с обработкой ошибок ===
             const avatarSrc = resolveAvatarPath(profile.avatar);
-            ['header-avatar-dark', 'header-avatar-light', 'profile-avatar'].forEach(id => {
+            console.log('📷 Устанавливаю аватар:', avatarSrc);
+            
+            // Обновляем все элементы аватара
+            const avatarElements = ['header-avatar-dark', 'header-avatar-light', 'profile-avatar'];
+            avatarElements.forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.src = avatarSrc || el.dataset.default || el.src;
+                if (el) {
+                    el.src = avatarSrc;
+                    // Добавляем обработчик ошибки загрузки
+                    el.onerror = function() {
+                        console.log('⚠️ Не удалось загрузить аватар:', this.src);
+                        this.src = '/image/default-avatar.jpg';
+                    };
+                    // Добавляем обработчик успешной загрузки
+                    el.onload = function() {
+                        console.log('✅ Аватар загружен:', this.src);
+                    };
+                }
             });
             
             // Пол
             if (profile.gender) {
-                document.getElementById('view-gender-female')?.classList.toggle('selected', profile.gender === 'female');
-                document.getElementById('view-gender-male')?.classList.toggle('selected', profile.gender === 'male');
-                document.getElementById('edit-gender-female')?.classList.toggle('selected', profile.gender === 'female');
-                document.getElementById('edit-gender-male')?.classList.toggle('selected', profile.gender === 'male');
+                const femaleView = document.getElementById('view-gender-female');
+                const maleView = document.getElementById('view-gender-male');
+                const femaleEdit = document.getElementById('edit-gender-female');
+                const maleEdit = document.getElementById('edit-gender-male');
+                
+                if (femaleView && maleView) {
+                    femaleView.classList.toggle('selected', profile.gender === 'female');
+                    maleView.classList.toggle('selected', profile.gender === 'male');
+                }
+                if (femaleEdit && maleEdit) {
+                    femaleEdit.classList.toggle('selected', profile.gender === 'female');
+                    maleEdit.classList.toggle('selected', profile.gender === 'male');
+                }
             }
             
             // Тема
@@ -3770,76 +3832,161 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
         });
 
         function openAvatarModal() {
+            console.log('🖼️ Открытие модального окна аватара');
             document.getElementById('avatar-modal').classList.add('active');
             document.getElementById('avatar-modal').classList.remove('has-preview');
             document.getElementById('hidden-file-input').value = '';
             tempAvatarData = null;
+            tempAvatarFile = null;
         }
+        
         function closeAvatarModal() {
+            console.log('🔒 Закрытие модального окна аватара');
             document.getElementById('avatar-modal').classList.remove('active');
         }
 
+        // === ИСПРАВЛЕННЫЙ обработчик выбора файла ===
         document.getElementById('hidden-file-input').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
-            if (!file.type.startsWith('image/')) { alert('Выберите изображение'); return; }
-            if (file.size > 1048576) { alert('Размер не должен превышать 1МБ'); return; }
+            
+            console.log('📁 Выбран файл:', file.name, 'тип:', file.type, 'размер:', file.size);
+            
+            // Проверяем поддерживаемые форматы
+            const supportedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'];
+            
+            if (!supportedTypes.includes(file.type)) {
+                alert('Неподдерживаемый формат! Используйте: JPG, PNG, GIF, WEBP или BMP');
+                this.value = '';
+                return;
+            }
+            
+            if (file.size > 2 * 1024 * 1024) {
+                alert('Файл слишком большой! Максимум 2MB');
+                this.value = '';
+                return;
+            }
+            
+            // Сохраняем оригинальный файл для отправки
+            tempAvatarFile = file;
             
             const reader = new FileReader();
             reader.onload = function(ev) {
                 tempAvatarData = ev.target.result;
                 document.getElementById('modal-preview-img').src = tempAvatarData;
+                document.getElementById('modal-preview-img').style.display = 'block';
                 document.getElementById('avatar-modal').classList.add('has-preview');
+                console.log('✅ Превью аватара создано');
+            };
+            reader.onerror = function() {
+                console.error('❌ Ошибка чтения файла');
+                alert('Ошибка чтения файла');
             };
             reader.readAsDataURL(file);
         });
 
+        // === ИСПРАВЛЕННАЯ функция загрузки аватара ===
         const confirmAvatarUpload = async () => {
             const token = localStorage.getItem('auth_token');
-            if (!token || !tempAvatarData) return;
+            if (!token) {
+                alert('Требуется авторизация');
+                return;
+            }
+            
+            if (!tempAvatarFile) {
+                alert('Выберите файл для загрузки');
+                return;
+            }
+            
+            console.log('📤 Отправка аватара на сервер...');
             
             const formData = new FormData();
-            // Конвертируем dataURL в Blob
-            const response = await fetch(tempAvatarData);
-            const blob = await response.blob();
-            formData.append('file', blob, 'avatar.jpg');
+            // Отправляем оригинальный файл с правильным именем и типом
+            formData.append('file', tempAvatarFile, tempAvatarFile.name);
             
             try {
                 const res = await fetch('/api/avatar', {
                     method: 'POST',
-                    headers: {'Authorization': 'Bearer ' + token},
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                        // Не ставьте Content-Type, браузер сам установит с boundary для FormData
+                    },
                     body: formData
                 });
+                
+                console.log('📡 Ответ сервера:', res.status);
+                
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                
                 const data = await res.json();
+                console.log('📦 Данные ответа:', data);
+                
                 if (data.success) {
-                    // === НОВОЕ: Обновляем src через resolveAvatarPath ===
+                    console.log('✅ Аватар успешно загружен, путь:', data.avatar);
+                    
+                    // Обновляем src через resolveAvatarPath
                     const newSrc = resolveAvatarPath(data.avatar);
-                    document.getElementById('profile-avatar').src = newSrc;
-                    document.getElementById('header-avatar-dark').src = newSrc;
-                    document.getElementById('header-avatar-light').src = newSrc;
+                    console.log('🔄 Новый URL аватара:', newSrc);
+                    
+                    // Обновляем все элементы аватара
+                    const avatarElements = ['profile-avatar', 'header-avatar-dark', 'header-avatar-light'];
+                    avatarElements.forEach(id => {
+                        const el = document.getElementById(id);
+                        if (el) {
+                            // Добавляем timestamp для обновления кэша
+                            el.src = newSrc + '&t=' + Date.now();
+                            el.onload = () => console.log(`✅ ${id} обновлен`);
+                            el.onerror = () => console.log(`❌ Ошибка загрузки ${id}`);
+                        }
+                    });
+                    
                     closeAvatarModal();
+                    
+                    // Показываем сообщение об успехе
+                    alert('Аватар успешно обновлен!');
+                    
+                    // Обновляем данные профиля в localStorage (если нужно)
+                    const profile = await loadProfileFromServer();
+                    if (profile && profile.avatar) {
+                        localStorage.setItem('userAvatar', profile.avatar);
+                    }
                 } else {
-                    alert('Ошибка загрузки: ' + (data.error || 'Unknown'));
+                    console.error('❌ Ошибка от сервера:', data.error);
+                    alert('Ошибка загрузки: ' + (data.error || 'Unknown error'));
                 }
             } catch (e) {
-                alert('Ошибка сети');
+                console.error('❌ Ошибка сети:', e);
+                alert('Ошибка соединения с сервером. Проверьте подключение.');
             }
         }
 
+        // === ИСПРАВЛЕННАЯ функция сохранения изменений профиля ===
         async function saveChanges() {
             const token = localStorage.getItem('auth_token');
-            if (!token) { window.location.href = '/login'; return; }
+            if (!token) { 
+                window.location.href = '/login'; 
+                return; 
+            }
             
             const username = document.getElementById('edit-username').value.trim();
             const email = document.getElementById('edit-email').value.trim();
             const timezone = document.getElementById('edit-timezone').value;
             const gender = document.getElementById('edit-gender-female').classList.contains('selected') ? 'female' : 'male';
             
-            if (!username || !email.includes('@')) {
-                alert('Проверьте поля'); return;
+            if (!username || username.length < 3) {
+                alert('Имя пользователя должно содержать минимум 3 символа');
+                return;
+            }
+            
+            if (!email || !email.includes('@')) {
+                alert('Введите корректный email');
+                return;
             }
             
             const payload = { username, email, gender, timezone };
+            console.log('📤 Сохранение профиля:', payload);
             
             try {
                 const res = await fetch('/api/profile', {
@@ -3850,15 +3997,19 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
                     },
                     body: JSON.stringify(payload)
                 });
+                
                 const data = await res.json();
+                console.log('📡 Ответ сервера:', data);
+                
                 if (data.success) {
-                    alert('Сохранено!');
+                    alert('✅ Профиль успешно сохранен!');
                     window.location.href = '/profile';
                 } else {
-                    alert('Ошибка: ' + (data.error || 'Unknown'));
+                    alert('❌ Ошибка: ' + (data.error || 'Неизвестная ошибка'));
                 }
             } catch (e) {
-                alert('Ошибка сети');
+                console.error('❌ Ошибка сети:', e);
+                alert('Ошибка соединения с сервером');
             }
         }
     </script>
@@ -7763,11 +7914,13 @@ void handleUpdateProfile() {
     }
 }
 
-// === УЛУЧШЕННАЯ ЗАГРУЗКА АВАТАРА ===
 void handleAvatarUpload() {
     HTTPUpload& upload = server.upload();
     
     if (upload.status == UPLOAD_FILE_START) {
+        Serial.println("=== НАЧАЛО ЗАГРУЗКИ АВАТАРА ===");
+        
+        // Проверяем авторизацию
         String auth = server.header("Authorization");
         if (!auth.startsWith("Bearer ")) {
             server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
@@ -7776,96 +7929,164 @@ void handleAvatarUpload() {
         
         String token = auth.substring(7);
         pendingUserId = getUserIdByToken(token);
+        
         if (!pendingUserId) {
             server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
             return;
         }
-
-        pendingOldAvatarPath = getCurrentAvatarPath(pendingUserId);
         
-        pendingNewAvatarPath = "/avatar/av_" + String(millis()) + ".jpg";
-        Serial.printf("→ Загрузка аватара: %s\n", pendingNewAvatarPath.c_str());
-
+        // 🔥 ОПРЕДЕЛЯЕМ ФОРМАТ ФАЙЛА из заголовка Content-Type
+        String contentType = server.header("Content-Type");
+        String fileExt = ".jpg"; // по умолчанию
+        
+        if (contentType.indexOf("image/png") >= 0) {
+            fileExt = ".png";
+        } else if (contentType.indexOf("image/gif") >= 0) {
+            fileExt = ".gif";
+        } else if (contentType.indexOf("image/jpeg") >= 0 || contentType.indexOf("image/jpg") >= 0) {
+            fileExt = ".jpg";
+        } else if (contentType.indexOf("image/webp") >= 0) {
+            fileExt = ".webp";
+        } else if (contentType.indexOf("image/bmp") >= 0) {
+            fileExt = ".bmp";
+        }
+        
+        // Получаем старый аватар
+        pendingOldAvatarPath = getCurrentAvatarPath(pendingUserId);
+        Serial.printf("👤 User ID: %d\n", pendingUserId);
+        Serial.printf("📁 Старый аватар: '%s'\n", pendingOldAvatarPath.c_str());
+        Serial.printf("🎨 Формат файла: %s\n", fileExt.c_str());
+        
+        // Генерируем уникальное имя с правильным расширением
+        String timestamp = String(millis());
+        String randomNum = String(random(1000, 9999));
+        String fileName = "av_" + timestamp + "_" + randomNum + fileExt;
+        pendingNewAvatarPath = "/avatar/" + fileName;
+        
+        Serial.printf("📝 Новый файл: %s\n", pendingNewAvatarPath.c_str());
+        
+        // Убеждаемся, что папка avatar существует
+        if (!SD.exists("/avatar")) {
+            Serial.println("📁 Создаю папку /avatar");
+            SD.mkdir("/avatar");
+        }
+        
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (pendingNewAvatarPath.length() == 0) return;
         
-        File f = SD.open(pendingNewAvatarPath, FILE_WRITE);
+        File f = SD.open(pendingNewAvatarPath, FILE_APPEND);
         if (f) {
             f.write(upload.buf, upload.currentSize);
             f.close();
+            Serial.printf("✍️ Записано %d байт\n", upload.currentSize);
         }
-
+        
     } else if (upload.status == UPLOAD_FILE_END) {
+        Serial.println("=== ЗАГРУЗКА ЗАВЕРШЕНА ===");
+        
         if (SD.exists(pendingNewAvatarPath)) {
-            if (pendingOldAvatarPath.length() > 0 && !pendingOldAvatarPath.startsWith("http")) {
-                String oldFull = "/sd/" + pendingOldAvatarPath;
-                if (SD.exists(oldFull)) SD.remove(oldFull);
+            Serial.printf("✅ Файл сохранен: %s\n", pendingNewAvatarPath.c_str());
+            
+            // Удаляем старый аватар
+            if (pendingOldAvatarPath.length() > 0 && 
+                !pendingOldAvatarPath.startsWith("http") &&
+                pendingOldAvatarPath != "avatar/default.jpg") {
+                
+                String oldFullPath = "/" + pendingOldAvatarPath;
+                if (!oldFullPath.startsWith("/")) oldFullPath = "/" + oldFullPath;
+                
+                if (SD.exists(oldFullPath)) {
+                    if (SD.remove(oldFullPath)) {
+                        Serial.println("✅ Старый аватар удален");
+                    }
+                }
             }
-
-            String relPath = "avatar/" + pendingNewAvatarPath.substring(12);
-
+            
+            // Сохраняем путь в БД
+            String relPath = pendingNewAvatarPath.substring(1);
+            
             if (updateUserAvatarInDB(server.header("Authorization").substring(7), relPath)) {
                 DynamicJsonDocument doc(256);
                 doc["success"] = true;
                 doc["avatar"] = relPath;
-                String json;
-                serializeJson(doc, json);
-                server.send(200, "application/json", json);
+                String response;
+                serializeJson(doc, response);
+                server.send(200, "application/json", response);
             } else {
-                server.send(500, "application/json", "{\"error\":\"DB update failed\"}");
+                server.send(500, "application/json", "{\"error\":\"Database update failed\"}");
             }
         } else {
             server.send(500, "application/json", "{\"error\":\"File not saved\"}");
         }
-
+        
         pendingUserId = 0;
         pendingOldAvatarPath = "";
         pendingNewAvatarPath = "";
     }
 }
 
-// === НОВОЕ: Получение файла аватара ===
+// === Получение файла аватара ===
 void handleGetAvatar() {
     if (!server.hasArg("file")) {
         server.send(400, "text/plain", "Missing 'file' parameter");
         return;
     }
     
-    String fileArg = server.arg("file");
+    String filePath = server.arg("file");
+    Serial.printf("📸 Запрос аватара: %s\n", filePath.c_str());
     
     // Защита от path traversal
-    if (fileArg.indexOf("..") >= 0 || fileArg.indexOf("//") >= 0) {
-        server.send(400, "text/plain", "Invalid path");
+    if (filePath.indexOf("..") >= 0 || filePath.indexOf("//") >= 0) {
+        server.send(403, "text/plain", "Forbidden");
         return;
     }
     
-    String fullPath = fileArg;
-    
     // Нормализация пути
-    if (fullPath.startsWith("/sd/")) {
-        fullPath = fullPath.substring(3);
-    }
+    String fullPath = filePath;
     if (!fullPath.startsWith("/")) {
         fullPath = "/" + fullPath;
     }
     
     if (!SD.exists(fullPath)) {
-        server.send(404, "text/plain", "File not found: " + fullPath);
+        Serial.printf("❌ Файл не найден: %s\n", fullPath.c_str());
+        
+        // Пытаемся отдать дефолтный аватар
+        if (SD.exists("/image/default-avatar.jpg")) {
+            File defaultFile = SD.open("/image/default-avatar.jpg", FILE_READ);
+            server.streamFile(defaultFile, "image/jpeg");
+            defaultFile.close();
+            return;
+        }
+        
+        server.send(404, "text/plain", "Avatar not found");
         return;
     }
     
-    // Определяем MIME-type
-    String contentType = "image/jpeg";
-    if (fileArg.endsWith(".png")) contentType = "image/png";
-    else if (fileArg.endsWith(".gif")) contentType = "image/gif";
+    // 🔥 РАСШИРЕННОЕ ОПРЕДЕЛЕНИЕ MIME ТИПА
+    String contentType = "application/octet-stream";
+    if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) {
+        contentType = "image/jpeg";
+    } else if (filePath.endsWith(".png")) {
+        contentType = "image/png";
+    } else if (filePath.endsWith(".gif")) {
+        contentType = "image/gif";
+    } else if (filePath.endsWith(".webp")) {
+        contentType = "image/webp";
+    } else if (filePath.endsWith(".bmp")) {
+        contentType = "image/bmp";
+    } else if (filePath.endsWith(".svg")) {
+        contentType = "image/svg+xml";
+    }
     
-    server.sendHeader("Cache-Control", "public, max-age=86400");
+    Serial.printf("✅ Отправляю: %s (%s)\n", fullPath.c_str(), contentType.c_str());
+    
+    server.sendHeader("Cache-Control", "public, max-age=3600");
     server.sendHeader("Content-Type", contentType);
     
-    File f = SD.open(fullPath, FILE_READ);
-    if (f) {
-        server.streamFile(f, contentType);
-        f.close();
+    File file = SD.open(fullPath, FILE_READ);
+    if (file) {
+        server.streamFile(file, contentType);
+        file.close();
     } else {
         server.send(500, "text/plain", "Failed to open file");
     }
