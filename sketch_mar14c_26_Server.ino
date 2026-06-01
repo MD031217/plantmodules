@@ -2057,7 +2057,7 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
         .field-icon.show {
             opacity: 1;
         }
-        
+
         .btn {
             width: 70%;
             padding: 14px;
@@ -3356,8 +3356,6 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             height: 22px;
         }
         }
-    </style>
-    <style>
         .edit-profile-header {
             display: flex;
             align-items: flex-start;
@@ -7785,7 +7783,7 @@ void handleAvatarUpload() {
 
         pendingOldAvatarPath = getCurrentAvatarPath(pendingUserId);
         
-        pendingNewAvatarPath = "/sd/avatar/av_" + String(millis()) + ".jpg";
+        pendingNewAvatarPath = "/avatar/av_" + String(millis()) + ".jpg";
         Serial.printf("→ Загрузка аватара: %s\n", pendingNewAvatarPath.c_str());
 
     } else if (upload.status == UPLOAD_FILE_WRITE) {
