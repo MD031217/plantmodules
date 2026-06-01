@@ -1,0 +1,306 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+
+WebServer server(80);
+Preferences prefs;
+
+// Данные точки доступа ESP32 (пароль минимум 8 символов)
+const char* apSSID = "GreenShelf_Setup";
+const char* apPASS = "12345678";
+
+// HTML + CSS + JS встроен напрямую. Raw-literal позволяет не экранировать кавычки.
+const char settings_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Настройки | Зелёная полка</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        :root {
+            --bg: #f0f2f5; --card: #ffffff; --text: #1a1a2e; --text2: #6b7280;
+            --border: #e5e7eb; --shadow: 0 4px 20px rgba(0,0,0,0.08);
+            --primary: #10b981; --primary-dark: #059669; --accent: #3b82f6;
+            --warning: #f59e0b; --danger: #ef4444; --success: #22c55e;
+        }
+        [data-theme="dark"] {
+            --bg: #0f172a; --card: #1e293b; --text: #f1f5f9; --text2: #94a3b8;
+            --border: #334155; --shadow: 0 4px 20px rgba(0,0,0,0.4);
+            --primary: #22c55e; --primary-dark: #16a34a; --accent: #60a5fa;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg); color: var(--text); transition: background 0.3s, color 0.3s;
+            min-height: 100vh; line-height: 1.5;
+        }
+        header {
+            padding: 16px 20px; text-align: center; font-size: 18px; font-weight: 600;
+            color: var(--primary); background: var(--card); box-shadow: var(--shadow);
+            position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        header .status { font-size: 12px; color: var(--text2); font-weight: 400; }
+        .tabs {
+            display: flex; justify-content: center; gap: 6px; padding: 10px;
+            background: var(--card); border-bottom: 1px solid var(--border);
+            position: sticky; top: 56px; z-index: 45;
+        }
+        .tab {
+            padding: 8px 16px; border: none; background: transparent; color: var(--text2);
+            cursor: pointer; border-radius: 10px; font-size: 14px; font-weight: 500; transition: all 0.2s; text-decoration: none;
+        }
+        .tab:hover { background: rgba(16,185,129,0.1); color: var(--primary); }
+        .tab.active { background: var(--primary); color: #fff; }
+        .container { max-width: 800px; margin: 0 auto; padding: 14px; }
+        
+        .wifi-section {
+            background: var(--card); padding: 16px; border-radius: 16px;
+            box-shadow: var(--shadow); border: 1px solid var(--border); margin-bottom: 16px;
+        }
+        .section-title { font-weight: 600; font-size: 16px; margin-bottom: 8px; color: var(--text); }
+        .section-desc { font-size: 13px; color: var(--text2); margin-bottom: 12px; }
+        
+        .scan-btn {
+            padding: 8px 14px; background: var(--accent); color: #fff; border: none;
+            border-radius: 8px; cursor: pointer; font-weight: 500; width: 100%; margin-bottom: 10px; transition: opacity 0.2s;
+        }
+        .scan-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        .network-list {
+            max-height: 220px; overflow-y: auto; border-radius: 10px;
+            background: rgba(16,185,129,0.03); padding: 6px; margin-bottom: 12px;
+        }
+        .network-item {
+            padding: 10px; border-bottom: 1px solid var(--border); display: flex;
+            justify-content: space-between; align-items: center; cursor: pointer; font-size: 13px;
+        }
+        .network-item:last-child { border-bottom: none; }
+        .network-item:hover { background: rgba(16,185,129,0.06); }
+        
+        .manual-form {
+            display: flex; flex-direction: column; gap: 10px; margin-top: 12px;
+            border-top: 1px solid var(--border); padding-top: 12px;
+        }
+        .form-input, .form-select {
+            padding: 10px; border-radius: 8px; border: 1px solid var(--border);
+            background: var(--bg); color: var(--text); font-size: 14px; width: 100%;
+        }
+        .connect-btn {
+            padding: 10px; background: var(--primary); color: #fff; border: none;
+            border-radius: 8px; cursor: pointer; font-weight: 600; transition: background 0.2s;
+        }
+        .connect-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        #wifi-result {
+            margin-top: 12px; padding: 12px; border-radius: 8px;
+            background: rgba(16,185,129,0.05); border: 1px dashed var(--border);
+            font-size: 13px; display: none;
+        }
+        #wifi-result a { color: var(--primary); font-weight: 600; text-decoration: none; }
+        #wifi-result a:hover { text-decoration: underline; }
+        
+        .loading {
+            display: flex; align-items: center; justify-content: center; padding: 12px;
+            color: var(--text2); font-style: italic;
+        }
+        .loading::after {
+            content: ''; width: 14px; height: 14px; border: 2px solid var(--border);
+            border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 8px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .footer {
+            margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);
+            color: var(--text2); font-size: 12px; text-align: center; line-height: 1.6;
+        }
+        @media (max-width: 500px) { .tabs { flex-wrap: wrap; } .tab { flex: 1; text-align: center; } }
+    </style>
+</head>
+<body>
+    <header>Настройки <span class="status">ESP32-C3</span></header>
+    <div class="tabs">
+        <a href="index.html" class="tab">Главная</a>
+        <a href="myplant.html" class="tab">Мои растения</a>
+        <a href="settings.html" class="tab active">Настройки</a>
+    </div>
+    <div class="container">
+        <div class="wifi-section">
+            <div class="section-title">Сканирование сетей</div>
+            <div class="section-desc">Нажмите кнопку ниже для поиска доступных Wi-Fi сетей</div>
+            <button id="scan-btn" class="scan-btn">📡 Начать сканирование</button>
+            <div id="scan-list" class="network-list"></div>
+            
+            <div class="section-title">Добавить сеть вручную</div>
+            <form id="wifi-form" class="manual-form">
+                <input type="text" id="wifi-ssid" class="form-input" placeholder="Название сети (SSID)" required>
+                <select id="wifi-sec" class="form-select">
+                    <option value="WPA2">Защищено (WPA/WPA2)</option>
+                    <option value="OPEN">Открытая</option>
+                </select>
+                <input type="password" id="wifi-pass" class="form-input" placeholder="Пароль" required>
+                <button type="submit" id="connect-btn" class="connect-btn">🔗 Подключиться</button>
+            </form>
+            <div id="wifi-result"></div>
+        </div>
+        <div class="footer">
+            <strong>Зелёная полка</strong><br>
+            Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.<br>
+            © 2026 Зелёная полка
+        </div>
+    </div>
+    <script>
+        const scanBtn = document.getElementById('scan-btn');
+        const scanList = document.getElementById('scan-list');
+        const wifiForm = document.getElementById('wifi-form');
+        const connectBtn = document.getElementById('connect-btn');
+        const resultBox = document.getElementById('wifi-result');
+
+        scanBtn.addEventListener('click', async () => {
+            scanBtn.disabled = true;
+            scanList.innerHTML = '<div class="loading">Сканирование...</div>';
+            try {
+                const res = await fetch('/api/scan');
+                const networks = await res.json();
+                if (!networks.length) {
+                    scanList.innerHTML = '<div style="padding:10px; color:var(--text2);">Сети не найдены</div>';
+                } else {
+                    scanList.innerHTML = networks.map(n => 
+                        `<div class="network-item" onclick="selectNetwork('${n.ssid.replace(/'/g, "\\'")}')">
+                            <span>${n.ssid}</span>
+                            <span style="color:var(--text2); font-size:12px;">${n.rssi > -60 ? '📶' : n.rssi > -75 ? '📡' : '📉'} ${n.rssi} dBm</span>
+                        </div>`
+                    ).join('');
+                }
+            } catch { scanList.innerHTML = '<div style="color:var(--danger);">Ошибка сканирования</div>'; }
+            finally { scanBtn.disabled = false; }
+        });
+
+        window.selectNetwork = (ssid) => {
+            document.getElementById('wifi-ssid').value = ssid;
+            document.getElementById('wifi-pass').focus();
+            window.scrollTo({ top: 250, behavior: 'smooth' });
+        };
+
+        wifiForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            connectBtn.disabled = true;
+            connectBtn.textContent = '⏳ Подключение...';
+            resultBox.style.display = 'block';
+            resultBox.style.color = 'var(--text2)';
+            resultBox.innerHTML = '<div class="loading">Проверка соединения...</div>';
+
+            const formData = new URLSearchParams();
+            formData.append('ssid', document.getElementById('wifi-ssid').value);
+            formData.append('pass', document.getElementById('wifi-pass').value);
+
+            try {
+                const res = await fetch('/api/configure', {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    resultBox.style.color = 'var(--success)';
+                    resultBox.innerHTML = `✅ ${data.message}<br>🌐 Перейдите по адресу: <a href="http://${data.ip}" target="_blank">http://${data.ip}</a>`;
+                } else {
+                    resultBox.style.color = 'var(--danger)';
+                    resultBox.textContent = `❌ ${data.message}`;
+                }
+            } catch {
+                resultBox.style.color = 'var(--danger)';
+                resultBox.textContent = '❌ Ошибка соединения с модулем.';
+            } finally {
+                connectBtn.disabled = false;
+                connectBtn.textContent = '🔗 Подключиться';
+            }
+        });
+    </script>
+</body>
+</html>
+)rawliteral";
+
+void handleScan() {
+    int n = WiFi.scanNetworks();
+    String json = "[";
+    for (int i = 0; i < n; ++i) {
+        String ssid = WiFi.SSID(i);
+        ssid.replace("\"", "\\\""); // Экранирование кавычек для JSON
+        json += "{\"ssid\":\"" + ssid + "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}";
+        if (i < n - 1) json += ",";
+    }
+    json += "]";
+    WiFi.scanDelete();
+    server.send(200, "application/json", json);
+}
+
+void handleConfigure() {
+    if (!server.hasArg("ssid") || !server.hasArg("pass")) {
+        server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Отсутствуют данные\"}");
+        return;
+    }
+
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
+    
+    // Сохраняем в NVS (Preferences)
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+
+    WiFi.disconnect(true);
+    delay(500);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+
+    // Ждём подключения до 15 секунд
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+        delay(500);
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        String ip = WiFi.localIP().toString();
+        server.send(200, "application/json", "{\"status\":\"success\",\"ip\":\"" + ip + "\",\"message\":\"Подключено к сети!\"}");
+    } else {
+        server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Не удалось подключиться. Проверьте пароль или покрытие.\"}");
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    prefs.begin("wifi-config", false);
+
+    // Режим AP + STA одновременно: не рвёт соединение с клиентом во время переподключения
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(apSSID, apPASS);
+    Serial.print("AP запущен. IP: "); Serial.println(WiFi.softAPIP());
+
+    // Попытка автоподключения к последней сохранённой сети
+    String savedSSID = prefs.getString("ssid", "");
+    String savedPASS = prefs.getString("pass", "");
+    if (savedSSID.length() > 0) {
+        WiFi.begin(savedSSID.c_str(), savedPASS.c_str());
+        if (WiFi.waitForConnectResult(5000) == WL_CONNECTED) {
+            Serial.print("Автоподключение успешно. STA IP: "); Serial.println(WiFi.localIP());
+        }
+    }
+
+    // Роуты
+    server.on("/", HTTP_GET, [](){
+        server.sendHeader("Location", "/settings.html", true);
+        server.send(302);
+    });
+    server.on("/settings.html", HTTP_GET, [](){
+        server.send(200, "text/html", settings_html);
+    });
+    server.on("/api/scan", HTTP_GET, handleScan);
+    server.on("/api/configure", HTTP_POST, handleConfigure);
+
+    server.begin();
+    Serial.println("Веб-сервер запущен на порту 80");
+}
+
+void loop() {
+    server.handleClient();
+}
