@@ -1502,7 +1502,6 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Вход</title>
     <style>
-         <style>
         :root {
             --page-bg: #EEF0F4;
             --card-bg:  #0FB881;
@@ -1803,10 +1802,14 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
         const passwordInput = document.getElementById('passwordInput');
         const togglePassword = document.getElementById('togglePassword');
 
-        togglePassword.addEventListener('click', function() {
+       togglePassword.addEventListener('click', function() {
             const isPassword = passwordInput.type === 'password';
             passwordInput.type = isPassword ? 'text' : 'password';
-            this.textContent = isPassword ? '🙈' : '👁';
+            if (isPassword) {
+                this.src = '/image/Закрытый.png';
+            } else {
+                this.src = '/image/Открытый.png';
+            }
         });
 
         document.getElementById('loginForm').addEventListener('submit', function(e) {
@@ -1896,6 +1899,36 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             transition: background-color 0.4s ease;
         }
 
+        .falling-leaf {
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 1;
+            animation: fallingLeaf var(--fall-duration, 3s) linear forwards;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.1));
+        }
+
+        @keyframes fallingLeaf {
+            0% {
+                transform: translateY(0) translateX(0) rotate(0deg);
+                opacity: 1;
+            }
+            25% {
+                transform: translateY(25vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg));
+            }
+            50% {
+                transform: translateY(50vh) translateX(calc(var(--sway, 30px) * -0.5)) rotate(calc(var(--rotation, 20deg) * -0.5));
+                opacity: 0.9;
+            }
+            75% {
+                transform: translateY(75vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg));
+            }
+            100% {
+                transform: translateY(110vh) translateX(0) rotate(calc(var(--rotation, 20deg) * 1.5));
+                opacity: 0;
+            }
+        }
+
         .theme-switcher {
             position: absolute;
             top: 32px;
@@ -1916,14 +1949,20 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             transform: scale(1.05);
         }
 
-        .theme-switcher span {
-            font-size: 28px;
-            user-select: none;
+        .theme-switcher .theme-icon-img {
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+            filter: invert(0);
         }
 
         body.theme-light .theme-switcher {
             background-color: #1B263B;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+        }
+
+        body.theme-light .theme-switcher .theme-icon-img {
+            filter: invert(1);
         }
 
         .wrapper {
@@ -1945,8 +1984,8 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
         }
 
         .auth-card {
-            width: 90%;
-            max-width: 500px;
+            width: 16.67cm;
+            min-height: 10cm;
             background-color: var(--card-bg);
             border-radius: 65px;
             padding: 32px 36px 36px;
@@ -2005,6 +2044,18 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6);
         }
 
+        .field-icon {
+            position: absolute;
+            right: 14px;
+            bottom: 10px;
+            width: 24px;
+            height: 24px;
+            cursor: default;
+            opacity: 0; 
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
         .btn {
             width: 70%;
             padding: 14px;
@@ -2043,17 +2094,6 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             text-underline-offset: 3px;
         }
 
-        .warning-icon {
-            display: none;
-            color: #ff4757;
-            font-size: 14px;
-            margin-top: 4px;
-        }
-
-        .warning-icon.show {
-            display: block;
-        }
-
         @media (max-width: 480px) {
             .auth-card {
                 width: 92%;
@@ -2070,14 +2110,14 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
 </head>
 <body class="theme-dark">
     <div class="theme-switcher" id="themeSwitcher">
-        <span>◑</span>
+        <img src="/image/тема.png" alt="Переключить тему" class="theme-icon-img">
     </div>
 
     <div class="wrapper">
         <div class="auth-card">
             <h1>Регистрация</h1>
 
-            <form id="registerForm" onsubmit="return false;">
+            <form action="#" method="POST" onsubmit="event.preventDefault();">
                 
                 <div class="form-group">
                     <label class="field-label">Логин<span class="required">*</span></label>
@@ -2087,19 +2127,20 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
                 <div class="form-group">
                     <label class="field-label">Пароль<span class="required">*</span></label>
                     <input type="password" name="password" id="passwordInput" placeholder="от 6 символов" required minlength="6">
+                    <img src="/image/предупреждение.png" alt="Внимание" class="field-icon" id="passwordWarning">
                 </div>
 
                 <div class="form-group">
                     <label class="field-label">Повторите пароль<span class="required">*</span></label>
                     <input type="password" name="password_confirm" id="passwordConfirmInput" placeholder="" required>
-                    <div class="warning-icon" id="passwordWarning">⚠ Пароли не совпадают</div>
+                    <img src="/image/предупреждение.png" alt="Внимание" class="field-icon" id="confirmWarning">
                 </div>
 
                 <div class="form-group">
                     <label class="field-label">Почта<span class="required">*</span></label>
-                    <input type="email" name="email" id="emailInput" placeholder="your@email.com" required>
+                    <input type="email" name="email" placeholder="your@email.com" required>
                 </div>
-                
+
                 <button type="submit" class="btn">Зарегистрироваться</button>
                 
                 <div class="register-link">
@@ -2122,6 +2163,7 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             document.body.classList.add(isDark ? 'theme-light' : 'theme-dark');
             localStorage.setItem('theme', isDark ? 'theme-light' : 'theme-dark');
         });
+        
 
         const passwordInput = document.getElementById('passwordInput');
         const passwordConfirmInput = document.getElementById('passwordConfirmInput');
