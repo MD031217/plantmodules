@@ -3544,7 +3544,7 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             <div class="user-pill">
                 <img src="/image/dpol.png" alt="User" class="user-avatar avatar-dark" id="header-avatar-dark">
                 <img src="/image/lpol.png" alt="User" class="user-avatar avatar-light" id="header-avatar-light">
-                <span class="user-text" id="header-username">User_login</span>
+                <span class="user-text" id="header-username">Загрузка...</span>
             </div>
             
             <div class="logo-container">
@@ -3767,9 +3767,6 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             // Заполняем поля из серверного ответа
             const fields = {
                 'header-username': profile.username,
-                'profile-name': profile.username,
-                'profile-email': profile.email,
-                'profile-timezone': profile.timezone,
                 'edit-username': profile.username,
                 'edit-email': profile.email,
                 'edit-timezone': profile.timezone
@@ -3778,11 +3775,16 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             Object.keys(fields).forEach(id => {
                 const el = document.getElementById(id);
                 if (el && fields[id]) {
-                    if (id === 'edit-timezone' || id === 'profile-timezone') {
+                    if (id === 'edit-timezone') {
+                        el.value = fields[id];
+                    } else if (el.tagName === 'INPUT') {
                         el.value = fields[id];
                     } else {
                         el.textContent = fields[id];
                     }
+                    console.log(`✅ Установлено ${id}:`, fields[id]);
+                } else if (!el) {
+                    console.warn(`⚠️ Элемент ${id} не найден в DOM`);
                 }
             });
             
@@ -3810,20 +3812,20 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             
             // Пол
             if (profile.gender) {
-                const femaleView = document.getElementById('view-gender-female');
-                const maleView = document.getElementById('view-gender-male');
-                const femaleEdit = document.getElementById('edit-gender-female');
-                const maleEdit = document.getElementById('edit-gender-male');
-                
-                if (femaleView && maleView) {
-                    femaleView.classList.toggle('selected', profile.gender === 'female');
-                    maleView.classList.toggle('selected', profile.gender === 'male');
+                    const femaleEdit = document.getElementById('edit-gender-female');
+                    const maleEdit = document.getElementById('edit-gender-male');
+                    
+                    if (femaleEdit && maleEdit) {
+                        if (profile.gender === 'female') {
+                            femaleEdit.classList.add('selected');
+                            maleEdit.classList.remove('selected');
+                        } else {
+                            femaleEdit.classList.remove('selected');
+                            maleEdit.classList.add('selected');
+                        }
+                        console.log(`✅ Установлен пол: ${profile.gender}`);
+                    }
                 }
-                if (femaleEdit && maleEdit) {
-                    femaleEdit.classList.toggle('selected', profile.gender === 'female');
-                    maleEdit.classList.toggle('selected', profile.gender === 'male');
-                }
-            }
             
             // Тема
             const savedTheme = localStorage.getItem('theme') || 'dark';
