@@ -146,23 +146,35 @@ bool initSDCard() {
 }
 
 
-// Добавь эту функцию где-то после initSDCard()
 void createSDDirectories() {
   Serial.println("=== Создание папок на SD-карте ===");
-  
-  const char* folders[] = {"/sd/image", "/sd/avatars", "/sd/plant"};
-  
+
+  // Лучше создавать относительно корня после монтирования
+  const char* folders[] = {"image", "avatar", "plant"};
+
   for (int i = 0; i < 3; i++) {
-    if (!SD.exists(folders[i])) {
-      if (SD.mkdir(folders[i])) {
-        Serial.printf("Создана папка: %s\n", folders[i]);
+    String path = String("/") + folders[i];
+    
+    if (!SD.exists(path)) {
+      if (SD.mkdir(path)) {
+        Serial.printf("Создана папка: %s\n", path.c_str());
       } else {
-        Serial.printf("Не удалось создать папку: %s\n", folders[i]);
+        Serial.printf("Не удалось создать папку: %s\n", path.c_str());
       }
     } else {
-      Serial.printf("Папка уже существует: %s\n", folders[i]);
+      Serial.printf("Папка уже существует: %s\n", path.c_str());
     }
   }
+
+  // Дополнительная проверка
+  Serial.println("Проверка содержимого SD:");
+  File root = SD.open("/");
+  File file = root.openNextFile();
+  while (file) {
+    Serial.printf("  - %s (%s)\n", file.name(), file.isDirectory() ? "DIR" : "FILE");
+    file = root.openNextFile();
+  }
+  root.close();
 }
 
 // ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
@@ -7297,8 +7309,8 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="page-wrapper">
-        <img src="/image/Лево.png" alt="Leaf Decor" class="deco-leaf leaf-left">
-        <img src="/image/Право.png" alt="Leaf Decor" class="deco-leaf leaf-right">
+        <img src="/image/left.png" alt="Leaf Decor" class="deco-leaf leaf-left">
+        <img src="/image/right.png" alt="Leaf Decor" class="deco-leaf leaf-right">
         
         <div class="content-block">
             <h1 class="hero-title">Мы любим то,<br>что делаем</h1>
@@ -7658,11 +7670,9 @@ void handleAvatarUpload() {
             return;
         }
 
-        // Получаем и сохраняем старый аватар для удаления
         pendingOldAvatarPath = getCurrentAvatarPath(pendingUserId);
         
-        // Новое имя файла
-        pendingNewAvatarPath = "/sd/avatars/av_" + String(millis()) + ".jpg";
+        pendingNewAvatarPath = "/sd/avatar/av_" + String(millis()) + ".jpg";
         Serial.printf("→ Загрузка аватара: %s\n", pendingNewAvatarPath.c_str());
 
     } else if (upload.status == UPLOAD_FILE_WRITE) {
@@ -7672,23 +7682,16 @@ void handleAvatarUpload() {
         if (f) {
             f.write(upload.buf, upload.currentSize);
             f.close();
-        } else {
-            Serial.printf("Ошибка записи: %s\n", pendingNewAvatarPath.c_str());
         }
 
     } else if (upload.status == UPLOAD_FILE_END) {
         if (SD.exists(pendingNewAvatarPath)) {
-            // Удаляем старый аватар
             if (pendingOldAvatarPath.length() > 0 && !pendingOldAvatarPath.startsWith("http")) {
                 String oldFull = "/sd/" + pendingOldAvatarPath;
-                if (SD.exists(oldFull)) {
-                    SD.remove(oldFull);
-                    Serial.printf("Удалён старый аватар: %s\n", oldFull.c_str());
-                }
+                if (SD.exists(oldFull)) SD.remove(oldFull);
             }
 
-            // Относительный путь для БД
-            String relPath = "avatars/" + pendingNewAvatarPath.substring(12); // после /sd/avatars/
+            String relPath = "avatar/" + pendingNewAvatarPath.substring(12);
 
             if (updateUserAvatarInDB(server.header("Authorization").substring(7), relPath)) {
                 DynamicJsonDocument doc(256);
@@ -7704,7 +7707,6 @@ void handleAvatarUpload() {
             server.send(500, "application/json", "{\"error\":\"File not saved\"}");
         }
 
-        // Сброс
         pendingUserId = 0;
         pendingOldAvatarPath = "";
         pendingNewAvatarPath = "";
@@ -7719,15 +7721,25 @@ void handleGetAvatar() {
     }
     
     String fileArg = server.arg("file");
+    
     // Защита от path traversal
     if (fileArg.indexOf("..") >= 0 || fileArg.indexOf("//") >= 0) {
         server.send(400, "text/plain", "Invalid path");
         return;
     }
     
-    String fullPath = "/sd/" + fileArg;
+    String fullPath = fileArg;
+    
+    // Нормализация пути
+    if (fullPath.startsWith("/sd/")) {
+        fullPath = fullPath.substring(3);
+    }
+    if (!fullPath.startsWith("/")) {
+        fullPath = "/" + fullPath;
+    }
+    
     if (!SD.exists(fullPath)) {
-        server.send(404, "text/plain", "File not found");
+        server.send(404, "text/plain", "File not found: " + fullPath);
         return;
     }
     
@@ -7739,7 +7751,6 @@ void handleGetAvatar() {
     server.sendHeader("Cache-Control", "public, max-age=86400");
     server.sendHeader("Content-Type", contentType);
     
-    // Потоковая отправка файла
     File f = SD.open(fullPath, FILE_READ);
     if (f) {
         server.streamFile(f, contentType);
@@ -7771,34 +7782,119 @@ void handleApiLogout() {
     server.send(200, "application/json", "{\"success\":true}");
 }
 
-
-void handleNotFound() {
-  handleRoot();
+// Универсальный обработчик статических файлов
+void handleStaticImage() {
+    String uri = server.uri();
+    
+    // Убираем параметры запроса
+    int qMark = uri.indexOf('?');
+    if (qMark > 0) uri = uri.substring(0, qMark);
+    
+    Serial.printf("📁 Serving static: %s\n", uri.c_str());
+    
+    // Нормализация пути для SD карты
+    String path = uri;
+    
+    // Если путь начинается с /sd/ - убираем этот префикс
+    if (path.startsWith("/sd/")) {
+        path = path.substring(3);
+    }
+    
+    // Убеждаемся, что путь начинается с /
+    if (!path.startsWith("/")) {
+        path = "/" + path;
+    }
+    
+    // Защита от взлома (path traversal)
+    if (path.indexOf("..") >= 0 || path.indexOf("//") >= 0) {
+        server.send(403, "text/plain", "Forbidden");
+        return;
+    }
+    
+    // Проверяем существование файла
+    if (!SD.exists(path)) {
+        Serial.printf("❌ File not found: %s\n", path.c_str());
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+    
+    // Определяем MIME тип по расширению
+    String contentType = "application/octet-stream";
+    if (path.endsWith(".png"))      contentType = "image/png";
+    else if (path.endsWith(".gif")) contentType = "image/gif";
+    else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) 
+        contentType = "image/jpeg";
+    else if (path.endsWith(".svg")) contentType = "image/svg+xml";
+    else if (path.endsWith(".css")) contentType = "text/css";
+    else if (path.endsWith(".js"))  contentType = "application/javascript";
+    else if (path.endsWith(".html"))contentType = "text/html";
+    else if (path.endsWith(".json"))contentType = "application/json";
+    
+    Serial.printf("✅ Sending: %s [%s]\n", path.c_str(), contentType.c_str());
+    
+    // Добавляем кэширование для изображений (1 день)
+    if (path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+        server.sendHeader("Cache-Control", "public, max-age=86400");
+    }
+    
+    server.sendHeader("Content-Type", contentType);
+    
+    File file = SD.open(path, FILE_READ);
+    if (file) {
+        server.streamFile(file, contentType);
+        file.close();
+    } else {
+        server.send(500, "text/plain", "Failed to open file");
+    }
 }
 
-// === Отдача статических изображений с SD-карты ===
-void handleStaticImage() {
-  String filePath = server.uri();           // например: /image/Т.пол.png
-  String fullPath = "/sd" + filePath;       // → /sd/image/Т.пол.png
 
-  if (!SD.exists(fullPath)) {
-    server.send(404, "text/plain", "Image not found");
-    return;
-  }
-
-  String contentType = "image/jpeg";
-  if (filePath.endsWith(".png")) contentType = "image/png";
-  else if (filePath.endsWith(".gif")) contentType = "image/gif";
-  else if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) contentType = "image/jpeg";
-
-  server.sendHeader("Cache-Control", "public, max-age=31536000"); // кэшировать на год
-  File file = SD.open(fullPath, FILE_READ);
-  if (file) {
-    server.streamFile(file, contentType);
-    file.close();
-  } else {
-    server.send(500, "text/plain", "Failed to open file");
-  }
+void handleNotFound() {
+    String uri = server.uri();
+    
+    // Убираем параметры запроса (если есть)
+    int qMark = uri.indexOf('?');
+    if (qMark > 0) uri = uri.substring(0, qMark);
+    
+    // Логируем запрос
+    Serial.printf("🔍 404 handler: %s\n", uri.c_str());
+    
+    // === ПРОВЕРЯЕМ: может это статический файл? ===
+    bool isStaticFile = false;
+    
+    // 1. Проверяем по пути
+    if (uri.startsWith("/image/") || uri.startsWith("/sd/")) {
+        isStaticFile = true;
+    }
+    
+    // 2. Проверяем по расширению
+    if (uri.endsWith(".png") || uri.endsWith(".jpg") || 
+        uri.endsWith(".jpeg") || uri.endsWith(".gif") ||
+        uri.endsWith(".svg") || uri.endsWith(".css") ||
+        uri.endsWith(".js") || uri.endsWith(".ico")) {
+        isStaticFile = true;
+    }
+    
+    // === ЕСЛИ ЭТО СТАТИЧЕСКИЙ ФАЙЛ - ОТДАЁМ ЕГО ===
+    if (isStaticFile) {
+        handleStaticImage();  // ваша функция для отдачи файлов
+        return;
+    }
+    
+    // === ИНАЧЕ - 404 ОШИБКА ===
+    Serial.printf("❌ 404 Not Found: %s\n", uri.c_str());
+    
+    String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>404</title>";
+    html += "<style>body{font-family:Arial;text-align:center;padding:50px;background:#0F182B;color:#21C85F;}";
+    html += "h1{font-size:48px;}p{font-size:18px;}a{color:#21C85F;}</style>";
+    html += "</head><body>";
+    html += "<h1>404</h1>";
+    html += "<p>Страница не найдена</p>";
+    html += "<p>Запрошенный URL: " + uri + "</p>";
+    html += "<p><a href='/'>Вернуться на главную</a></p>";
+    html += "</body></html>";
+    
+    server.send(404, "text/html", html);
 }
 
 // ====================== SETUP ======================
@@ -7858,11 +7954,6 @@ void setup() {
       Serial.println("Требуется SD-карта для работы!");
     }
   }
-  
-if (!SD.exists("/sd/avatars")) {
-    SD.mkdir("/sd/avatars");
-    Serial.println("Created /sd/avatars directory");
-}
 
   // Инициализация SPI для BME280 и e-paper
   SPI.begin();
@@ -7887,39 +7978,35 @@ if (!SD.exists("/sd/avatars")) {
   lastLogTime = millis();
  
   // Настройка веб-сервера
-  server.on("/", handleLogin);
-  server.on("/login", handleLogin);
-  server.on("/register", handleRegister);
-  server.on("/app", handleRoot);
-  server.on("/api/login", HTTP_POST, handleApiLogin);
-  server.on("/api/register", HTTP_POST, handleApiRegister);
-  server.on("/data", handleData);
-  server.on("/hist", handleHist);
-  server.on("/time", handleTime);
-  server.on("/clear", HTTP_POST, handleClear);
-  server.on("/profile", handleProfile);
-  server.on("/edit-profile", handleEditProfile);
-  server.on("/settings", handleSettings);
-  server.on("/plant", handlePlant);
-  server.on("/index", handleIndex);
-  server.onNotFound(handleNotFound);
-  // === НОВОЕ: Регистрация новых API маршрутов ===
-server.on("/api/profile", HTTP_GET, handleGetProfile);
-server.on("/api/profile", HTTP_POST, handleUpdateProfile);
-server.on("/api/avatar", HTTP_POST, [](){ 
-    // Пустой обработчик для инициализации upload
-    server.send(200, "application/json", "{}"); 
-}, handleAvatarUpload);
-server.on("/api/avatar/file", HTTP_GET, handleGetAvatar);
-server.on("/api/logout", HTTP_POST, handleApiLogout);
+  // HTML страницы
+    server.on("/", handleLogin);
+    server.on("/login", handleLogin);
+    server.on("/register", handleRegister);
+    server.on("/app", handleRoot);
+    server.on("/profile", handleProfile);
+    server.on("/edit-profile", handleEditProfile);
+    server.on("/settings", handleSettings);
+    server.on("/plant", handlePlant);
+    server.on("/index", handleIndex);
 
-// Обновляем существующие обработчики
-server.on("/api/login", HTTP_POST, handleApiLogin);      // ЗАМЕНИТЬ старую версию
-server.on("/api/register", HTTP_POST, handleApiRegister); // ЗАМЕНИТЬ старую версию
-  server.begin();
-  server.on("/image/*", HTTP_GET, handleStaticImage);
-  server.onNotFound(handleNotFound); // уже должно быть
-  Serial.println("Web server started");
+     // API маршруты
+    server.on("/api/login", HTTP_POST, handleApiLogin);
+    server.on("/api/register", HTTP_POST, handleApiRegister);
+    server.on("/api/profile", HTTP_GET, handleGetProfile);
+    server.on("/api/profile", HTTP_POST, handleUpdateProfile);
+    server.on("/api/avatar", HTTP_POST, [](){ server.send(200, "application/json", "{}"); }, handleAvatarUpload);
+    server.on("/api/avatar/file", HTTP_GET, handleGetAvatar);
+    server.on("/api/logout", HTTP_POST, handleApiLogout);
+
+    // Data API
+    server.on("/data", handleData);
+    server.on("/hist", handleHist);
+    server.on("/time", handleTime);
+    server.on("/clear", HTTP_POST, handleClear);
+
+    server.onNotFound(handleNotFound);
+    server.begin();
+    Serial.println("Web server started");
   
   // Настройка OTA
   ArduinoOTA.setHostname("SensorC3");
