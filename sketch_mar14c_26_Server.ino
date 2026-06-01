@@ -1502,6 +1502,7 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Вход</title>
     <style>
+         <style>
         :root {
             --page-bg: #EEF0F4;
             --card-bg:  #0FB881;
@@ -1543,6 +1544,36 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             transition: background-color 0.4s ease;
         }
 
+        .falling-leaf {
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 1;
+            animation: fallingLeaf var(--fall-duration, 3s) linear forwards;
+            filter: drop-shadow(0 2px 3px rgba(0,0,0,0.1));
+        }
+
+        @keyframes fallingLeaf {
+            0% {
+                transform: translateY(0) translateX(0) rotate(0deg);
+                opacity: 1;
+            }
+            25% {
+                transform: translateY(25vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg));
+            }
+            50% {
+                transform: translateY(50vh) translateX(calc(var(--sway, 30px) * -0.5)) rotate(calc(var(--rotation, 20deg) * -0.5));
+                opacity: 0.9;
+            }
+            75% {
+                transform: translateY(75vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg));
+            }
+            100% {
+                transform: translateY(110vh) translateX(0) rotate(calc(var(--rotation, 20deg) * 1.5));
+                opacity: 0;
+            }
+        }
+
         .theme-switcher {
             position: absolute;
             top: 32px;
@@ -1563,14 +1594,20 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             transform: scale(1.05);
         }
 
-        .theme-switcher span {
-            font-size: 28px;
-            user-select: none;
+        .theme-switcher .theme-icon-img {
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+            filter: invert(0);
         }
 
         body.theme-light .theme-switcher {
             background-color: #1B263B;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+        }
+
+        body.theme-light .theme-switcher .theme-icon-img {
+            filter: invert(1);
         }
 
         .wrapper {
@@ -1585,14 +1622,43 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             to { opacity: 1; transform: translateY(0); }
         }
 
+        .brand-logo {
+            width: 500px;
+            max-width: 100%;
+            height: auto;
+            margin-bottom: 0px;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .logo-light {
+            display: block;
+        }
+
+        .logo-dark {
+            display: none;
+        }
+
+        body.theme-light .logo-light {
+            display: none;
+        }
+
+        body.theme-light .logo-dark {
+            display: block;
+        }
+
         .auth-card {
-            width: 90%;
-            max-width: 500px;
+            width: 16.67cm;
+            height: 9.86cm;
             background-color: var(--card-bg);
             border-radius: 65px;
-            padding: 40px 32px;
+            padding: 28px 32px 32px;
             box-shadow: var(--shadow);
             transition: background-color 0.4s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
             margin: 0 auto;
         }
 
@@ -1642,9 +1708,6 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
             cursor: pointer;
             opacity: 0.85;
             transition: opacity 0.2s;
-            font-size: 20px;
-            background: none;
-            border: none;
         }
         .toggle-password:hover { opacity: 1; }
 
@@ -1686,33 +1749,39 @@ const char LOGIN_HTML[] PROGMEM = R"rawliteral(
         @media (max-width: 480px) {
             .auth-card {
                 width: 92%;
+                height: auto;
                 padding: 24px 20px;
             }
+            .brand-logo { width: 85%; }
         }
     </style>
 </head>
 <body class="theme-dark">
     <div class="theme-switcher" id="themeSwitcher">
-        <span>◑</span>
+        <img src="/image/тема.png" alt="Переключить тему" class="theme-icon-img">
     </div>
     <div class="wrapper">
+        <img src="/image/Тёмная.png" alt="Зеленая полка" class="brand-logo logo-light">
+        <img src="/image/Светлая.png" alt="Зеленая полка" class="brand-logo logo-dark">
         <div class="auth-card">
             <h1>Авторизация</h1>
             <form id="loginForm"> 
-                <div class="form-group">
-                    <input type="text" id="loginInput" name="login" placeholder="Логин" required autocomplete="username">
-                </div>
-                
-                <div class="form-group">
-                    <input type="password" id="passwordInput" name="password" placeholder="Пароль" required autocomplete="current-password">
-                    <button type="button" class="toggle-password" id="togglePassword">👁</button>
-                </div>
+                <form action="#" method="POST" onsubmit="event.preventDefault();">
+                    <div class="form-group">
+                        <input type="text" id="loginInput" name="login" placeholder="Логин" required autocomplete="username">
+                    </div>
+                    
+                    <div class="form-group">
+                        <input type="password" id="passwordInput" name="password" placeholder="Пароль" required autocomplete="current-password">
+                        <img src="/image/Открытый.png" alt="Показать пароль" class="toggle-password" id="togglePassword">
+                    </div>
 
-                <div class="register-link">
-                    Нет аккаунта? <a href="/register">Зарегистрируйся!</a>
-                </div>
+                    <div class="register-link">
+                        Нет аккаунта? <a href="/register">Зарегистрируйся!</a>
+                    </div>
 
-                <button type="submit" class="btn">Вход</button>
+                    <button type="submit" class="btn">Вход</button>
+                </form>
             </form>
         </div>
     </div>
