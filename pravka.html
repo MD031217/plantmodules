@@ -15,7 +15,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Настройки</title>
+    <title>Первичные настройки</title>
     <style>
         :root { --card-radius: 24px; --transition-speed: 0.4s; }
         body.theme-dark {
@@ -294,7 +294,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
         .network-item:nth-child(1) { animation-delay: 0.1s; }
         .network-item:nth-child(2) { animation-delay: 0.2s; }
         .network-item:nth-child(3) { animation-delay: 0.3s; }
-        /* Статус подключения */
         #connectStatus { margin-top: 12px; font-size: 14px; text-align: center; min-height: 20px; }
         #connectStatus.success { color: var(--accent-green); }
         #connectStatus.error { color: var(--danger); }
@@ -304,31 +303,25 @@ const char settings_html[] PROGMEM = R"rawliteral(
     <div class="top-sticky-wrapper">
         <header class="site-header">
             <a href="profile.html" class="user-pill" aria-label="Профиль">
-                <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
-                <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
+                <img src="dpol.png" alt="" class="user-avatar avatar-dark">
+                <img src="lpol.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">User_login</span>
             </a>
             <div class="logo-container">
-                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
-                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+                <img src="light.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="dark.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
-                <img src="тема.png" alt="" class="theme-icon-img">
+                <img src="topic.png" alt="" class="theme-icon-img">
             </label>
         </header>
-        <input type="checkbox" id="themeToggle" class="mode-toggle">
-        <nav class="navigation">
-            <a href="index.html" class="nav-btn">Главная</a>
-            <a href="myplant.html" class="nav-btn">Мои растения</a>
-            <a href="settings.html" class="nav-btn active">Настройки</a>
-        </nav>
     </div>
     <div class="page-wrapper">
         <main class="main-content">
             <div class="scan-card">
                 <div class="wifi-icon">
-                    <img src="Светлая_большая.png" alt="WiFi" class="wifi-img wifi-light">
-                    <img src="Тёмная_большая.png" alt="WiFi" class="wifi-img wifi-dark">
+                    <img src="light_big.png" alt="WiFi" class="wifi-img wifi-light">
+                    <img src="dark_big.png" alt="WiFi" class="wifi-img wifi-dark">
                 </div>
                 <h1 class="scan-title">Сканирование сетей</h1>
                 <p class="scan-subtitle">Нажмите кнопку ниже для сканирования доступных Wi-Fi сетей</p>
@@ -401,8 +394,8 @@ const char settings_html[] PROGMEM = R"rawliteral(
         <div class="modal-card">
             <div class="modal-network-row">
                 <div class="network-icon">
-                    <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                    <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                    <img src="light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
+                    <img src="dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
                 </div>
                 <span class="modal-network-name" id="modalNetworkName">iPhone</span>
                 <span class="modal-network-security">Защищено</span>
@@ -418,11 +411,8 @@ const char settings_html[] PROGMEM = R"rawliteral(
     </div>
 
     <script>
-        // === Инициализация после загрузки DOM ===
         document.addEventListener('DOMContentLoaded', function() {
             console.log('[JS] DOM loaded, initializing...');
-            
-            // Тема (ваш код)
             (function () {
                 const toggle = document.getElementById('themeToggle');
                 const body = document.body;
@@ -442,7 +432,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 }
             })();
 
-            // Модалка пароля (ваш код)
             const passwordInput = document.getElementById('modalPasswordInput');
             const eyeBtn = document.getElementById('eyeBtn');
             const eyeImg = document.getElementById('eyeImg');
@@ -476,7 +465,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
             window.openModal = openModal;
             window.closeModal = closeModal;
 
-            // Загрузка пользователя (ваш код)
             function loadUserToHeader() {
                 try {
                     const data = JSON.parse(localStorage.getItem('userData'));
@@ -491,7 +479,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
             }
             loadUserToHeader();
 
-            // === НОВЫЙ ФУНКЦИОНАЛ: Wi-Fi ===
             const scanBtn = document.getElementById('scanBtn');
             const networkList = document.getElementById('networkList');
             const addNetworkBtn = document.getElementById('addNetworkBtn');
@@ -500,11 +487,10 @@ const char settings_html[] PROGMEM = R"rawliteral(
             const secSelect = document.getElementById('wifiSec');
             const statusDiv = document.getElementById('connectStatus');
 
-            // Сканирование сетей
             if(scanBtn) scanBtn.addEventListener('click', async () => {
                 console.log('[WiFi] Scan button clicked');
                 scanBtn.disabled = true;
-                scanBtn.textContent = '⏳ Сканирование...';
+                scanBtn.textContent = 'Сканирование...';
                 networkList.style.display = 'block';
                 networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Поиск сетей...</span></div>';
                 
@@ -524,8 +510,8 @@ const char settings_html[] PROGMEM = R"rawliteral(
                             return `
                                 <div class="network-item">
                                     <div class="network-icon">
-                                        <img src="Светлая_маленькая.png" alt="WiFi" class="wifi-img-small wifi-light">
-                                        <img src="Тёмная_маленькая.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                                        <img src="light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
+                                        <img src="dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
                                     </div>
                                     <span class="network-name">${escapedSsid}</span>
                                     <span class="network-security">${sec}</span>
@@ -543,7 +529,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 }
             });
 
-            // Выбор сети из списка
             window.selectNetwork = function(ssid) {
                 console.log('[WiFi] Selected network:', ssid);
                 ssidInput.value = ssid;
@@ -569,7 +554,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 }
 
                 addNetworkBtn.disabled = true;
-                addNetworkBtn.textContent = '⏳ Подключение...';
+                addNetworkBtn.textContent = 'Подключение...';
                 statusDiv.textContent = '';
                 statusDiv.className = '';
 
@@ -589,21 +574,20 @@ const char settings_html[] PROGMEM = R"rawliteral(
                     console.log('[WiFi] Response:', data);
 
                     if (data.status === 'success') {
-                        statusDiv.textContent = '✅ Подключено! Переход в профиль...';
+                        statusDiv.textContent = 'Подключено! Переход в профиль...';
                         statusDiv.className = 'success';
-                        // Ждём 1.5 сек для переключения сети и редиректим
                         setTimeout(() => {
                             console.log('[WiFi] Redirecting to http://' + data.ip + '/profile.html');
                             window.location.href = 'http://' + data.ip + '/profile.html';
                         }, 1500);
                     } else {
-                        statusDiv.textContent = '❌ ' + (data.message || 'Ошибка подключения');
+                        statusDiv.textContent = (data.message || 'Ошибка подключения');
                         statusDiv.className = 'error';
                         addNetworkBtn.textContent = 'Добавить';
                     }
                 } catch (e) {
                     console.error('[WiFi] Connect error:', e);
-                    statusDiv.textContent = '❌ Ошибка соединения: ' + e.message;
+                    statusDiv.textContent = 'Ошибка соединения: ' + e.message;
                     statusDiv.className = 'error';
                     addNetworkBtn.textContent = 'Добавить';
                 } finally {
@@ -704,14 +688,14 @@ void setup() {
     }
     
     // Роуты
-    server.on("/settings.html", HTTP_GET, [](){
-        Serial.println("[HTTP] Serving /settings.html");
-        server.send(200, "text/html", settings_html);
+    server.on("/pravka.html", HTTP_GET, [](){
+        Serial.println("[HTTP] Serving /pravka.html");
+        server.send(200, "text/html", pravka.html);
     });
     server.on("/api/scan", HTTP_GET, handleScan);
     server.on("/api/configure", HTTP_POST, handleConfigure);
     server.on("/", HTTP_GET, [](){
-        server.sendHeader("Location", "/settings.html", true);
+        server.sendHeader("Location", "/pravka.html", true);
         server.send(302);
     });
     
