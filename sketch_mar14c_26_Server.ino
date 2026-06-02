@@ -20,7 +20,7 @@
 #define STA_SSID "linksys"
 #define STA_PASS ""
 #define AP_SSID  "netSensorModule-01"
-#define AP_PASS  "188B0E14E2C1"
+#define AP_PASS  "12345678"
 #define MDNS_NAME "SensorModule-C3"
 IPAddress ap_ip(192, 168, 10, 1);
 IPAddress ap_mask(255, 255, 255, 0);
@@ -4777,7 +4777,7 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             <a href="/profile" class="user-pill" aria-label="Профиль">
                 <img src="/image/dpol.png" alt="" class="user-avatar avatar-dark">
                 <img src="/image/lpol.png" alt="" class="user-avatar avatar-light">
-                <span class="user-text">User_login</span>
+                <span class="user-text">Загрузка...</span>
             </a>
 
             <div class="logo-container">
@@ -4924,7 +4924,75 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <script>
-        // === ИСПРАВЛЕННЫЙ JAVASCRIPT БЕЗ IIFE ===
+        // Функция загрузки профиля с сервера
+        async function loadProfileFromServer() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.log('❌ Нет токена');
+                return null;
+            }
+            
+            try {
+                console.log('🔄 Загружаю профиль для settings...');
+                const res = await fetch('/api/profile', {
+                    headers: {'Authorization': 'Bearer ' + token}
+                });
+                
+                if (res.status === 401) {
+                    console.log('❌ Токен недействителен');
+                    localStorage.removeItem('auth_token');
+                    window.location.href = '/login';
+                    return null;
+                }
+                
+                const profile = await res.json();
+                console.log('✅ Профиль загружен:', profile.username);
+                return profile;
+            } catch (e) {
+                console.error('❌ Profile load error:', e);
+                return null;
+            }
+        }
+
+        // Функция для правильного формирования пути к аватару
+        function resolveAvatarPath(path) {
+            if (!path || path === '') {
+                return '/image/default-avatar.jpg';
+            }
+            if (path.startsWith('http')) return path;
+            // Нормализуем путь
+            let cleanPath = path.replace(/^\/+/, '');
+            return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
+        }
+
+        // Загрузка данных пользователя в шапку
+        async function loadUserToHeader() {
+            const profile = await loadProfileFromServer();
+            if (!profile) return;
+            
+            // Обновляем имя пользователя
+            const userText = document.querySelector('.user-pill .user-text');
+            if (userText) {
+                userText.textContent = profile.username;
+                console.log('✅ Имя обновлено:', profile.username);
+            }
+            
+            // Обновляем аватар
+            const avatarSrc = resolveAvatarPath(profile.avatar);
+            const avDark = document.querySelector('.user-pill .avatar-dark');
+            const avLight = document.querySelector('.user-pill .avatar-light');
+            
+            if (avDark) {
+                avDark.src = avatarSrc;
+                avDark.onerror = () => { avDark.src = '/image/default-avatar.jpg'; };
+            }
+            if (avLight) {
+                avLight.src = avatarSrc;
+                avLight.onerror = () => { avLight.src = '/image/default-avatar.jpg'; };
+            }
+            
+            console.log('✅ Аватар обновлен:', avatarSrc);
+        }
 
         const initThemes = () => {
             // Первый инициализатор темы
@@ -5012,19 +5080,20 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             document.getElementById('passwordModal').classList.remove('active');
         };
 
-        const loadUserToHeader = () => {
-            const data = JSON.parse(localStorage.getItem('userData') || '{}');
-            const userText = document.querySelector('.user-pill .user-text');
-            if (userText) userText.textContent = data.username || 'User_login';
-
-            const avDark = document.querySelector('.user-pill .avatar-dark');
-            const avLight = document.querySelector('.user-pill .avatar-light');
-            if (avDark) avDark.src = data.avatar || '';
-            if (avLight) avLight.src = data.avatar || '';
-        };
+        // Проверка авторизации при загрузке
+        function checkAuth() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.log('❌ Нет токена, редирект на /login');
+                window.location.href = '/login';
+                return false;
+            }
+            return true;
+        }
 
         // Запуск всего после загрузки страницы
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!checkAuth()) return;
             initThemes();
             initThemeSwitcher();
             loadUserToHeader();
@@ -5048,6 +5117,11 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                 modal.addEventListener('click', (e) => {
                     if (e.target === modal) closeModal();
                 });
+            }
+            // Кнопка сканирования Wi-Fi
+            const scanBtn = document.getElementById('scanBtn');
+            if (scanBtn) {
+                scanBtn.onclick = toggleScan;
             }
         });
     </script>
@@ -5924,7 +5998,7 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
             <a href="/profile" class="user-pill" aria-label="Профиль">
                 <img src="/image/dpol.png" alt="" class="user-avatar avatar-dark">
                 <img src="/image/lpol.png" alt="" class="user-avatar avatar-light">
-                <span class="user-text">User_login</span>
+                <span class="user-text">Загрузка...</span>
             </a>
 
             <div class="logo-container">
@@ -6077,16 +6151,68 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
-        (function () {
+        // === ЗАГРУЗКА ПРОФИЛЯ С СЕРВЕРА ===
+        async function loadProfileFromServer() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.log('❌ Нет токена, редирект на /login');
+                window.location.href = '/login';
+                return null;
+            }
+            
+            try {
+                const res = await fetch('/api/profile', {
+                    headers: {'Authorization': 'Bearer ' + token}
+                });
+                
+                if (res.status === 401) {
+                    console.log('❌ Токен недействителен');
+                    localStorage.removeItem('auth_token');
+                    window.location.href = '/login';
+                    return null;
+                }
+                
+                return await res.json();
+            } catch (e) {
+                console.error('Profile load error:', e);
+                return null;
+            }
+        }
+
+        function resolveAvatarPath(path) {
+            if (!path || path === '') return '/image/default-avatar.jpg';
+            if (path.startsWith('http')) return path;
+            let cleanPath = path.replace(/^\/+/, '');
+            return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
+        }
+
+        async function loadUserToHeader() {
+            const profile = await loadProfileFromServer();
+            if (!profile) return;
+            
+            const userText = document.querySelector('.user-pill .user-text');
+            if (userText) userText.textContent = profile.username;
+            
+            const avatarSrc = resolveAvatarPath(profile.avatar);
+            const avDark = document.querySelector('.user-pill .avatar-dark');
+            const avLight = document.querySelector('.user-pill .avatar-light');
+            
+            if (avDark) avDark.src = avatarSrc;
+            if (avLight) avLight.src = avatarSrc;
+        }
+
+        // Инициализация темы
+        (function initTheme() {
             const toggle = document.getElementById('themeToggle');
-            const body   = document.body;
-            const KEY    = 'theme'; 
+            const body = document.body;
+            const KEY = 'theme';
             const saved = localStorage.getItem(KEY) || 'dark';
             body.classList.remove('theme-dark', 'theme-light');
             body.classList.add('theme-' + saved);
             if (toggle) toggle.checked = (saved === 'light');
+            
             if (toggle) {
-                toggle.addEventListener('change', function () {
+                toggle.addEventListener('change', function() {
                     const next = toggle.checked ? 'light' : 'dark';
                     body.classList.remove('theme-dark', 'theme-light');
                     body.classList.add('theme-' + next);
@@ -6094,41 +6220,8 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
                 });
             }
         })();
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            const themeBtn = document.getElementById('themeSwitcher'); 
-            const body = document.body;
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme) {
-                body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
-            }
-            if(themeBtn) {
-                themeBtn.addEventListener('click', () => {
-                    if (body.classList.contains('theme-light')) {
-                        body.className = 'theme-dark';
-                        localStorage.setItem('theme', 'dark');
-                    } else {
-                        body.className = 'theme-light';
-                        localStorage.setItem('theme', 'light');
-                    }
-                });
-            }
-        });
 
-         function loadUserToHeader() {
-            const data = JSON.parse(localStorage.getItem('userData'));
-            if (!data) return; 
-            const userText = document.querySelector('.user-pill .user-text');
-            if (userText) userText.textContent = data.username;
-
-            const avDark = document.querySelector('.user-pill .avatar-dark');
-            const avLight = document.querySelector('.user-pill .avatar-light');
-            if (avDark) avDark.src = data.avatar;
-            if (avLight) avLight.src = data.avatar;
-        }
-
-        document.addEventListener('DOMContentLoaded', loadUserToHeader);
-
+        // Остальной код для растений
         const modal = document.getElementById('plantModal');
         const addCard = document.getElementById('addPlantCard');
         const closeBtn = document.querySelector('.modal-close');
@@ -6397,17 +6490,16 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
             });
         });
 
-        document.addEventListener('DOMContentLoaded', loadPlants);
-
+        // Модальное окно редактирования
         document.addEventListener('DOMContentLoaded', () => {
-            const modal = document.getElementById('editModal');
-            const closeBtn = document.getElementById('closeEditModal');
+            const editModal = document.getElementById('editModal');
+            const closeEditBtn = document.getElementById('closeEditModal');
             const saveBtn = document.getElementById('savePlantBtn');
             const nameInput = document.getElementById('editPlantName');
             const photoInput = document.getElementById('editPlantPhoto');
             const previewImg = document.getElementById('editPlantPreview');
             
-            const paramInputs = {
+            const editParamInputs = {
                 temp: document.getElementById('editParamTemp'),
                 humid: document.getElementById('editParamHumid'),
                 light: document.getElementById('editParamLight'),
@@ -6429,71 +6521,96 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
                 // Заполняем поля текущими значениями
                 nameInput.value = label.textContent;
                 previewImg.src = img.src;
-                photoInput.value = ''; // сброс файлового инпута
-                paramInputs.temp.value = params.temp || '';
-                paramInputs.humid.value = params.humid || '';
-                paramInputs.light.value = params.light || '';
-                paramInputs.water.value = params.water || '';
+                photoInput.value = '';
+                if (editParamInputs.temp) editParamInputs.temp.value = params.temp || '';
+                if (editParamInputs.humid) editParamInputs.humid.value = params.humid || '';
+                if (editParamInputs.light) editParamInputs.light.value = params.light || '';
+                if (editParamInputs.water) editParamInputs.water.value = params.water || '';
 
-                modal.style.display = 'flex';
+                editModal.style.display = 'flex';
                 checkValidity();
             });
 
             // 2. Закрытие окна
-            const closeModal = () => {
-                modal.style.display = 'none';
+            const closeEditModal = () => {
+                editModal.style.display = 'none';
                 currentCard = null;
             };
-            closeBtn.addEventListener('click', closeModal);
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) closeModal();
-            });
+            if (closeEditBtn) closeEditBtn.addEventListener('click', closeEditModal);
+            if (editModal) {
+                editModal.addEventListener('click', (e) => {
+                    if (e.target === editModal) closeEditModal();
+                });
+            }
 
             // 3. Предпросмотр фото
-            photoInput.addEventListener('change', (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = (ev) => previewImg.src = ev.target.result;
-                    reader.readAsDataURL(file);
-                }
-            });
+            if (photoInput) {
+                photoInput.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => previewImg.src = ev.target.result;
+                        reader.readAsDataURL(file);
+                    }
+                });
+            }
 
             // 4. Активация кнопки сохранения
             const checkValidity = () => {
                 const isValid = nameInput.value.trim().length > 0;
-                saveBtn.classList.toggle('active', isValid);
-                saveBtn.style.cursor = isValid ? 'pointer' : 'not-allowed';
+                if (saveBtn) {
+                    saveBtn.classList.toggle('active', isValid);
+                    saveBtn.style.cursor = isValid ? 'pointer' : 'not-allowed';
+                }
             };
-            nameInput.addEventListener('input', checkValidity);
+            if (nameInput) nameInput.addEventListener('input', checkValidity);
 
             // 5. Сохранение изменений
-            saveBtn.addEventListener('click', () => {
-                if (!currentCard || !nameInput.value.trim()) return;
+            if (saveBtn) {
+                saveBtn.addEventListener('click', () => {
+                    if (!currentCard || !nameInput.value.trim()) return;
 
-                // Обновляем DOM
-                currentCard.querySelector('.plant-label').textContent = nameInput.value.trim();
-                if (previewImg.src && previewImg.src !== currentCard.querySelector('.plant-img').src) {
-                    currentCard.querySelector('.plant-img').src = previewImg.src;
-                }
+                    currentCard.querySelector('.plant-label').textContent = nameInput.value.trim();
+                    if (previewImg.src && previewImg.src !== currentCard.querySelector('.plant-img').src) {
+                        currentCard.querySelector('.plant-img').src = previewImg.src;
+                    }
 
-                // Сохраняем параметры в data-атрибут (для следующих открытий)
-                const newParams = {
-                    temp: paramInputs.temp.value,
-                    humid: paramInputs.humid.value,
-                    light: paramInputs.light.value,
-                    water: paramInputs.water.value
-                };
-                currentCard.dataset.params = JSON.stringify(newParams);
+                    const newParams = {
+                        temp: editParamInputs.temp ? editParamInputs.temp.value : '',
+                        humid: editParamInputs.humid ? editParamInputs.humid.value : '',
+                        light: editParamInputs.light ? editParamInputs.light.value : '',
+                        water: editParamInputs.water ? editParamInputs.water.value : ''
+                    };
+                    currentCard.dataset.params = JSON.stringify(newParams);
 
-                closeModal();
-            });
+                    closeEditModal();
+                });
+            }
 
             // Клик по ссылке "Изменить фото"
-            document.querySelector('.modal-link')?.addEventListener('click', (e) => {
-                e.preventDefault();
-                photoInput.click();
-            });
+            const modalLink = document.querySelector('#editModal .modal-link');
+            if (modalLink) {
+                modalLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    if (photoInput) photoInput.click();
+                });
+            }
+        });
+
+        // === ГЛАВНЫЙ ЗАПУСК ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ===
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Проверяем токен
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+            
+            // Загружаем профиль
+            await loadUserToHeader();
+            
+            // Загружаем растения
+            loadPlants();
         });
     </script>
 </body>
@@ -7550,7 +7667,7 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
             <a href="/profile" class="user-pill" aria-label="Профиль">
                 <img src="/image/dpol.png" alt="" class="user-avatar avatar-dark">
                 <img src="/image/lpol.png" alt="" class="user-avatar avatar-light">
-                <span class="user-text">User_login</span>
+                <span class="user-text">Загрузка...</span>
             </a>
 
             <div class="logo-container">
@@ -7617,7 +7734,7 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="module-card" onclick="location.href='/app'">
-                <img src="Micro.jpg" alt="Климат" class="module-icon">
+                <img src="Micro.png" alt="Климат" class="module-icon">
                 <h3 class="module-title">Контроль климата</h3>
                 <p class="module-description">
                     Мониторинг температуры и влажности с автоматической корректировкой микроклимата
@@ -7654,16 +7771,66 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
-        (function () {
+        // === ЗАГРУЗКА ПРОФИЛЯ С СЕРВЕРА ===
+        async function loadProfileFromServer() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.log('❌ Нет токена, но на лендинге не редиректим');
+                return null;
+            }
+            
+            try {
+                const res = await fetch('/api/profile', {
+                    headers: {'Authorization': 'Bearer ' + token}
+                });
+                
+                if (res.status === 401) {
+                    console.log('❌ Токен недействителен');
+                    localStorage.removeItem('auth_token');
+                    return null;
+                }
+                
+                return await res.json();
+            } catch (e) {
+                console.error('Profile load error:', e);
+                return null;
+            }
+        }
+
+        function resolveAvatarPath(path) {
+            if (!path || path === '') return '/image/default-avatar.jpg';
+            if (path.startsWith('http')) return path;
+            let cleanPath = path.replace(/^\/+/, '');
+            return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
+        }
+
+        async function loadUserToHeader() {
+            const profile = await loadProfileFromServer();
+            if (!profile) return;
+            
+            const userText = document.querySelector('.user-pill .user-text');
+            if (userText) userText.textContent = profile.username;
+            
+            const avatarSrc = resolveAvatarPath(profile.avatar);
+            const avDark = document.querySelector('.user-pill .avatar-dark');
+            const avLight = document.querySelector('.user-pill .avatar-light');
+            
+            if (avDark) avDark.src = avatarSrc;
+            if (avLight) avLight.src = avatarSrc;
+        }
+
+        // Инициализация темы
+        (function initTheme() {
             const toggle = document.getElementById('themeToggle');
-            const body   = document.body;
-            const KEY    = 'theme'; 
+            const body = document.body;
+            const KEY = 'theme';
             const saved = localStorage.getItem(KEY) || 'dark';
             body.classList.toggle('theme-dark', saved === 'dark');
             body.classList.toggle('theme-light', saved === 'light');
             if (toggle) toggle.checked = saved === 'light';
+            
             if (toggle) {
-                toggle.addEventListener('change', function () {
+                toggle.addEventListener('change', function() {
                     const next = toggle.checked ? 'light' : 'dark';
                     body.classList.toggle('theme-dark', !toggle.checked);
                     body.classList.toggle('theme-light', toggle.checked);
@@ -7672,8 +7839,9 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
             }
         })();
 
+        // Дополнительная инициализация темы (через кнопку)
         document.addEventListener('DOMContentLoaded', () => {
-            const themeBtn = document.getElementById('themeSwitcher'); 
+            const themeBtn = document.getElementById('themeSwitcher');
             const body = document.body;
             const savedTheme = localStorage.getItem('theme');
             
@@ -7681,7 +7849,7 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
                 body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
             }
 
-            if(themeBtn) {
+            if (themeBtn) {
                 themeBtn.addEventListener('click', () => {
                     if (body.classList.contains('theme-light')) {
                         body.className = 'theme-dark';
@@ -7694,20 +7862,10 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
             }
         });
 
-        function loadUserToHeader() {
-            const data = JSON.parse(localStorage.getItem('userData'));
-            if (!data) return; 
-            const userText = document.querySelector('.user-pill .user-text');
-            if (userText) userText.textContent = data.username;
-
-            const avDark = document.querySelector('.user-pill .avatar-dark');
-            const avLight = document.querySelector('.user-pill .avatar-light');
-            if (avDark) avDark.src = data.avatar;
-            if (avLight) avLight.src = data.avatar;
-        }
-
-        document.addEventListener('DOMContentLoaded', loadUserToHeader);
-        
+        // Загружаем профиль после загрузки страницы
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadUserToHeader();
+        });
     </script>
 </body>
 </html>
