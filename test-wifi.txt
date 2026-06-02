@@ -465,6 +465,21 @@ const char settings_html[] PROGMEM = R"rawliteral(
             window.openModal = openModal;
             window.closeModal = closeModal;
 
+            // Загрузка пользователя (ваш код)
+            function loadUserToHeader() {
+                try {
+                    const data = JSON.parse(localStorage.getItem('userData'));
+                    if (!data) return; 
+                    const userText = document.querySelector('.user-pill .user-text');
+                    if (userText) userText.textContent = data.username;
+                    const avDark = document.querySelector('.user-pill .avatar-dark');
+                    const avLight = document.querySelector('.user-pill .avatar-light');
+                    if (avDark) avDark.src = data.avatar;
+                    if (avLight) avLight.src = data.avatar;
+                } catch(e) { console.log('[User] No saved user data'); }
+            }
+            loadUserToHeader();
+
             // === НОВЫЙ ФУНКЦИОНАЛ: Wi-Fi ===
             const scanBtn = document.getElementById('scanBtn');
             const networkList = document.getElementById('networkList');
@@ -478,7 +493,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
             if(scanBtn) scanBtn.addEventListener('click', async () => {
                 console.log('[WiFi] Scan button clicked');
                 scanBtn.disabled = true;
-                scanBtn.textContent = 'Сканирование...';
+                scanBtn.textContent = '⏳ Сканирование...';
                 networkList.style.display = 'block';
                 networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Поиск сетей...</span></div>';
                 
