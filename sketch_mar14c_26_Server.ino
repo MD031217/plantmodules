@@ -46,24 +46,6 @@ WebServer server(80);
 // ==================== SQLite БАЗА ДАННЫХ на SD-карте ====================
 #define DB_FILE "/sd/sensor_log.db"
 
-/*/ === НОВОЕ: Таблицы пользователей и сессий ===
-#define SQL_CREATE_USERS "CREATE TABLE IF NOT EXISTS Users (" \
-    "id INTEGER PRIMARY KEY AUTOINCREMENT, " \
-    "username TEXT UNIQUE NOT NULL, " \
-    "password TEXT NOT NULL, " \
-    "email TEXT UNIQUE NOT NULL, " \
-    "gender TEXT DEFAULT 'female', " \
-    "timezone TEXT DEFAULT '(UTC+05:00) Asia/Yekaterinburg', " \
-    "avatar TEXT DEFAULT '', " \
-    "created_at INTEGER NOT NULL);"
-
-#define SQL_CREATE_SESSIONS "CREATE TABLE IF NOT EXISTS Sessions (" \
-    "id INTEGER PRIMARY KEY AUTOINCREMENT, " \
-    "token TEXT UNIQUE NOT NULL, " \
-    "user_id INTEGER NOT NULL, " \
-    "created_at INTEGER NOT NULL, " \
-    "FOREIGN KEY(user_id) REFERENCES Users(id));"*/
-
 #define MAX_LOG_ENTRIES 1000
 
 sqlite3 *db = nullptr;
@@ -258,6 +240,32 @@ void initDB() {
     sqlite3_free(zErrMsg);
     zErrMsg = nullptr;
   }
+
+    // Таблица Plants (растения пользователя)
+    const char* sqlPlants = 
+    "CREATE TABLE IF NOT EXISTS Plants ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "user_id INTEGER NOT NULL, "
+    "name TEXT NOT NULL, "
+    "comment TEXT, "
+    "photo_path TEXT, "
+    "temp_param REAL, "
+    "humidity_param REAL, "
+    "soil_param REAL, "
+    "pressure_param REAL, "
+    "created_at INTEGER NOT NULL, "
+    "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE);";
+
+    rc = sqlite3_exec(db, sqlPlants, NULL, NULL, &zErrMsg);
+    if (rc != SQLITE_OK) {
+        Serial.printf("Ошибка создания Plants: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+    } else {
+        Serial.println("Таблица Plants создана/проверена");
+    }
+
+    // Добавить индексы для быстрого поиска
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_plants_user_id ON Plants(user_id);", NULL, NULL, NULL);
 
     Serial.println("Все таблицы проверены и готовы");
 
@@ -500,6 +508,155 @@ bool updateUserAvatarInDB(const String& token, const String& relPath) {
     
     bool success = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
+    return success;
+}
+
+// ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С РАСТЕНИЯМИ ====================
+
+// Получить все растения пользователя
+String getUserPlants(int userId) {
+    if (!db || userId == 0) return "[]";
+    
+    const char* sql = "SELECT id, name, comment, photo_path, temp_param, humidity_param, soil_param, pressure_param, created_at FROM Plants WHERE user_id = ? ORDER BY created_at DESC;";
+    sqlite3_stmt* stmt = nullptr;
+    
+    DynamicJsonDocument doc(8192);
+    JsonArray arr = doc.to<JsonArray>();
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, userId);
+        
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            JsonObject obj = arr.createNestedObject();
+            obj["id"] = sqlite3_column_int(stmt, 0);
+            
+            const char* name = (const char*)sqlite3_column_text(stmt, 1);
+            obj["name"] = name ? String(name) : "";
+            
+            const char* comment = (const char*)sqlite3_column_text(stmt, 2);
+            obj["comment"] = comment ? String(comment) : "";
+            
+            const char* photo = (const char*)sqlite3_column_text(stmt, 3);
+            obj["photo"] = photo ? String(photo) : "";
+            
+            obj["temp"] = sqlite3_column_double(stmt, 4);
+            obj["humidity"] = sqlite3_column_double(stmt, 5);
+            obj["soil"] = sqlite3_column_double(stmt, 6);
+            obj["pressure"] = sqlite3_column_double(stmt, 7);
+            obj["created_at"] = sqlite3_column_int(stmt, 8);
+        }
+        sqlite3_finalize(stmt);
+    }
+    
+    String out;
+    serializeJson(arr, out);
+    return out;
+}
+
+// Добавить растение
+bool addPlant(int userId, const String& name, const String& comment, const String& photoPath,
+              float temp, float humidity, float soil, float pressure) {
+    if (!db || userId == 0) return false;
+    
+    const char* sql = "INSERT INTO Plants (user_id, name, comment, photo_path, temp_param, humidity_param, soil_param, pressure_param, created_at) VALUES (?,?,?,?,?,?,?,?,?);";
+    sqlite3_stmt* stmt = nullptr;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Serial.printf("Prepare addPlant error: %s\n", sqlite3_errmsg(db));
+        return false;
+    }
+    
+    sqlite3_bind_int(stmt, 1, userId);
+    sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, comment.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, photoPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 5, temp);
+    sqlite3_bind_double(stmt, 6, humidity);
+    sqlite3_bind_double(stmt, 7, soil);
+    sqlite3_bind_double(stmt, 8, pressure);
+    sqlite3_bind_int(stmt, 9, time(nullptr));
+    
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    
+    if (!success) {
+        Serial.printf("Add plant error: %s\n", sqlite3_errmsg(db));
+    }
+    return success;
+}
+
+// Обновить растение
+bool updatePlant(int plantId, int userId, const String& name, const String& comment, const String& photoPath,
+                 float temp, float humidity, float soil, float pressure) {
+    if (!db || userId == 0) return false;
+    
+    String sql = "UPDATE Plants SET name=?, comment=?, photo_path=?, temp_param=?, humidity_param=?, soil_param=?, pressure_param=? WHERE id=? AND user_id=?;";
+    sqlite3_stmt* stmt = nullptr;
+    
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        Serial.printf("Prepare updatePlant error: %s\n", sqlite3_errmsg(db));
+        return false;
+    }
+    
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, comment.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, photoPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 4, temp);
+    sqlite3_bind_double(stmt, 5, humidity);
+    sqlite3_bind_double(stmt, 6, soil);
+    sqlite3_bind_double(stmt, 7, pressure);
+    sqlite3_bind_int(stmt, 8, plantId);
+    sqlite3_bind_int(stmt, 9, userId);
+    
+    bool success = (sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    return success;
+}
+
+// Удалить растение
+bool deletePlant(int plantId, int userId) {
+    if (!db || userId == 0) return false;
+    
+    // Сначала получим путь к фото для удаления файла
+    const char* selectSql = "SELECT photo_path FROM Plants WHERE id=? AND user_id=?;";
+    sqlite3_stmt* selectStmt = nullptr;
+    String photoPath;
+    
+    if (sqlite3_prepare_v2(db, selectSql, -1, &selectStmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(selectStmt, 1, plantId);
+        sqlite3_bind_int(selectStmt, 2, userId);
+        
+        if (sqlite3_step(selectStmt) == SQLITE_ROW) {
+            const char* path = (const char*)sqlite3_column_text(selectStmt, 0);
+            if (path) photoPath = String(path);
+        }
+        sqlite3_finalize(selectStmt);
+    }
+    
+    // Удаляем запись из БД
+    const char* deleteSql = "DELETE FROM Plants WHERE id=? AND user_id=?;";
+    sqlite3_stmt* deleteStmt = nullptr;
+    
+    if (sqlite3_prepare_v2(db, deleteSql, -1, &deleteStmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    
+    sqlite3_bind_int(deleteStmt, 1, plantId);
+    sqlite3_bind_int(deleteStmt, 2, userId);
+    
+    bool success = (sqlite3_step(deleteStmt) == SQLITE_DONE);
+    sqlite3_finalize(deleteStmt);
+    
+    // Удаляем файл фото если он существует и не является дефолтным
+    if (success && photoPath.length() > 0 && !photoPath.startsWith("http")) {
+        String fullPath = "/" + photoPath;
+        if (!fullPath.startsWith("/")) fullPath = "/" + fullPath;
+        if (SD.exists(fullPath)) {
+            SD.remove(fullPath);
+            Serial.printf("Удален файл фото: %s\n", fullPath.c_str());
+        }
+    }
+    
     return success;
 }
 
@@ -8274,6 +8431,280 @@ void handleApiLogout() {
     server.send(200, "application/json", "{\"success\":true}");
 }
 
+// ==================== API ДЛЯ РАСТЕНИЙ ====================
+
+// Получить все растения пользователя
+void handleGetPlants() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    int userId = getUserIdByToken(token);
+    
+    if (!userId) {
+        server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+        return;
+    }
+    
+    String plants = getUserPlants(userId);
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.send(200, "application/json", plants);
+}
+
+// Добавить растение
+void handleAddPlant() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    int userId = getUserIdByToken(token);
+    
+    if (!userId) {
+        server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+        return;
+    }
+    
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"Missing data\"}");
+        return;
+    }
+    
+    DynamicJsonDocument doc(1024);
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    
+    if (err) {
+        server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    String name = doc["name"] | "";
+    String comment = doc["comment"] | "";
+    String photo = doc["photo"] | "";
+    float temp = doc["temp"] | 0;
+    float humidity = doc["humidity"] | 0;
+    float soil = doc["soil"] | 0;
+    float pressure = doc["pressure"] | 0;
+    
+    if (name.length() == 0) {
+        server.send(400, "application/json", "{\"error\":\"Plant name required\"}");
+        return;
+    }
+    
+    bool success = addPlant(userId, name, comment, photo, temp, humidity, soil, pressure);
+    
+    if (success) {
+        server.send(200, "application/json", "{\"success\":true}");
+    } else {
+        server.send(500, "application/json", "{\"error\":\"Failed to add plant\"}");
+    }
+}
+
+// Обновить растение
+void handleUpdatePlant() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    int userId = getUserIdByToken(token);
+    
+    if (!userId) {
+        server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+        return;
+    }
+    
+    if (!server.hasArg("plain")) {
+        server.send(400, "application/json", "{\"error\":\"Missing data\"}");
+        return;
+    }
+    
+    DynamicJsonDocument doc(1024);
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    
+    if (err) {
+        server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    int plantId = doc["id"] | 0;
+    String name = doc["name"] | "";
+    String comment = doc["comment"] | "";
+    String photo = doc["photo"] | "";
+    float temp = doc["temp"] | 0;
+    float humidity = doc["humidity"] | 0;
+    float soil = doc["soil"] | 0;
+    float pressure = doc["pressure"] | 0;
+    
+    if (plantId == 0 || name.length() == 0) {
+        server.send(400, "application/json", "{\"error\":\"Invalid data\"}");
+        return;
+    }
+    
+    bool success = updatePlant(plantId, userId, name, comment, photo, temp, humidity, soil, pressure);
+    
+    if (success) {
+        server.send(200, "application/json", "{\"success\":true}");
+    } else {
+        server.send(500, "application/json", "{\"error\":\"Failed to update plant\"}");
+    }
+}
+
+// Удалить растение
+void handleDeletePlant() {
+    String auth = server.header("Authorization");
+    if (!auth.startsWith("Bearer ")) {
+        server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+        return;
+    }
+    
+    String token = auth.substring(7);
+    int userId = getUserIdByToken(token);
+    
+    if (!userId) {
+        server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+        return;
+    }
+    
+    if (!server.hasArg("id")) {
+        server.send(400, "application/json", "{\"error\":\"Plant ID required\"}");
+        return;
+    }
+    
+    int plantId = server.arg("id").toInt();
+    
+    if (plantId == 0) {
+        server.send(400, "application/json", "{\"error\":\"Invalid plant ID\"}");
+        return;
+    }
+    
+    bool success = deletePlant(plantId, userId);
+    
+    if (success) {
+        server.send(200, "application/json", "{\"success\":true}");
+    } else {
+        server.send(500, "application/json", "{\"error\":\"Failed to delete plant\"}");
+    }
+}
+
+// Загрузка фото растения
+void handlePlantPhotoUpload() {
+    HTTPUpload& upload = server.upload();
+    
+    if (upload.status == UPLOAD_FILE_START) {
+        Serial.println("=== НАЧАЛО ЗАГРУЗКИ ФОТО РАСТЕНИЯ ===");
+        
+        String auth = server.header("Authorization");
+        if (!auth.startsWith("Bearer ")) {
+            server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
+            return;
+        }
+        
+        String token = auth.substring(7);
+        int userId = getUserIdByToken(token);
+        
+        if (!userId) {
+            server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
+            return;
+        }
+        
+        // Определяем формат файла
+        String contentType = server.header("Content-Type");
+        String fileExt = ".jpg";
+        
+        if (contentType.indexOf("image/png") >= 0) fileExt = ".png";
+        else if (contentType.indexOf("image/gif") >= 0) fileExt = ".gif";
+        else if (contentType.indexOf("image/jpeg") >= 0 || contentType.indexOf("image/jpg") >= 0) fileExt = ".jpg";
+        else if (contentType.indexOf("image/webp") >= 0) fileExt = ".webp";
+        
+        // Генерируем уникальное имя
+        String timestamp = String(millis());
+        String randomNum = String(random(1000, 9999));
+        String fileName = "plant_" + String(userId) + "_" + timestamp + "_" + randomNum + fileExt;
+        pendingNewAvatarPath = "/plant/" + fileName; // Переиспользуем переменную
+        
+        // Создаем папку если нужно
+        if (!SD.exists("/plant")) {
+            SD.mkdir("/plant");
+        }
+        
+        pendingUserId = userId;
+        
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (pendingNewAvatarPath.length() == 0) return;
+        
+        File f = SD.open(pendingNewAvatarPath, FILE_APPEND);
+        if (f) {
+            f.write(upload.buf, upload.currentSize);
+            f.close();
+        }
+        
+    } else if (upload.status == UPLOAD_FILE_END) {
+        if (SD.exists(pendingNewAvatarPath)) {
+            String relPath = pendingNewAvatarPath.substring(1);
+            DynamicJsonDocument doc(256);
+            doc["success"] = true;
+            doc["path"] = relPath;
+            String response;
+            serializeJson(doc, response);
+            server.send(200, "application/json", response);
+        } else {
+            server.send(500, "application/json", "{\"error\":\"File not saved\"}");
+        }
+        
+        pendingUserId = 0;
+        pendingNewAvatarPath = "";
+    }
+}
+
+// Получить фото растения
+void handleGetPlantPhoto() {
+    if (!server.hasArg("file")) {
+        server.send(400, "text/plain", "Missing 'file' parameter");
+        return;
+    }
+    
+    String filePath = server.arg("file");
+    
+    if (filePath.indexOf("..") >= 0 || filePath.indexOf("//") >= 0) {
+        server.send(403, "text/plain", "Forbidden");
+        return;
+    }
+    
+    String fullPath = filePath;
+    if (!fullPath.startsWith("/")) {
+        fullPath = "/" + fullPath;
+    }
+    
+    if (!SD.exists(fullPath)) {
+        server.send(404, "text/plain", "Photo not found");
+        return;
+    }
+    
+    String contentType = "image/jpeg";
+    if (filePath.endsWith(".png")) contentType = "image/png";
+    else if (filePath.endsWith(".gif")) contentType = "image/gif";
+    else if (filePath.endsWith(".webp")) contentType = "image/webp";
+    
+    server.sendHeader("Cache-Control", "public, max-age=86400");
+    server.sendHeader("Content-Type", contentType);
+    
+    File file = SD.open(fullPath, FILE_READ);
+    if (file) {
+        server.streamFile(file, contentType);
+        file.close();
+    } else {
+        server.send(500, "text/plain", "Failed to open file");
+    }
+}
+
 // Универсальный обработчик статических файлов
 void handleStaticImage() {
     String uri = server.uri();
@@ -8489,6 +8920,14 @@ void setup() {
     server.on("/api/avatar", HTTP_POST, [](){ server.send(200, "application/json", "{}"); }, handleAvatarUpload);
     server.on("/api/avatar/file", HTTP_GET, handleGetAvatar);
     server.on("/api/logout", HTTP_POST, handleApiLogout);
+
+    // API для растений (добавьте вместе с другими API маршрутами)
+    server.on("/api/plants", HTTP_GET, handleGetPlants);
+    server.on("/api/plants", HTTP_POST, handleAddPlant);
+    server.on("/api/plants", HTTP_PUT, handleUpdatePlant);
+    server.on("/api/plants", HTTP_DELETE, handleDeletePlant);
+    server.on("/api/plant/photo", HTTP_POST, [](){ server.send(200, "application/json", "{}"); }, handlePlantPhotoUpload);
+    server.on("/api/plant/photo/file", HTTP_GET, handleGetPlantPhoto);
 
     // Data API
     server.on("/data", handleData);
