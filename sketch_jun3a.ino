@@ -89,16 +89,23 @@ bool initSDCard() {
 void createSDDirectories() {
   Serial.println("=== Создание папок на SD-карте ===");
   const char* folders[] = {"image", "avatar", "plant", "www"};
+  
   for (int i = 0; i < 4; i++) {
     String path = String("/") + folders[i];
     if (!SD.exists(path)) {
       if (SD.mkdir(path)) {
-        Serial.printf("Создана папка: %s\n", path.c_str());
+        Serial.printf("  Создана: %s\n", path.c_str());
+      } else {
+        Serial.printf("  ОШИБКА создания: %s\n", path.c_str());
       }
+    } else {
+      Serial.printf("  Уже есть: %s\n", path.c_str());
     }
+    yield();  // ✅ Кормим watchdog после каждой операции
   }
+  
+  Serial.println("✅ Папки проверены");
 }
-
 // ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
 void initDB() {
   Serial.println("=== Инициализация SQLite БД ===");
@@ -292,35 +299,37 @@ void initDB() {
   sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_sensors_valve ON moisture_sensors(valve_id);", NULL, NULL, NULL);
   
   // === Инициализация 8 клапанов по умолчанию ===
-  sqlite3_stmt* stmt;
-  const char* insertValve = "INSERT OR IGNORE INTO valves (id, pin_number, plant_name, created_ts) VALUES (?, ?, ?, ?);";
-  if (sqlite3_prepare_v2(db, insertValve, -1, &stmt, NULL) == SQLITE_OK) {
-    for (int i = 0; i < 8; i++) {
-      sqlite3_bind_int(stmt, 1, i + 1);
-      sqlite3_bind_int(stmt, 2, valvePins[i]);
-      String name = "Клапан " + String(i + 1);
-      sqlite3_bind_text(stmt, 3, name.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_int(stmt, 4, time(nullptr));
-      sqlite3_step(stmt);
-      sqlite3_reset(stmt);
-    }
-    sqlite3_finalize(stmt);
-    Serial.println("Клапаны инициализированы");
+ // === Инициализация 8 клапанов по умолчанию ===
+sqlite3_stmt* stmt;
+const char* insertValve = "INSERT OR IGNORE INTO valves (id, pin_number, plant_name, created_ts) VALUES (?, ?, ?, ?);";
+if (sqlite3_prepare_v2(db, insertValve, -1, &stmt, NULL) == SQLITE_OK) {
+  for (int i = 0; i < 8; i++) {
+    sqlite3_bind_int(stmt, 1, i + 1);
+    sqlite3_bind_int(stmt, 2, valvePins[i]);
+    String name = "Клапан " + String(i + 1);
+    sqlite3_bind_text(stmt, 3, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, time(nullptr));
+    sqlite3_step(stmt);
+    sqlite3_reset(stmt);
+    yield();  // ✅ ДОБАВИТЬ!
   }
-  
-  // === Инициализация датчиков для каждого клапана ===
-  const char* insertSensor = "INSERT OR IGNORE INTO moisture_sensors (valve_id, created_ts) VALUES (?, ?);";
-  if (sqlite3_prepare_v2(db, insertSensor, -1, &stmt, NULL) == SQLITE_OK) {
-    for (int i = 0; i < 8; i++) {
-      sqlite3_bind_int(stmt, 1, i + 1);
-      sqlite3_bind_int(stmt, 2, time(nullptr));
-      sqlite3_step(stmt);
-      sqlite3_reset(stmt);
-    }
-    sqlite3_finalize(stmt);
-    Serial.println("Датчики инициализированы");
+  sqlite3_finalize(stmt);
+  Serial.println("Клапаны инициализированы");
+}
+
+// === Инициализация датчиков для каждого клапана ===
+const char* insertSensor = "INSERT OR IGNORE INTO moisture_sensors (valve_id, created_ts) VALUES (?, ?);";
+if (sqlite3_prepare_v2(db, insertSensor, -1, &stmt, NULL) == SQLITE_OK) {
+  for (int i = 0; i < 8; i++) {
+    sqlite3_bind_int(stmt, 1, i + 1);
+    sqlite3_bind_int(stmt, 2, time(nullptr));
+    sqlite3_step(stmt);
+    sqlite3_reset(stmt);
+    yield();  // ✅ ДОБАВИТЬ!
   }
-  
+  sqlite3_finalize(stmt);
+  Serial.println("Датчики инициализированы");
+}
   Serial.println("Все таблицы проверены и готовы");
 }
 
