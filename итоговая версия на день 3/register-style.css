@@ -1,0 +1,224 @@
+:root {
+    --page-bg: #EEF0F4;
+    --card-bg: #0FB881;
+    --brand-color: #0FB881;
+    --text-white: #111111;
+    --text-on-green: #ffffff;
+    --input-bg: #ffffff;
+    --input-text: #333333;
+    --btn-bg: #ffffff;
+    --btn-text: #0FB881;
+    --shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+    --placeholder-color: #88DDB8;
+    --label-color: #ffffff;
+}
+
+.theme-light {
+    --page-bg: #0F182B;
+    --card-bg: #21C85F;
+    --brand-color: #21C85F;
+    --text-white: #ffffff;
+    --text-on-green: #ffffff;
+    --input-bg: #ffffff;
+    --input-text: #333333;
+    --btn-bg: #ffffff;
+    --btn-text: #21C85F;
+    --shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+    --placeholder-color: #77DD9D;
+    --label-color: #ffffff;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--page-bg);
+    color: var(--text-white);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    transition: background-color 0.4s ease;
+}
+
+.theme-switcher {
+    position: absolute;
+    top: 32px;
+    right: 32px;
+    cursor: pointer;
+    width: 60px;
+    height: 60px;
+    background-color: #F1F3F6;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s, background-color 0.3s;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+}
+
+.theme-switcher:hover {
+    transform: scale(1.05);
+}
+
+.theme-switcher .theme-icon-img {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    filter: invert(0);
+}
+
+body.theme-light .theme-switcher {
+    background-color: #1B263B;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+body.theme-light .theme-switcher .theme-icon-img {
+    filter: invert(1);
+}
+
+.wrapper {
+    width: 100%;
+    padding: 20px;
+    text-align: center;
+    animation: fadeInUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.auth-card {
+    width: 16.67cm;
+    min-height: 10cm;
+    background-color: var(--card-bg);
+    border-radius: 65px;
+    padding: 32px 36px 36px;
+    box-shadow: var(--shadow);
+    transition: background-color 0.4s ease;
+    margin: 0 auto;
+}
+
+.auth-card h1 {
+    font-size: 38px;
+    font-weight: 700;
+    margin-bottom: 24px;
+    color: var(--text-on-green);
+    letter-spacing: 0.5px;
+}
+
+.form-group {
+    margin-bottom: 14px;
+    position: relative;
+    text-align: left;
+}
+
+.field-label {
+    display: block;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--label-color);
+    margin-bottom: 6px;
+}
+
+.required {
+    color: #ff4757;
+    margin-left: 2px;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 500;
+    background: var(--input-bg);
+    color: var(--input-text);
+    transition: box-shadow 0.2s;
+}
+
+.form-group input::placeholder {
+    color: var(--placeholder-color);
+    opacity: 1;
+    font-weight: 400;
+}
+
+.form-group input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.6);
+}
+
+.field-icon {
+    position: absolute;
+    right: 14px;
+    bottom: 10px;
+    width: 24px;
+    height: 24px;
+    cursor: default;
+    opacity: 0; 
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+.btn {
+    width: 70%;
+    padding: 14px;
+    margin-top: 10px;
+    background-color: var(--btn-bg);
+    color: var(--btn-text);
+    border: none;
+    border-radius: 14px;
+    font-size: 20px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+    letter-spacing: 0.5px;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.15);
+}
+
+.btn:active {
+    transform: scale(0.98);
+}
+
+.register-link {
+    margin-top: 16px;
+    font-size: 17px;
+    color: var(--text-on-green);
+    opacity: 0.95;
+}
+
+.register-link a {
+    color: var(--text-on-green);
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+@media (max-width: 480px) {
+    .auth-card {
+        width: 92%;
+        padding: 24px 20px;
+    }
+    .auth-card h1 {
+        font-size: 28px;
+    }
+    .btn {
+        width: 85%;
+    }
+}
