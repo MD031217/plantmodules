@@ -84,6 +84,15 @@ const char settings_html[] PROGMEM = R"rawliteral(
             cursor: not-allowed !important;
             filter: grayscale(0.6) !important;
         }
+        
+        /* Блокировка раздела ручного добавления, если это НЕ режим настройки (не 192.168.10.1) */
+        body:not(.setup-mode) .manual-section {
+            pointer-events: none !important;
+            opacity: 0.5 !important;
+            filter: grayscale(0.6) !important;
+            cursor: not-allowed !important;
+        }
+
         body.setup-mode .btn-scan,
         body.setup-mode .btn-connect,
         body.setup-mode .btn-add-network {
@@ -299,7 +308,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
         body.theme-dark .theme-light-only { display: none !important; }
         body.theme-light .theme-dark-only { display: none !important; }
 
-        /* Стили для кнопок внутри модального окна возврата */
         .modal-actions {
             display: flex; gap: 12px; justify-content: center; margin-top: 24px;
         }
@@ -476,7 +484,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
         </footer>
     </div>
 
-    <!-- Модальное окно ввода пароля (существующее) -->
     <div class="modal-overlay" id="passwordModal">
         <div class="modal-card">
             <div class="modal-network-row">
@@ -497,7 +504,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
         </div>
     </div>
 
-    <!-- Новое модальное окно подтверждения возврата к AP -->
     <div class="modal-overlay" id="returnApModal">
         <div class="modal-card" style="text-align: center;">
             <div class="wifi-icon" style="width: 64px; height: 64px; margin: 0 auto 15px;">
@@ -527,7 +533,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 console.log('[Mode] Normal mode detected (' + window.location.hostname + '). All elements enabled.');
             }
 
-            // Логика кнопки возврата к AP с кастомным модальным окном
             const returnApBtn = document.getElementById('returnApBtn');
             const returnApModal = document.getElementById('returnApModal');
             const cancelReturnApBtn = document.getElementById('cancelReturnApBtn');
@@ -535,8 +540,8 @@ const char settings_html[] PROGMEM = R"rawliteral(
 
             if (returnApBtn) {
                 if (!isSetupMode) {
-                    returnApBtn.style.display = 'block'; // Гарантирует перенос на новую строку
-                    returnApBtn.style.margin = '15px auto 0'; // Центрирование
+                    returnApBtn.style.display = 'block';
+                    returnApBtn.style.margin = '15px auto 0';
                     
                     returnApBtn.addEventListener('click', function() {
                         returnApModal.classList.add('active');
@@ -557,7 +562,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 });
             }
 
-            // Закрытие модального окна при клике вне его области
             if (returnApModal) {
                 returnApModal.addEventListener('click', (e) => {
                     if (e.target === e.currentTarget) {
@@ -566,7 +570,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 });
             }
 
-            // Тема
             (function () {
                 const toggle = document.getElementById('themeToggle');
                 const body = document.body;
@@ -632,7 +635,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
             }
             loadUserToHeader();
 
-            // Функционал Wi-Fi
             const scanBtn = document.getElementById('scanBtn');
             const networkList = document.getElementById('networkList');
             const addNetworkBtn = document.getElementById('addNetworkBtn');
