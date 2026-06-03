@@ -167,25 +167,29 @@ const char settings_html[] PROGMEM = R"rawliteral(
         .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
         .btn-scan:active { transform: translateY(0); }
         .btn-scan:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
+        
         .btn-return-ap {
             display: none;
-            margin: 20px auto 0;
-            background: #ff6b6b;
-            color: white;
-            border: none;
+            margin: 15px auto 0;
+            background: #ffffff;
+            color: #e55a5a;
+            border: 1.5px solid #ffb3b3;
             border-radius: 40px;
             padding: 14px 40px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+            box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
         }
         .btn-return-ap:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 22px rgba(255, 107, 107, 0.4);
-            filter: brightness(1.1);
+            transform: scale(1.03);
+            background: #fff5f5;
+            color: #d32f2f;
+            border-color: #ff8a8a;
+            box-shadow: 0 0 25px rgba(229, 90, 90, 0.6), 0 0 10px rgba(229, 90, 90, 0.4);
         }
+
         .network-list-section {
             background: var(--section-list-bg); border-radius: 16px; padding: 20px;
             margin-top: 35px; box-shadow: var(--section-list-shadow);
@@ -294,6 +298,46 @@ const char settings_html[] PROGMEM = R"rawliteral(
         #eyeImg { width: 22px; height: 22px; object-fit: contain; }
         body.theme-dark .theme-light-only { display: none !important; }
         body.theme-light .theme-dark-only { display: none !important; }
+
+        /* Стили для кнопок внутри модального окна возврата */
+        .modal-actions {
+            display: flex; gap: 12px; justify-content: center; margin-top: 24px;
+        }
+        .btn-cancel-return {
+            background: var(--btn-disconnect-bg);
+            color: var(--btn-disconnect-text);
+            border: 1.5px solid var(--input-border);
+            border-radius: 30px;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-cancel-return:hover {
+            transform: scale(1.03);
+            filter: brightness(0.95);
+        }
+        .btn-confirm-return {
+            background: #ffffff;
+            color: #e55a5a;
+            border: 1.5px solid #ffb3b3;
+            border-radius: 30px;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
+        }
+        .btn-confirm-return:hover {
+            transform: scale(1.03);
+            background: #fff5f5;
+            color: #d32f2f;
+            border-color: #ff8a8a;
+            box-shadow: 0 0 25px rgba(229, 90, 90, 0.6), 0 0 10px rgba(229, 90, 90, 0.4);
+        }
+
         @media (max-width: 700px) {
             .page-wrapper { min-height: calc(100vh - 170px); }
             .site-header { padding: 14px 16px; }
@@ -432,6 +476,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
         </footer>
     </div>
 
+    <!-- Модальное окно ввода пароля (существующее) -->
     <div class="modal-overlay" id="passwordModal">
         <div class="modal-card">
             <div class="modal-network-row">
@@ -452,6 +497,25 @@ const char settings_html[] PROGMEM = R"rawliteral(
         </div>
     </div>
 
+    <!-- Новое модальное окно подтверждения возврата к AP -->
+    <div class="modal-overlay" id="returnApModal">
+        <div class="modal-card" style="text-align: center;">
+            <div class="wifi-icon" style="width: 64px; height: 64px; margin: 0 auto 15px;">
+                <img src="/image/light_big.png" alt="WiFi" class="wifi-img wifi-light" style="width:100%; height:100%;">
+                <img src="/image/dark_big.png" alt="WiFi" class="wifi-img wifi-dark" style="width:100%; height:100%;">
+            </div>
+            <h3 style="font-size: 20px; font-weight: 700; color: var(--title-color); margin-bottom: 12px;">Возврат к настройкам Wi-Fi</h3>
+            <p style="font-size: 15px; color: var(--subtitle-color); margin-bottom: 24px; line-height: 1.5;">
+                Для возврата к настройкам вам необходимо вручную подключиться к сети <strong>"GreenShelf_Setup"</strong> на вашем устройстве.<br><br>
+                После подключения вы будете автоматически перенаправлены на эту страницу.
+            </p>
+            <div class="modal-actions">
+                <button class="btn-cancel-return" id="cancelReturnApBtn">Отмена</button>
+                <button class="btn-confirm-return" id="confirmReturnApBtn">Понятно, перейти</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             console.log('[JS] DOM loaded, initializing...');
@@ -463,22 +527,43 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 console.log('[Mode] Normal mode detected (' + window.location.hostname + '). All elements enabled.');
             }
 
-            // Показ кнопки возврата только если НЕ в режиме настройки
+            // Логика кнопки возврата к AP с кастомным модальным окном
             const returnApBtn = document.getElementById('returnApBtn');
+            const returnApModal = document.getElementById('returnApModal');
+            const cancelReturnApBtn = document.getElementById('cancelReturnApBtn');
+            const confirmReturnApBtn = document.getElementById('confirmReturnApBtn');
+
             if (returnApBtn) {
                 if (!isSetupMode) {
-                    returnApBtn.style.display = 'inline-block';
+                    returnApBtn.style.display = 'block'; // Гарантирует перенос на новую строку
+                    returnApBtn.style.margin = '15px auto 0'; // Центрирование
+                    
                     returnApBtn.addEventListener('click', function() {
-                        const confirmed = confirm(
-                            'Для возврата к настройкам Wi-Fi вам необходимо подключиться к сети "GreenShelf_Setup" на вашем устройстве.\n\n' +
-                            'После подключения вы будете перенаправлены на страницу настроек.\n\n' +
-                            'Продолжить?'
-                        );
-                        if (confirmed) {
-                            window.location.href = 'http://192.168.10.1/settings.html';
-                        }
+                        returnApModal.classList.add('active');
                     });
                 }
+            }
+
+            if (cancelReturnApBtn) {
+                cancelReturnApBtn.addEventListener('click', function() {
+                    returnApModal.classList.remove('active');
+                });
+            }
+
+            if (confirmReturnApBtn) {
+                confirmReturnApBtn.addEventListener('click', function() {
+                    returnApModal.classList.remove('active');
+                    window.location.href = 'http://192.168.10.1/settings.html';
+                });
+            }
+
+            // Закрытие модального окна при клике вне его области
+            if (returnApModal) {
+                returnApModal.addEventListener('click', (e) => {
+                    if (e.target === e.currentTarget) {
+                        returnApModal.classList.remove('active');
+                    }
+                });
             }
 
             // Тема
@@ -555,9 +640,8 @@ const char settings_html[] PROGMEM = R"rawliteral(
             const passInput = document.getElementById('wifiPass');
             const secSelect = document.getElementById('wifiSec');
             const statusDiv = document.getElementById('connectStatus');
-            const passGroup = document.getElementById('passGroup'); // *** ДОБАВЛЕНО ***
+            const passGroup = document.getElementById('passGroup');
 
-            // *** ДОБАВЛЕНО: скрытие/показ поля пароля при смене типа безопасности вручную ***
             if (secSelect) {
                 secSelect.addEventListener('change', function() {
                     if (this.value === 'OPEN') {
@@ -586,7 +670,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                         networkList.innerHTML = nets.map(n => {
                             const sec = n.encryption !== 'OPEN' ? 'Защищено' : 'Открытая';
                             const escapedSsid = n.ssid.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                            // *** ИЗМЕНЕНО: передаём тип шифрования в selectNetwork ***
                             return `
                                 <div class="network-item">
                                     <div class="network-icon">
@@ -608,7 +691,6 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 }
             });
 
-            // *** ИЗМЕНЕНО: функция учитывает тип шифрования ***
             window.selectNetwork = function(ssid, encryption) {
                 ssidInput.value = ssid;
                 secSelect.value = encryption || 'WPA2';
@@ -706,7 +788,6 @@ void handleConfigure() {
     WiFi.disconnect(true);
     delay(500);
 
-    // *** ИЗМЕНЕНО: для открытой сети вызываем begin без пароля ***
     if (pass.length() > 0) {
         WiFi.begin(ssid.c_str(), pass.c_str());
     } else {
@@ -741,10 +822,8 @@ void setup() {
     
     Serial.println("[WiFi] AP started: " + String(apSSID) + " | IP: " + WiFi.softAPIP().toString());
     
-    // Автоподключение к сохранённой сети
     String s = prefs.getString("ssid", ""), p = prefs.getString("pass", "");
     if (s.length() > 0) {
-        // *** ИЗМЕНЕНО: аналогичная логика для автоподключения ***
         if (p.length() > 0) {
             WiFi.begin(s.c_str(), p.c_str());
         } else {
