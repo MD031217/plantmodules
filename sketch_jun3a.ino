@@ -2340,6 +2340,61 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
 void handleWatering() {
   server.send(200, "text/html", WATERING_HTML);
 }
+// Универсальный обработчик статических файлов с SD-карты
+void handleStaticImage() {
+  String uri = server.uri();
+  int qMark = uri.indexOf('?');
+  if (qMark > 0) uri = uri.substring(0, qMark);
+  
+  Serial.printf("📁 Static request: %s\n", uri.c_str());
+  
+  // URL-decode для кириллицы
+  String path = uri;
+  path.replace("%20", " ");
+  
+  if (!path.startsWith("/")) path = "/" + path;
+  
+  // Защита от path traversal
+  if (path.indexOf("..") >= 0) {
+    server.send(403, "text/plain", "Forbidden");
+    return;
+  }
+  
+  // Проверяем существование файла
+  if (!SD.exists(path)) {
+    Serial.printf("❌ File not found: %s\n", path.c_str());
+    server.send(404, "text/plain", "File not found: " + path);
+    return;
+  }
+  
+  // Определяем MIME тип
+  String contentType = "application/octet-stream";
+  if (path.endsWith(".png"))       contentType = "image/png";
+  else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) contentType = "image/jpeg";
+  else if (path.endsWith(".gif"))  contentType = "image/gif";
+  else if (path.endsWith(".svg"))  contentType = "image/svg+xml";
+  else if (path.endsWith(".css"))  contentType = "text/css";
+  else if (path.endsWith(".js"))   contentType = "application/javascript";
+  else if (path.endsWith(".html")) contentType = "text/html";
+  else if (path.endsWith(".json")) contentType = "application/json";
+  else if (path.endsWith(".ico"))  contentType = "image/x-icon";
+  
+  Serial.printf("✅ Sending: %s [%s]\n", path.c_str(), contentType.c_str());
+  
+  // Кэширование для изображений (1 час)
+  if (path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+    server.sendHeader("Cache-Control", "public, max-age=3600");
+  }
+  
+  server.sendHeader("Content-Type", contentType);
+  File file = SD.open(path, FILE_READ);
+  if (file) {
+    server.streamFile(file, contentType);
+    file.close();
+  } else {
+    server.send(500, "text/plain", "Failed to open file");
+  }
+}
 
 void handleGetAllValves() {
   String data = getAllValvesData();
@@ -2349,15 +2404,50 @@ void handleGetAllValves() {
 
 void handleNotFound() {
   String uri = server.uri();
-  Serial.printf("🔍 404: %s\n", uri.c_str());
+  int qMark = uri.indexOf('?');
+  if (qMark > 0) uri = uri.substring(0, qMark);
   
+  Serial.printf("🔍 404 handler: %s\n", uri.c_str());
+  
+  // === Проверяем: может это статический файл? ===
+  bool isStaticFile = false;
+  
+  // 1. По пути
+  if (uri.startsWith("/image/") || uri.startsWith("/avatar/") || 
+      uri.startsWith("/plant/") || uri.startsWith("/www/")) {
+    isStaticFile = true;
+  }
+  
+  // 2. По расширению (включая CSS и JS!)
+  if (uri.endsWith(".png") || uri.endsWith(".jpg") || uri.endsWith(".jpeg") ||
+      uri.endsWith(".gif") || uri.endsWith(".svg") || uri.endsWith(".css") ||
+      uri.endsWith(".js") || uri.endsWith(".ico") || uri.endsWith(".html") ||
+      uri.endsWith(".json") || uri.endsWith(".webp") || uri.endsWith(".bmp")) {
+    isStaticFile = true;
+  }
+  
+  // 3. Файлы из HTML страницы полива (в корне SD)
+  if (uri == "/myplant-style.css" || 
+      uri.endsWith(".png") || uri.endsWith(".jpg")) {
+    isStaticFile = true;
+  }
+  
+  // === Если это статический файл — отдаём его ===
+  if (isStaticFile) {
+    handleStaticImage();
+    return;
+  }
+  
+  // === Иначе — 404 ===
+  Serial.printf("❌ 404 Not Found: %s\n", uri.c_str());
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>404</title>";
   html += "<style>body{font-family:Arial;text-align:center;padding:50px;background:#0F182B;color:#21C85F;}";
   html += "h1{font-size:48px;}p{font-size:18px;}a{color:#21C85F;}</style>";
   html += "</head><body>";
   html += "<h1>404</h1>";
   html += "<p>Страница не найдена</p>";
-  html += "<p><a href='/watering'>Вернуться к поливу</a></p>";
+  html += "<p>Запрошенный URL: " + uri + "</p>";
+  html += "<p><a href='/watering'>Перейти к модулю полива</a></p>";
   html += "</body></html>";
   server.send(404, "text/html", html);
 }
@@ -2432,7 +2522,24 @@ void setup() {
   for (int i = 0; i < 8; i++) {
     pinMode(sensorPins[i], INPUT);
   }
-  
+  // === В начале setup(), ПЕРЕД server.on("/watering", ...) ===
+
+// Редирект с корня на страницу полива
+server.on("/", HTTP_GET, []() {
+  server.sendHeader("Location", "/watering");
+  server.send(302, "text/plain", "Redirecting to /watering");
+});
+
+// Обработчик для favicon.ico (чтобы не было 404 в логах)
+server.on("/favicon.ico", HTTP_GET, []() {
+  if (SD.exists("/favicon.ico")) {
+    File f = SD.open("/favicon.ico", FILE_READ);
+    server.streamFile(f, "image/x-icon");
+    f.close();
+  } else {
+    server.send(204, "text/plain", "");
+  }
+});
   // Настройка веб-сервера
   server.on("/watering", handleWatering);
   server.on("/api/watering/valves", HTTP_GET, handleGetAllValves);
