@@ -167,6 +167,25 @@ const char settings_html[] PROGMEM = R"rawliteral(
         .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
         .btn-scan:active { transform: translateY(0); }
         .btn-scan:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
+        .btn-return-ap {
+            display: none;
+            margin: 20px auto 0;
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            border-radius: 40px;
+            padding: 14px 40px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+        }
+        .btn-return-ap:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 22px rgba(255, 107, 107, 0.4);
+            filter: brightness(1.1);
+        }
         .network-list-section {
             background: var(--section-list-bg); border-radius: 16px; padding: 20px;
             margin-top: 35px; box-shadow: var(--section-list-shadow);
@@ -348,6 +367,7 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 <h1 class="scan-title">Сканирование сетей</h1>
                 <p class="scan-subtitle">Нажмите кнопку ниже для сканирования доступных Wi-Fi сетей</p>
                 <button class="btn-scan" id="scanBtn">Начать сканирование</button>
+                <button class="btn-return-ap" id="returnApBtn">Вернуться к настройкам Wi-Fi</button>
                 <div class="network-list-section" id="networkList" style="display: none;"></div>
             </div>
 
@@ -441,6 +461,24 @@ const char settings_html[] PROGMEM = R"rawliteral(
                 console.log('[Mode] Setup mode (192.168.10.1) detected. Header/Nav links disabled.');
             } else {
                 console.log('[Mode] Normal mode detected (' + window.location.hostname + '). All elements enabled.');
+            }
+
+            // Показ кнопки возврата только если НЕ в режиме настройки
+            const returnApBtn = document.getElementById('returnApBtn');
+            if (returnApBtn) {
+                if (!isSetupMode) {
+                    returnApBtn.style.display = 'inline-block';
+                    returnApBtn.addEventListener('click', function() {
+                        const confirmed = confirm(
+                            'Для возврата к настройкам Wi-Fi вам необходимо подключиться к сети "GreenShelf_Setup" на вашем устройстве.\n\n' +
+                            'После подключения вы будете перенаправлены на страницу настроек.\n\n' +
+                            'Продолжить?'
+                        );
+                        if (confirmed) {
+                            window.location.href = 'http://192.168.10.1/settings.html';
+                        }
+                    });
+                }
             }
 
             // Тема
