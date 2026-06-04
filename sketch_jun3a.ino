@@ -1,884 +1,44 @@
 #include <WiFi.h>
-#include <ESPmDNS.h>
-#include <WebServer.h>
-#include <ArduinoOTA.h>
 #include <SPI.h>
 #include <SD.h>
-#include <time.h>
-#include <ArduinoJson.h>
+#include <FS.h>
+#include <WebServer.h>
 #include <sqlite3.h>
+#include "AmperkaFET.h"
+#include <time.h>
 
-#define SERIAL_BAUD 115200
+#define PIN_CS_FET   1
+#define PIN_CS_SD    7
+#define NUM_VALVES   8
 
-// ==================== Wi-Fi НАСТРОЙКИ ====================
-#define STA_SSID "linksys"
-#define STA_PASS ""
-#define AP_SSID  "WateringModule-01"
-#define AP_PASS  "12345678"
-#define MDNS_NAME "WateringModule-C3"
-IPAddress ap_ip(192, 168, 10, 1);
-IPAddress ap_mask(255, 255, 255, 0);
-
-// ==================== Пины клапанов ====================
-#define VALVE_PINS {4, 5, 6, 7, 15, 16, 17, 18}
-const int valvePins[8] = VALVE_PINS;
-
-// ==================== Пины датчиков влажности ====================
-#define SENSOR_PINS {34, 35, 32, 33, 25, 26, 27, 14}
-const int sensorPins[8] = SENSOR_PINS;
-
-#define CS_SD_PIN SS
-
-// ==================== Объекты ====================
+FET mosfet(PIN_CS_FET);
 WebServer server(80);
 
-// ==================== SQLite БАЗА ДАННЫХ на SD-карте ====================
-#define DB_FILE "/sd/watering.db"
 sqlite3 *db = nullptr;
-sqlite3_stmt *res = nullptr;
-int rc;
-char *zErrMsg = 0;
 
-// ==================== Глобальные переменные ====================
-time_t bootTime = 0;
-bool timeSynced = false;
+// ===================== Настройки =====================
+IPAddress ap_ip(192, 168, 5, 1);
+IPAddress ap_subnet(255, 255, 255, 0);
+IPAddress ap_leaseStart(192, 168, 5, 2);
+IPAddress ap_dns(192, 168, 5, 1);
 
-// ==================== ФОРМАТИРОВАНИЕ ВРЕМЕНИ ====================
-String formatTime(time_t t, bool showSeconds = false) {
-  if (!timeSynced || t < 1700000000) {
-    if (bootTime == 0) bootTime = millis() / 1000;
-    unsigned long uptime = (millis() / 1000) - bootTime;
-    int days = uptime / 86400;
-    int hours = (uptime % 86400) / 3600;
-    int mins = (uptime % 3600) / 60;
-    int secs = uptime % 60;
-    char buf[32];
-    if (days > 0) sprintf(buf, "UP %dd %02d:%02d", days, hours, mins);
-    else if (showSeconds) sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
-    else sprintf(buf, "UP %02d:%02d", hours, mins);
-    return String(buf);
-  }
-  struct tm timeinfo;
-  if (localtime_r(&t, &timeinfo)) {
-    char buf[20];
-    if (showSeconds) strftime(buf, sizeof(buf), "%d.%m %H:%M:%S", &timeinfo);
-    else strftime(buf, sizeof(buf), "%d.%m %H:%M", &timeinfo);
-    return String(buf);
-  }
-  return "??.?? ??:??";
-}
+const char* AP_SSID = "RoboLab-Watering";
+const char* AP_PASS = "Qwe123!!";
 
-// ==================== ИНИЦИАЛИЗАЦИЯ SD-КАРТЫ ====================
-bool initSDCard() {
-  SPI.begin();
-  if (!SD.begin(CS_SD_PIN)) {
-    Serial.printf("Ошибка: SD-модуль не обнаружен\n");
-    return false;
-  }
-  Serial.printf("SD-модуль обнаружен\n");
-  uint8_t cardType = SD.cardType();
-  if (cardType == CARD_NONE) {
-    Serial.println("Ошибка: карта памяти отсутствует");
-    return false;
-  }
-  uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-  Serial.printf("\tРазмер - %llu MB\n", cardSize);
-  return true;
-}
+// ===================== Датчики и таймеры =====================
+const int MOISTURE_PINS[NUM_VALVES] = {2, 3, 4, 5, 6, 8, 9, 10};
+const int DRY_THRESHOLD = 35;
+const unsigned long MOISTURE_INTERVAL = 300000UL;
 
-void createSDDirectories() {
-  Serial.println("=== Создание папок на SD-карте ===");
-  const char* folders[] = {"image", "avatar", "plant", "www"};
-  
-  for (int i = 0; i < 4; i++) {
-    String path = String("/") + folders[i];
-    if (!SD.exists(path)) {
-      if (SD.mkdir(path)) {
-        Serial.printf("  Создана: %s\n", path.c_str());
-      } else {
-        Serial.printf("  ОШИБКА создания: %s\n", path.c_str());
-      }
-    } else {
-      Serial.printf("  Уже есть: %s\n", path.c_str());
-    }
-    yield();  // ✅ Кормим watchdog после каждой операции
-  }
-  
-  Serial.println("✅ Папки проверены");
-}
-// ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
-void initDB() {
-  Serial.println("=== Инициализация SQLite БД ===");
-  if (!initSDCard()) {
-    Serial.println("Ошибка: SD-карта не доступна!");
-    return;
-  }
-  
-  sqlite3_initialize();
-  const char* dbPath = DB_FILE;
-  Serial.printf("Попытка открытия БД: %s\n", dbPath);
-  
-  rc = sqlite3_open(dbPath, &db);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка открытия БД: %d\n", rc);
-    Serial.printf("Сообщение: %s\n", sqlite3_errmsg(db));
-    db = nullptr;
-    return;
-  }
-  Serial.println("БД успешно открыта");
-  
-  // Включаем поддержку внешних ключей
-  sqlite3_exec(db, "PRAGMA foreign_keys = ON;", NULL, NULL, NULL);
-  
-  // === Таблица valves ===
-  const char* sqlValves =
-    "CREATE TABLE IF NOT EXISTS valves ("
-    "  id INTEGER PRIMARY KEY,"
-    "  pin_number INTEGER CHECK(pin_number BETWEEN 1 AND 40),"
-    "  plant_name TEXT DEFAULT '',"
-    "  display_name TEXT DEFAULT '',"
-    "  flow_rate_ml_per_sec REAL DEFAULT 8.33,"
-    "  max_duration_sec INTEGER DEFAULT 300 CHECK(max_duration_sec > 0),"
-    "  daily_limit_ml REAL DEFAULT 0 CHECK(daily_limit_ml >= 0),"
-    "  active INTEGER DEFAULT 1 CHECK(active IN (0,1)),"
-    "  moisture_mode INTEGER DEFAULT 0 CHECK(moisture_mode IN (0,1)),"
-    "  created_ts INTEGER CHECK(created_ts > 0)"
-    ");";
-  rc = sqlite3_exec(db, sqlValves, NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка создания valves: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-  } else {
-    Serial.println("Таблица valves создана/проверена");
-  }
-  
-  // === Таблица watering_tasks ===
-  const char* sqlTasks =
-    "CREATE TABLE IF NOT EXISTS watering_tasks ("
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "  valve_id INTEGER CHECK(valve_id BETWEEN 1 AND 8),"
-    "  schedule_type TEXT NOT NULL CHECK(schedule_type IN ('daily','once','interval','weekly','sunrise','sunset')),"
-    "  schedule_time TEXT,"
-    "  schedule_interval_min INTEGER DEFAULT 0,"
-    "  schedule_days TEXT DEFAULT '',"
-    "  weekly_days_config TEXT DEFAULT NULL,"
-    "  last_executed_ts INTEGER DEFAULT 0,"
-    "  next_execution_ts INTEGER DEFAULT 0,"
-    "  priority INTEGER DEFAULT 5 CHECK(priority BETWEEN 1 AND 10),"
-    "  cycle_repeat INTEGER DEFAULT 1 CHECK(cycle_repeat > 0),"
-    "  max_duration_sec INTEGER DEFAULT 600 CHECK(max_duration_sec > 0),"
-    "  max_volume_ml REAL DEFAULT 1000 CHECK(max_volume_ml > 0),"
-    "  active INTEGER DEFAULT 1 CHECK(active IN (0,1)),"
-    "  suspended INTEGER DEFAULT 0 CHECK(suspended IN (0,1)),"
-    "  created_ts INTEGER CHECK(created_ts > 0),"
-    "  updated_ts INTEGER CHECK(updated_ts > 0),"
-    "  FOREIGN KEY (valve_id) REFERENCES valves(id) ON DELETE CASCADE"
-    ");";
-  rc = sqlite3_exec(db, sqlTasks, NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка создания watering_tasks: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-  } else {
-    Serial.println("Таблица watering_tasks создана/проверена");
-  }
-  
-  // === Таблица watering_operations ===
-  const char* sqlOps =
-    "CREATE TABLE IF NOT EXISTS watering_operations ("
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "  task_id INTEGER NOT NULL,"
-    "  operation_order INTEGER DEFAULT 1 CHECK(operation_order > 0),"
-    "  operation_type TEXT NOT NULL CHECK(operation_type IN ('WATER','PAUSE','SENSOR_CHECK','CUSTOM','TASK_SUMMARY')),"
-    "  duration_sec INTEGER DEFAULT 0 CHECK(duration_sec >= 0),"
-    "  volume_ml REAL DEFAULT 0 CHECK(volume_ml >= 0),"
-    "  pause_duration_sec INTEGER DEFAULT 0 CHECK(pause_duration_sec >= 0),"
-    "  flow_rate_override REAL DEFAULT 0,"
-    "  target_moisture_percent REAL DEFAULT 65 CHECK(target_moisture_percent BETWEEN 0 AND 100),"
-    "  repeat_times INTEGER DEFAULT 1 CHECK(repeat_times > 0),"
-    "  wait_after_sec INTEGER DEFAULT 0 CHECK(wait_after_sec >= 0),"
-    "  active INTEGER DEFAULT 1 CHECK(active IN (0,1)),"
-    "  params_json TEXT DEFAULT NULL,"
-    "  created_ts INTEGER CHECK(created_ts > 0),"
-    "  updated_ts INTEGER CHECK(updated_ts > 0),"
-    "  FOREIGN KEY (task_id) REFERENCES watering_tasks(id) ON DELETE CASCADE"
-    ");";
-  rc = sqlite3_exec(db, sqlOps, NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка создания watering_operations: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-  } else {
-    Serial.println("Таблица watering_operations создана/проверена");
-  }
-  
-  // === Таблица task_runs ===
-  const char* sqlRuns =
-    "CREATE TABLE IF NOT EXISTS task_runs ("
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "  task_id INTEGER,"
-    "  valve_id INTEGER CHECK(valve_id BETWEEN 1 AND 8),"
-    "  state TEXT NOT NULL CHECK(state IN ('queued','running','completed','failed','skipped')),"
-    "  priority INTEGER DEFAULT 5 CHECK(priority BETWEEN 1 AND 10),"
-    "  queued_ts INTEGER DEFAULT 0,"
-    "  started_ts INTEGER DEFAULT 0,"
-    "  finished_ts INTEGER DEFAULT 0,"
-    "  target_duration_sec INTEGER DEFAULT 0,"
-    "  target_volume_ml REAL DEFAULT 0,"
-    "  actual_duration_sec INTEGER DEFAULT 0,"
-    "  actual_volume_ml REAL DEFAULT 0,"
-    "  error_text TEXT DEFAULT '',"
-    "  triggered_by TEXT CHECK(triggered_by IN ('schedule','manual','sensor')),"
-    "  sent INTEGER DEFAULT 0 CHECK(sent IN (0,1)),"
-    "  FOREIGN KEY (task_id) REFERENCES watering_tasks(id) ON DELETE SET NULL"
-    ");";
-  rc = sqlite3_exec(db, sqlRuns, NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка создания task_runs: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-  } else {
-    Serial.println("Таблица task_runs создана/проверена");
-  }
-  
-  // === Таблица watering_log ===
-  const char* sqlLog =
-    "CREATE TABLE IF NOT EXISTS watering_log ("
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "  ts INTEGER NOT NULL CHECK(ts > 0),"
-    "  run_id INTEGER,"
-    "  valve_id INTEGER CHECK(valve_id BETWEEN 1 AND 8),"
-    "  duration_sec INTEGER DEFAULT 0 CHECK(duration_sec >= 0),"
-    "  volume_ml REAL DEFAULT 0 CHECK(volume_ml >= 0),"
-    "  status TEXT DEFAULT 'completed' CHECK(status IN ('completed','failed','skipped')),"
-    "  error_text TEXT DEFAULT '',"
-    "  triggered_by TEXT CHECK(triggered_by IN ('schedule','manual','sensor')),"
-    "  sent INTEGER DEFAULT 0 CHECK(sent IN (0,1)),"
-    "  FOREIGN KEY (run_id) REFERENCES task_runs(id) ON DELETE SET NULL"
-    ");";
-  rc = sqlite3_exec(db, sqlLog, NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка создания watering_log: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-  } else {
-    Serial.println("Таблица watering_log создана/проверена");
-  }
-  
-  // === Таблица moisture_sensors ===
-  const char* sqlSensors =
-    "CREATE TABLE IF NOT EXISTS moisture_sensors ("
-    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-    "  valve_id INTEGER NOT NULL CHECK(valve_id BETWEEN 1 AND 8),"
-    "  target_moisture_percent REAL DEFAULT 65 CHECK(target_moisture_percent BETWEEN 0 AND 100),"
-    "  max_value INTEGER DEFAULT 100 CHECK(max_value BETWEEN 0 AND 100),"
-    "  min_value INTEGER DEFAULT 0 CHECK(min_value BETWEEN 0 AND 100),"
-    "  check_interval_min INTEGER DEFAULT 30 CHECK(check_interval_min > 0),"
-    "  last_check_ts INTEGER DEFAULT 0,"
-    "  last_moisture_percent REAL DEFAULT 0 CHECK(last_moisture_percent BETWEEN 0 AND 100),"
-    "  max_watering_duration_sec INTEGER DEFAULT 180 CHECK(max_watering_duration_sec > 0),"
-    "  min_pause_hours INTEGER DEFAULT 2 CHECK(min_pause_hours >= 0),"
-    "  last_watering_ts INTEGER DEFAULT 0,"
-    "  active INTEGER DEFAULT 1 CHECK(active IN (0,1)),"
-    "  sensor_ok INTEGER DEFAULT 1 CHECK(sensor_ok IN (0,1)),"
-    "  failed_checks INTEGER DEFAULT 0 CHECK(failed_checks >= 0),"
-    "  samples_to_avg INTEGER DEFAULT 3 CHECK(samples_to_avg > 0),"
-    "  created_ts INTEGER CHECK(created_ts > 0),"
-    "  FOREIGN KEY (valve_id) REFERENCES valves(id) ON DELETE CASCADE"
-    ");";
-  rc = sqlite3_exec(db, sqlSensors, NULL, NULL, &zErrMsg);
-  if (rc != SQLITE_OK) {
-    Serial.printf("Ошибка создания moisture_sensors: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-  } else {
-    Serial.println("Таблица moisture_sensors создана/проверена");
-  }
-  
-  // === Создание индексов ===
-  sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_tasks_valve ON watering_tasks(valve_id);", NULL, NULL, NULL);
-  sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_tasks_active_next ON watering_tasks(active, next_execution_ts);", NULL, NULL, NULL);
-  sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_ops_task_order ON watering_operations(task_id, operation_order);", NULL, NULL, NULL);
-  sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_runs_state ON task_runs(state, priority, queued_ts);", NULL, NULL, NULL);
-  sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_log_ts ON watering_log(ts DESC);", NULL, NULL, NULL);
-  sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_sensors_valve ON moisture_sensors(valve_id);", NULL, NULL, NULL);
-  
-  // === Инициализация 8 клапанов по умолчанию ===
- // === Инициализация 8 клапанов по умолчанию ===
-sqlite3_stmt* stmt;
-const char* insertValve = "INSERT OR IGNORE INTO valves (id, pin_number, plant_name, created_ts) VALUES (?, ?, ?, ?);";
-if (sqlite3_prepare_v2(db, insertValve, -1, &stmt, NULL) == SQLITE_OK) {
-  for (int i = 0; i < 8; i++) {
-    sqlite3_bind_int(stmt, 1, i + 1);
-    sqlite3_bind_int(stmt, 2, valvePins[i]);
-    String name = "Клапан " + String(i + 1);
-    sqlite3_bind_text(stmt, 3, name.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 4, time(nullptr));
-    sqlite3_step(stmt);
-    sqlite3_reset(stmt);
-    yield();  // ✅ ДОБАВИТЬ!
-  }
-  sqlite3_finalize(stmt);
-  Serial.println("Клапаны инициализированы");
-}
+unsigned long valveStartTime[NUM_VALVES] = {0};
+unsigned long valveDuration[NUM_VALVES] = {0};
+bool valveStates[NUM_VALVES] = {false};
 
-// === Инициализация датчиков для каждого клапана ===
-const char* insertSensor = "INSERT OR IGNORE INTO moisture_sensors (valve_id, created_ts) VALUES (?, ?);";
-if (sqlite3_prepare_v2(db, insertSensor, -1, &stmt, NULL) == SQLITE_OK) {
-  for (int i = 0; i < 8; i++) {
-    sqlite3_bind_int(stmt, 1, i + 1);
-    sqlite3_bind_int(stmt, 2, time(nullptr));
-    sqlite3_step(stmt);
-    sqlite3_reset(stmt);
-    yield();  // ✅ ДОБАВИТЬ!
-  }
-  sqlite3_finalize(stmt);
-  Serial.println("Датчики инициализированы");
-}
-  Serial.println("Все таблицы проверены и готовы");
-}
+unsigned long lastScheduleCheck = 0;
+unsigned long lastMoistureCheck = 0;
 
-// ==================== API: ПОЛУЧИТЬ ВСЕ КЛАПАНЫ С ЗАДАЧАМИ И ДАТЧИКАМИ ====================
-String getAllValvesData() {
-  if (!db) return "{}";
-  
-  DynamicJsonDocument doc(16384);
-  JsonObject root = doc.to<JsonObject>();
-  
-  // Получаем все клапаны
-  const char* sql = "SELECT * FROM valves ORDER BY id";
-  sqlite3_stmt* stmt;
-  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      int valveId = sqlite3_column_int(stmt, 0);
-      JsonObject valve = root.createNestedObject(String(valveId));
-      
-      valve["active"] = sqlite3_column_int(stmt, 7);
-      valve["pin_number"] = sqlite3_column_int(stmt, 1);
-      valve["max_duration_sec"] = sqlite3_column_int(stmt, 5);
-      valve["daily_limit_ml"] = sqlite3_column_double(stmt, 6);
-      valve["moisture_mode"] = sqlite3_column_int(stmt, 8);
-      
-      const char* plantName = (const char*)sqlite3_column_text(stmt, 2);
-      valve["plant_name"] = plantName ? plantName : "";
-      
-      // Получаем задачи для этого клапана
-      JsonObject task = valve.createNestedObject("task");
-      const char* taskSql = "SELECT * FROM watering_tasks WHERE valve_id = ? ORDER BY id DESC LIMIT 1";
-      sqlite3_stmt* taskStmt;
-      if (sqlite3_prepare_v2(db, taskSql, -1, &taskStmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(taskStmt, 1, valveId);
-        if (sqlite3_step(taskStmt) == SQLITE_ROW) {
-          task["schedule_type"] = (const char*)sqlite3_column_text(taskStmt, 2) ? (const char*)sqlite3_column_text(taskStmt, 2) : "daily";
-          task["schedule_time"] = (const char*)sqlite3_column_text(taskStmt, 3) ? (const char*)sqlite3_column_text(taskStmt, 3) : "";
-          task["schedule_interval_min"] = sqlite3_column_int(taskStmt, 4);
-          task["schedule_days"] = (const char*)sqlite3_column_text(taskStmt, 5) ? (const char*)sqlite3_column_text(taskStmt, 5) : "";
-          task["priority"] = sqlite3_column_int(taskStmt, 8);
-          task["cycle_repeat"] = sqlite3_column_int(taskStmt, 9);
-          task["max_duration_sec"] = sqlite3_column_int(taskStmt, 10);
-          task["max_volume_ml"] = sqlite3_column_double(taskStmt, 11);
-          
-          int taskId = sqlite3_column_int(taskStmt, 0);
-          
-          // Получаем weekly_days_config
-          const char* weeklyConfig = (const char*)sqlite3_column_text(taskStmt, 6);
-          if (weeklyConfig) {
-            DynamicJsonDocument weeklyDoc(1024);
-            deserializeJson(weeklyDoc, weeklyConfig);
-            task["weekly_days"] = weeklyDoc.as<JsonObject>();
-          } else {
-            task["weekly_days"] = JsonObject();
-          }
-          
-          // Получаем операции для этой задачи
-          JsonArray operations = task.createNestedArray("operations");
-          const char* opsSql = "SELECT * FROM watering_operations WHERE task_id = ? ORDER BY operation_order";
-          sqlite3_stmt* opsStmt;
-          if (sqlite3_prepare_v2(db, opsSql, -1, &opsStmt, NULL) == SQLITE_OK) {
-            sqlite3_bind_int(opsStmt, 1, taskId);
-            while (sqlite3_step(opsStmt) == SQLITE_ROW) {
-              JsonObject op = operations.createNestedObject();
-              op["type"] = (const char*)sqlite3_column_text(opsStmt, 3);
-              op["duration_sec"] = sqlite3_column_int(opsStmt, 4);
-              op["volume_ml"] = sqlite3_column_double(opsStmt, 5);
-              
-              const char* paramsJson = (const char*)sqlite3_column_text(opsStmt, 12);
-              if (paramsJson) {
-                DynamicJsonDocument paramsDoc(1024);
-                deserializeJson(paramsDoc, paramsJson);
-                op["_params"] = paramsDoc.as<JsonObject>();
-              }
-            }
-            sqlite3_finalize(opsStmt);
-          }
-        } else {
-          // Если задач нет, создаём пустую структуру
-          task["schedule_type"] = "daily";
-          task["schedule_time"] = "";
-          task["schedule_interval_min"] = 0;
-          task["schedule_days"] = "";
-          task["priority"] = 5;
-          task["cycle_repeat"] = 1;
-          task["max_duration_sec"] = 600;
-          task["max_volume_ml"] = 1000;
-          task["weekly_days"] = JsonObject();
-          task["operations"] = JsonArray();
-        }
-        sqlite3_finalize(taskStmt);
-      }
-      
-      // Получаем датчик для этого клапана
-      JsonObject sensor = valve.createNestedObject("sensor");
-      const char* sensorSql = "SELECT * FROM moisture_sensors WHERE valve_id = ? LIMIT 1";
-      sqlite3_stmt* sensorStmt;
-      if (sqlite3_prepare_v2(db, sensorSql, -1, &sensorStmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(sensorStmt, 1, valveId);
-        if (sqlite3_step(sensorStmt) == SQLITE_ROW) {
-          sensor["active"] = sqlite3_column_int(sensorStmt, 11);
-          sensor["check_interval_min"] = sqlite3_column_int(sensorStmt, 5);
-          sensor["target_moisture_percent"] = sqlite3_column_double(sensorStmt, 2);
-          sensor["max_watering_duration_sec"] = sqlite3_column_int(sensorStmt, 8);
-          sensor["min_pause_hours"] = sqlite3_column_int(sensorStmt, 9);
-          sensor["last_moisture_percent"] = sqlite3_column_double(sensorStmt, 7);
-        } else {
-          sensor["active"] = 0;
-          sensor["check_interval_min"] = 30;
-          sensor["target_moisture_percent"] = 65;
-          sensor["max_watering_duration_sec"] = 180;
-          sensor["min_pause_hours"] = 2;
-          sensor["last_moisture_percent"] = 0;
-        }
-        sqlite3_finalize(sensorStmt);
-      }
-    }
-    sqlite3_finalize(stmt);
-  }
-  
-  String out;
-  serializeJson(doc, out);
-  return out;
-}
-
-// ==================== API: ОБНОВИТЬ НАСТРОЙКИ КЛАПАНА ====================
-void handleUpdateValve() {
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"error\":\"Missing data\"}");
-    return;
-  }
-  
-  DynamicJsonDocument doc(2048);
-  DeserializationError err = deserializeJson(doc, server.arg("plain"));
-  if (err) {
-    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-    return;
-  }
-  
-  int valveId = doc["id"] | 0;
-  if (valveId < 1 || valveId > 8) {
-    server.send(400, "application/json", "{\"error\":\"Invalid valve ID\"}");
-    return;
-  }
-  
-  // Обновляем клапан
-  String sql = "UPDATE valves SET active=?, max_duration_sec=?, daily_limit_ml=?, moisture_mode=?, plant_name=? WHERE id=?";
-  sqlite3_stmt* stmt;
-  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_int(stmt, 1, doc["active"] | 1);
-    sqlite3_bind_int(stmt, 2, doc["max_duration_sec"] | 300);
-    sqlite3_bind_double(stmt, 3, doc["daily_limit_ml"] | 0);
-    sqlite3_bind_int(stmt, 4, doc["moisture_mode"] | 0);
-    const char* plantName = doc["plant_name"] | "";
-    sqlite3_bind_text(stmt, 5, plantName, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 6, valveId);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-  }
-  
-  // Обновляем задачу
-  if (doc.containsKey("task")) {
-    JsonObject task = doc["task"];
-    
-    // Проверяем, есть ли уже задача для этого клапана
-    const char* checkSql = "SELECT id FROM watering_tasks WHERE valve_id = ? LIMIT 1";
-    sqlite3_stmt* checkStmt;
-    int taskId = 0;
-    if (sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, NULL) == SQLITE_OK) {
-      sqlite3_bind_int(checkStmt, 1, valveId);
-      if (sqlite3_step(checkStmt) == SQLITE_ROW) {
-        taskId = sqlite3_column_int(checkStmt, 0);
-      }
-      sqlite3_finalize(checkStmt);
-    }
-    
-    if (taskId > 0) {
-      // Обновляем существующую задачу
-      sql = "UPDATE watering_tasks SET schedule_type=?, schedule_time=?, schedule_interval_min=?, "
-            "schedule_days=?, priority=?, cycle_repeat=?, max_duration_sec=?, max_volume_ml=?, "
-            "weekly_days_config=?, updated_ts=? WHERE id=?";
-      if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-        const char* schedType = task["schedule_type"] | "daily";
-        sqlite3_bind_text(stmt, 1, schedType, -1, SQLITE_TRANSIENT);
-        const char* schedTime = task["schedule_time"] | "";
-        sqlite3_bind_text(stmt, 2, schedTime, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 3, task["schedule_interval_min"] | 0);
-        const char* schedDays = task["schedule_days"] | "";
-        sqlite3_bind_text(stmt, 4, schedDays, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 5, task["priority"] | 5);
-        sqlite3_bind_int(stmt, 6, task["cycle_repeat"] | 1);
-        sqlite3_bind_int(stmt, 7, task["max_duration_sec"] | 600);
-        sqlite3_bind_double(stmt, 8, task["max_volume_ml"] | 1000);
-        
-        // weekly_days_config как JSON
-        String weeklyJson;
-        if (task.containsKey("weekly_days")) {
-          serializeJson(task["weekly_days"], weeklyJson);
-        }
-        sqlite3_bind_text(stmt, 9, weeklyJson.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 10, time(nullptr));
-        sqlite3_bind_int(stmt, 11, taskId);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-      }
-    } else {
-      // Создаём новую задачу
-      sql = "INSERT INTO watering_tasks (valve_id, schedule_type, schedule_time, schedule_interval_min, "
-            "schedule_days, priority, cycle_repeat, max_duration_sec, max_volume_ml, weekly_days_config, "
-            "created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-      if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, valveId);
-        const char* schedType = task["schedule_type"] | "daily";
-        sqlite3_bind_text(stmt, 2, schedType, -1, SQLITE_TRANSIENT);
-        const char* schedTime = task["schedule_time"] | "";
-        sqlite3_bind_text(stmt, 3, schedTime, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 4, task["schedule_interval_min"] | 0);
-        const char* schedDays = task["schedule_days"] | "";
-        sqlite3_bind_text(stmt, 5, schedDays, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 6, task["priority"] | 5);
-        sqlite3_bind_int(stmt, 7, task["cycle_repeat"] | 1);
-        sqlite3_bind_int(stmt, 8, task["max_duration_sec"] | 600);
-        sqlite3_bind_double(stmt, 9, task["max_volume_ml"] | 1000);
-        
-        String weeklyJson;
-        if (task.containsKey("weekly_days")) {
-          serializeJson(task["weekly_days"], weeklyJson);
-        }
-        sqlite3_bind_text(stmt, 10, weeklyJson.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 11, time(nullptr));
-        sqlite3_bind_int(stmt, 12, time(nullptr));
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-      }
-    }
-  }
-  
-  // Обновляем датчик
-  if (doc.containsKey("sensor")) {
-    JsonObject sensor = doc["sensor"];
-    sql = "UPDATE moisture_sensors SET active=?, check_interval_min=?, target_moisture_percent=?, "
-          "max_watering_duration_sec=?, min_pause_hours=? WHERE valve_id=?";
-    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-      sqlite3_bind_int(stmt, 1, sensor["active"] | 0);
-      sqlite3_bind_int(stmt, 2, sensor["check_interval_min"] | 30);
-      sqlite3_bind_double(stmt, 3, sensor["target_moisture_percent"] | 65);
-      sqlite3_bind_int(stmt, 4, sensor["max_watering_duration_sec"] | 180);
-      sqlite3_bind_int(stmt, 5, sensor["min_pause_hours"] | 2);
-      sqlite3_bind_int(stmt, 6, valveId);
-      sqlite3_step(stmt);
-      sqlite3_finalize(stmt);
-    }
-  }
-  
-  server.send(200, "application/json", "{\"success\":true}");
-}
-
-// ==================== API: ДОБАВИТЬ ЗАДАЧУ ====================
-void handleAddTask() {
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"error\":\"Missing data\"}");
-    return;
-  }
-  
-  DynamicJsonDocument doc(2048);
-  DeserializationError err = deserializeJson(doc, server.arg("plain"));
-  if (err) {
-    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-    return;
-  }
-  
-  int valveId = doc["valve_id"] | 0;
-  if (valveId < 1 || valveId > 8) {
-    server.send(400, "application/json", "{\"error\":\"Invalid valve ID\"}");
-    return;
-  }
-  
-  // Создаём задачу
-  String sql = "INSERT INTO watering_tasks (valve_id, schedule_type, schedule_time, schedule_interval_min, "
-               "schedule_days, priority, cycle_repeat, max_duration_sec, max_volume_ml, weekly_days_config, "
-               "created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-  sqlite3_stmt* stmt;
-  int taskId = 0;
-  
-  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_int(stmt, 1, valveId);
-    const char* schedType = doc["schedule_type"] | "daily";
-    sqlite3_bind_text(stmt, 2, schedType, -1, SQLITE_TRANSIENT);
-    const char* schedTime = doc["schedule_time"] | "";
-    sqlite3_bind_text(stmt, 3, schedTime, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 4, doc["schedule_interval_min"] | 0);
-    const char* schedDays = doc["schedule_days"] | "";
-    sqlite3_bind_text(stmt, 5, schedDays, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 6, doc["priority"] | 5);
-    sqlite3_bind_int(stmt, 7, doc["cycle_repeat"] | 1);
-    sqlite3_bind_int(stmt, 8, doc["max_duration_sec"] | 600);
-    sqlite3_bind_double(stmt, 9, doc["max_volume_ml"] | 1000);
-    
-    String weeklyJson;
-    if (doc.containsKey("weekly_days")) {
-      serializeJson(doc["weekly_days"], weeklyJson);
-    }
-    sqlite3_bind_text(stmt, 10, weeklyJson.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 11, time(nullptr));
-    sqlite3_bind_int(stmt, 12, time(nullptr));
-    
-    if (sqlite3_step(stmt) == SQLITE_DONE) {
-      taskId = sqlite3_last_insert_rowid(db);
-    }
-    sqlite3_finalize(stmt);
-  }
-  
-  if (taskId > 0 && doc.containsKey("operations")) {
-    JsonArray operations = doc["operations"].as<JsonArray>();
-    int order = 1;
-    for (JsonObject op : operations) {
-      sql = "INSERT INTO watering_operations (task_id, operation_order, operation_type, duration_sec, "
-            "volume_ml, params_json, created_ts, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-      if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, taskId);
-        sqlite3_bind_int(stmt, 2, order++);
-        const char* opType = op["type"] | "WATER";
-        sqlite3_bind_text(stmt, 3, opType, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 4, op["duration_sec"] | 0);
-        sqlite3_bind_double(stmt, 5, op["volume_ml"] | 0);
-        
-        String paramsJson;
-        if (op.containsKey("_params")) {
-          serializeJson(op["_params"], paramsJson);
-        }
-        sqlite3_bind_text(stmt, 6, paramsJson.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(stmt, 7, time(nullptr));
-        sqlite3_bind_int(stmt, 8, time(nullptr));
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-      }
-    }
-  }
-  
-  DynamicJsonDocument resp(256);
-  resp["success"] = true;
-  resp["task_id"] = taskId;
-  String out;
-  serializeJson(resp, out);
-  server.send(200, "application/json", out);
-}
-
-// ==================== API: УДАЛИТЬ ЗАДАЧУ ====================
-void handleDeleteTask() {
-  if (!server.hasArg("id")) {
-    server.send(400, "application/json", "{\"error\":\"Task ID required\"}");
-    return;
-  }
-  
-  int taskId = server.arg("id").toInt();
-  if (taskId == 0) {
-    server.send(400, "application/json", "{\"error\":\"Invalid task ID\"}");
-    return;
-  }
-  
-  // Удаляем задачу (операции удалятся каскадно)
-  const char* sql = "DELETE FROM watering_tasks WHERE id = ?";
-  sqlite3_stmt* stmt;
-  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_int(stmt, 1, taskId);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-  }
-  
-  server.send(200, "application/json", "{\"success\":true}");
-}
-
-// ==================== API: ПОЛУЧИТЬ ЖУРНАЛ ПОЛИВОВ ====================
-void handleGetWateringLog() {
-  int limit = server.hasArg("limit") ? server.arg("limit").toInt() : 100;
-  int valveId = server.hasArg("valve_id") ? server.arg("valve_id").toInt() : 0;
-  
-  String sql = "SELECT * FROM watering_log";
-  if (valveId > 0) {
-    sql += " WHERE valve_id = " + String(valveId);
-  }
-  sql += " ORDER BY ts DESC LIMIT " + String(limit);
-  
-  DynamicJsonDocument doc(8192);
-  JsonArray arr = doc.to<JsonArray>();
-  
-  sqlite3_stmt* stmt;
-  if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, NULL) == SQLITE_OK) {
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      JsonObject entry = arr.createNestedObject();
-      entry["id"] = sqlite3_column_int(stmt, 0);
-      entry["ts"] = sqlite3_column_int(stmt, 1);
-      entry["valve"] = sqlite3_column_int(stmt, 3);
-      entry["duration"] = sqlite3_column_int(stmt, 4);
-      entry["volume"] = sqlite3_column_double(stmt, 5);
-      entry["status"] = (const char*)sqlite3_column_text(stmt, 6) ? (const char*)sqlite3_column_text(stmt, 6) : "completed";
-      entry["type"] = (const char*)sqlite3_column_text(stmt, 8) ? (const char*)sqlite3_column_text(stmt, 8) : "manual";
-    }
-    sqlite3_finalize(stmt);
-  }
-  
-  String out;
-  serializeJson(arr, out);
-  server.send(200, "application/json", out);
-}
-
-// ==================== API: РУЧНОЙ ПОЛИВ ====================
-void handleManualWatering() {
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"error\":\"Missing data\"}");
-    return;
-  }
-  
-  DynamicJsonDocument doc(512);
-  DeserializationError err = deserializeJson(doc, server.arg("plain"));
-  if (err) {
-    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-    return;
-  }
-  
-  int valveId = doc["valve_id"] | 0;
-  int duration = doc["duration"] | 30;
-  double volume = doc["volume"] | 0;
-  
-  if (valveId < 1 || valveId > 8) {
-    server.send(400, "application/json", "{\"error\":\"Invalid valve ID\"}");
-    return;
-  }
-  
-  // Создаём запись в task_runs
-  const char* sql = "INSERT INTO task_runs (valve_id, state, triggered_by, target_duration_sec, target_volume_ml, "
-                    "actual_duration_sec, actual_volume_ml, started_ts, finished_ts) VALUES (?, 'completed', 'manual', ?, ?, ?, ?, ?, ?)";
-  sqlite3_stmt* stmt;
-  int runId = 0;
-  
-  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_int(stmt, 1, valveId);
-    sqlite3_bind_int(stmt, 2, duration);
-    sqlite3_bind_double(stmt, 3, volume);
-    sqlite3_bind_int(stmt, 4, duration);
-    sqlite3_bind_double(stmt, 5, volume);
-    sqlite3_bind_int(stmt, 6, time(nullptr));
-    sqlite3_bind_int(stmt, 7, time(nullptr));
-    
-    if (sqlite3_step(stmt) == SQLITE_DONE) {
-      runId = sqlite3_last_insert_rowid(db);
-    }
-    sqlite3_finalize(stmt);
-  }
-  
-  // Создаём запись в watering_log
-  if (runId > 0) {
-    sql = "INSERT INTO watering_log (ts, run_id, valve_id, duration_sec, volume_ml, status, triggered_by) "
-          "VALUES (?, ?, ?, ?, ?, 'completed', 'manual')";
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-      sqlite3_bind_int(stmt, 1, time(nullptr));
-      sqlite3_bind_int(stmt, 2, runId);
-      sqlite3_bind_int(stmt, 3, valveId);
-      sqlite3_bind_int(stmt, 4, duration);
-      sqlite3_bind_double(stmt, 5, volume);
-      sqlite3_step(stmt);
-      sqlite3_finalize(stmt);
-    }
-  }
-  
-  server.send(200, "application/json", "{\"success\":true}");
-}
-
-// ==================== API: ПРИМЕНИТЬ НАСТРОЙКИ КО ВСЕМ КЛАПАНАМ ====================
-void handleApplyToAll() {
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"error\":\"Missing data\"}");
-    return;
-  }
-  
-  DynamicJsonDocument doc(2048);
-  DeserializationError err = deserializeJson(doc, server.arg("plain"));
-  if (err) {
-    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
-    return;
-  }
-  
-  int sourceValveId = doc["source_valve_id"] | 0;
-  if (sourceValveId < 1 || sourceValveId > 8) {
-    server.send(400, "application/json", "{\"error\":\"Invalid source valve ID\"}");
-    return;
-  }
-  
-  // Получаем настройки исходного клапана
-  const char* sql = "SELECT * FROM watering_tasks WHERE valve_id = ? LIMIT 1";
-  sqlite3_stmt* stmt;
-  int sourceTaskId = 0;
-  
-  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_int(stmt, 1, sourceValveId);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-      sourceTaskId = sqlite3_column_int(stmt, 0);
-    }
-    sqlite3_finalize(stmt);
-  }
-  
-  if (sourceTaskId == 0) {
-    server.send(400, "application/json", "{\"error\":\"No task found for source valve\"}");
-    return;
-  }
-  
-  // Копируем настройки на все остальные клапаны
-  for (int i = 1; i <= 8; i++) {
-    if (i == sourceValveId) continue;
-    
-    // Обновляем или создаём задачу
-    sql = "SELECT id FROM watering_tasks WHERE valve_id = ? LIMIT 1";
-    int taskId = 0;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-      sqlite3_bind_int(stmt, 1, i);
-      if (sqlite3_step(stmt) == SQLITE_ROW) {
-        taskId = sqlite3_column_int(stmt, 0);
-      }
-      sqlite3_finalize(stmt);
-    }
-    
-    if (taskId > 0) {
-      // Обновляем
-      sql = "UPDATE watering_tasks SET schedule_type=(SELECT schedule_type FROM watering_tasks WHERE id=?), "
-            "schedule_time=(SELECT schedule_time FROM watering_tasks WHERE id=?), "
-            "priority=(SELECT priority FROM watering_tasks WHERE id=?), "
-            "cycle_repeat=(SELECT cycle_repeat FROM watering_tasks WHERE id=?), "
-            "max_duration_sec=(SELECT max_duration_sec FROM watering_tasks WHERE id=?), "
-            "max_volume_ml=(SELECT max_volume_ml FROM watering_tasks WHERE id=?), "
-            "updated_ts=? WHERE id=?";
-      if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, sourceTaskId);
-        sqlite3_bind_int(stmt, 2, sourceTaskId);
-        sqlite3_bind_int(stmt, 3, sourceTaskId);
-        sqlite3_bind_int(stmt, 4, sourceTaskId);
-        sqlite3_bind_int(stmt, 5, sourceTaskId);
-        sqlite3_bind_int(stmt, 6, sourceTaskId);
-        sqlite3_bind_int(stmt, 7, time(nullptr));
-        sqlite3_bind_int(stmt, 8, taskId);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-      }
-    }
-  }
-  
-  server.send(200, "application/json", "{\"success\":true}");
-}
-
-// ==================== HTML СТРАНИЦА ПОЛИВА ====================
-const char WATERING_HTML[] PROGMEM = R"rawliteral(
+// ===================== ВСТРОЕННЫЙ HTML (ваш) =====================
+const char MAIN_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -908,7 +68,7 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
             box-shadow: var(--card-internal-shadow);
             cursor: pointer;
             transition: all 0.3s ease;
-            color: #1e293b;
+            color: #1e293b; /* Темный текст для читаемости */
         }
         
         .valve-item:hover {
@@ -1294,6 +454,7 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
             border-bottom: 1px solid rgba(0,0,0,0.05);
         }
 
+        /* Стили для журнала */
         #journalPanel {
             display: none;
         }
@@ -1375,6 +536,7 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
             background: var(--accent-green, #21C85F);
             transform: scale(1.1);
         }
+        /* Показываем при наведении на карточку */
         .valve-card:hover .edit-valve-btn,
         [id*="valve"]:hover .edit-valve-btn,
         .card:hover .edit-valve-btn,
@@ -1383,6 +545,7 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
             opacity: 1;
         }
 
+        /* Мини-окошко редактирования */
         .valve-editor-mini {
             position: fixed;
             background: var(--card-bg, #ffffff);
@@ -1493,33 +656,44 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
     </style>
 </head>
 <body class="theme-dark">
+    <!-- Шапка -->
     <div class="top-sticky-wrapper">
+        
         <header class="site-header">
             <a href="profile.html" class="user-pill" aria-label="Профиль">
                 <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
                 <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">User_login</span>
             </a>
+
             <div class="logo-container">
                 <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
                 <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
+
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
                 <img src="тема.png" alt="" class="theme-icon-img">
             </label>
         </header>
         <input type="checkbox" id="themeToggle" class="mode-toggle">
+
         <nav class="navigation">
             <a href="index.html" class="nav-btn">Главная</a> 
             <a href="myplant.html" class="nav-btn active">Мои растения</a>
             <a href="settings.html" class="nav-btn">Настройки</a>
         </nav>
+        
     </div>
 
+    <!-- Основной контент -->
     <div class="page-wrapper">
         <div class="irrigation-container">
-            <div class="valves-sidebar" id="valvesSidebar"></div>
+            <!-- Левая панель: Клапаны -->
+            <div class="valves-sidebar" id="valvesSidebar">
+                <!-- Клапаны генерируются через JS -->
+            </div>
 
+            <!-- Центральная панель -->
             <div class="main-content">
                 <div class="content-header">
                     <h1 class="page-title">Конфигурация модуля полива</h1>
@@ -1531,6 +705,7 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
                     <button class="tab" data-tab="journal">Журнал</button>
                 </div>
 
+                <!-- Панель ручного управления -->
                 <div id="manualPanel" style="display: none;">
                     <div style="text-align: center; padding: 30px 20px;">
                         <select class="form-select" id="manual-valve-select" style="margin-bottom: 25px;">
@@ -1573,7 +748,9 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
                     </div>
                 </div>
 
+                <!-- Панель конфигурации -->
                 <div id="configPanel">
+                
                     <div style="background:rgba(33,200,95,0.06); border-radius:16px; padding:20px; margin-bottom:25px; border:1px solid rgba(33,200,95,0.2);">
                         <h4 style="margin:0 0 15px 0; color:var(--accent-green);">Настройка новой задачи</h4>
                         
@@ -1646,8 +823,10 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
                             </div>
                         </div>
                         
+                        <!-- Контейнер для деталей дней (weekly) -->
                         <div id="weekly-details-container" style="margin-top:15px; display:none;"></div>
                         
+                        <!-- Кнопка добавления задачи -->
                         <button class="btn-add-task" onclick="addTaskOperation()" style="width:100%; margin-top:10px; padding:14px; font-size:15px;">
                             + Добавить задачу с этими параметрами
                         </button>
@@ -1655,8 +834,10 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
                     
                     <h3 class="section-title">Добавленные задачи</h3>
                     <div class="operations-list" id="operations-list"></div>
+                    
                 </div>
 
+                <!-- Панель журнала -->
                 <div id="journalPanel">
                     <h3 class="section-title">История полива</h3>
                     <div id="journal-content">
@@ -1678,6 +859,7 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
                 </div>
             </div>
 
+            <!-- Правая панель: Датчик влажности -->
             <div class="sidebar-right">
                 <div class="moisture-panel">
                     <h2 class="panel-title">Датчик влажности</h2>
@@ -1724,7 +906,9 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
             </div>
         </div>
     </div>
+    
 
+    <!-- Футер -->
     <footer class="site-footer">
         <div class="footer-columns">
             <div>
@@ -1752,253 +936,376 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
         </div>
     </footer>
 
+    <!-- ВСТАВЬТЕ ЭТОТ СКРИПТ ВМЕСТО СТАРОГО, перед </body> -->
     <script>
-        // ===== КОНФИГУРАЦИЯ API =====
-        const API_BASE = '/api/watering';
-        
-        let db = {};
-        let currentValve = 1;
-        let saveTimeout = null;
+        (function () {
+            'use strict';
 
-        // ===== ИНИЦИАЛИЗАЦИЯ =====
-        async function init() {
-            await loadData();
-            renderSidebar();
-            switchValve(1);
-            setupListeners();
-            updateFormLogic();
-            await renderJournal();
-        }
+            // ===== КОНФИГУРАЦИЯ =====
+            const DB_KEY = 'greenShelfWateringDB';
+            const LOG_KEY = 'greenShelfWateringLog';
+            const THEME_KEY = 'greenShelfTheme';
+            const PLANTS_KEY = 'myPlants';
 
-        // ===== ЗАГРУЗКА ДАННЫХ С СЕРВЕРА =====
-        async function loadData() {
-            try {
-                const res = await fetch(API_BASE + '/valves');
-                if (res.ok) {
-                    db = await res.json();
-                }
-            } catch (e) {
-                console.error('Ошибка загрузки данных:', e);
-            }
-        }
+            let db = {};
+            let currentValve = 1;
+            let plantsMap = {};
+            let saveTimeout = null;
+            let simulatedScheduleInterval = null;
 
-        // ===== СОХРАНЕНИЕ ДАННЫХ НА СЕРВЕР =====
-        async function saveData() {
-            try {
-                const valveData = db[currentValve];
-                const payload = {
-                    id: currentValve,
-                    active: valveData.active,
-                    max_duration_sec: valveData.max_duration_sec,
-                    daily_limit_ml: valveData.daily_limit_ml,
-                    moisture_mode: valveData.moisture_mode,
-                    plant_name: valveData.plant_name || '',
-                    task: valveData.task,
-                    sensor: valveData.sensor
-                };
-                
-                await fetch(API_BASE + '/valve', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-            } catch (e) {
-                console.error('Ошибка сохранения:', e);
-            }
-        }
-
-        async function saveAllData() {
-            collectUI(currentValve);
-            await saveData();
-            showNotification('Настройки сохранены');
-        }
-
-        async function applyToAll() {
-            collectUI(currentValve);
-            try {
-                await fetch(API_BASE + '/apply-all', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({source_valve_id: currentValve})
-                });
-                await loadData();
+            // ===== ИНИЦИАЛИЗАЦИЯ =====
+            function init() {
+                loadTheme();
+                loadData();
+                loadPlants();
                 renderSidebar();
-                showNotification('Настройки применены ко всем клапанам');
-            } catch (e) {
-                console.error('Ошибка применения:', e);
+                switchValve(1);
+                setupListeners();
+                updateFormLogic();
+                renderJournal();
+                makeAllButtonsClickable();
+                startScheduleSimulation();
             }
-        }
 
-        function debounceSave() {
-            clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(() => {
+            // ===== ТЕМА =====
+            function loadTheme() {
+                const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
+                document.body.className = `theme-${savedTheme}`;
+            }
+            function toggleTheme() {
+                const isDark = document.body.classList.contains('theme-dark');
+                const newTheme = isDark ? 'light' : 'dark';
+                document.body.className = `theme-${newTheme}`;
+                localStorage.setItem(THEME_KEY, newTheme);
+            }
+
+            // ===== ДАННЫЕ =====
+            function loadData() {
+                const saved = localStorage.getItem(DB_KEY);
+                db = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(DEFAULT_DB));
+            }
+            function saveData() {
+                localStorage.setItem(DB_KEY, JSON.stringify(db));
+            }
+            function saveAllData() {
                 collectUI(currentValve);
                 saveData();
-            }, 800);
-        }
-
-        // ===== РЕНДЕРИНГ САЙДБАРА =====
-        function renderSidebar() {
-            const container = document.getElementById('valvesSidebar');
-            if (!container) return;
-            container.innerHTML = '';
-            
-            for (let i = 1; i <= 8; i++) {
-                const d = db[i];
-                if (!d) continue;
-                
-                const plant = d.plant_name || '—';
-                const statusText = d.active ? (d.moisture_mode ? 'By Moisture' : 'Active') : 'Неактивен';
-                const statusClass = d.active ? '' : 'inactive';
-                
-                container.innerHTML += `
-                    <div class="valve-item ${i === currentValve ? 'active' : ''}" data-valve="${i}" onclick="switchValve(${i})">
-                        <div class="valve-header">
-                            <span class="valve-title"><span class="valve-number">${i}</span>Клапан ${i}</span>
-                            <div class="valve-toggle ${d.active ? 'on' : ''}" onclick="handleValveToggle(${i}, event)"></div>
-                        </div>
-                        <div class="valve-info">Pin: ${d.pin_number}</div>
-                        <div class="valve-info">Макс: ${d.max_duration_sec} сек</div>
-                        <div class="valve-info">Лимит: ${d.daily_limit_ml > 0 ? d.daily_limit_ml + ' мл' : '—'}</div>
-                        <div class="valve-info">Растение: ${plant}</div>
-                        <span class="valve-status ${statusClass}">${statusText}</span>
-                    </div>`;
+                showNotification('Настройки сохранены');
             }
-        }
-
-        window.handleValveToggle = async function(valveId, event) {
-            event?.stopPropagation();
-            const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
-            if (!toggle) return;
-            
-            const isNowOn = !toggle.classList.contains('on');
-            toggle.classList.toggle('on');
-            db[valveId].active = isNowOn ? 1 : 0;
-            
-            await saveData();
-            
-            if (valveId === currentValve) applyUI(valveId);
-            renderSidebar();
-        };
-
-        window.switchValve = function(id) {
-            collectUI(currentValve);
-            currentValve = id;
-            renderSidebar();
-            applyUI(id);
-            updateFormLogic();
-        };
-
-        function applyUI(id) {
-            const d = db[id]; if (!d) return;
-            const t = d.task, s = d.sensor;
-            const setVal = (id, val) => { const el = document.getElementById(id); if(el) el.value = val ?? ''; };
-            
-            setVal('input-valve-select', id);
-            setVal('input-schedule-type', t.schedule_type);
-            setVal('input-time', t.schedule_time || '');
-            setVal('input-days', t.schedule_days || '');
-            setVal('input-interval', t.schedule_interval_min || '');
-            setVal('input-priority', t.priority);
-            setVal('input-cycles', t.cycle_repeat);
-            setVal('input-task-duration', t.max_duration_sec);
-            setVal('input-max-volume', t.max_volume_ml);
-
-            if (t.schedule_type === 'weekly' && t.weekly_days) {
-                const daysInput = document.getElementById('input-days');
-                if (daysInput && daysInput.value) {
-                    generateWeeklyDayFields(daysInput.value);
+            function applyToAll() {
+                collectUI(currentValve);
+                const currentSettings = JSON.parse(JSON.stringify(db[currentValve]));
+                for(let i=1; i<=8; i++) {
+                    if(i !== currentValve) {
+                        db[i].task = JSON.parse(JSON.stringify(currentSettings.task));
+                        db[i].sensor = JSON.parse(JSON.stringify(currentSettings.sensor));
+                        db[i].active = currentSettings.active;
+                    }
                 }
+                saveData();
+                renderSidebar();
+                showNotification('Настройки применены ко всем клапанам');
+            }
+            function loadPlants() {
+                const saved = localStorage.getItem(PLANTS_KEY);
+                if (saved) JSON.parse(saved).forEach(p => { if(p.valve) plantsMap[p.valve] = p.name; });
             }
 
-            const opsList = document.getElementById('operations-list');
-            if (opsList) {
-                opsList.innerHTML = '';
-                t.operations.forEach((op, idx) => {
-                    if (op.type !== 'TASK_SUMMARY') return;
+            function debounceSave() {
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(() => {
+                    collectUI(currentValve);
+                    saveData();
+                }, 800);
+            }
+
+            // ===== СИМУЛЯЦИЯ РАСПИСАНИЯ =====
+            function startScheduleSimulation() {
+                simulatedScheduleInterval = setInterval(() => {
+                    const now = new Date();
+                    const currentDay = now.getDay() || 7;
+                    const currentTime = now.toTimeString().slice(0,5);
                     
-                    const details = op.details || {};
-                    const waterDuration = details.limits?.duration || '—';
-                    const waterVolume = details.limits?.volume || '—';
-                    
-                    const content = `
-                        <div style="background:linear-gradient(135deg, #28a745 0%, #20c997 100%); color:white; padding:16px; border-radius:12px; margin:8px 0; box-shadow:0 2px 8px rgba(0,0,0,0.15);">
-                            <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px;">
-                                <h4 style="margin:0; font-size:15px;">${op.label || 'Задача'}</h4>
-                                <button class="btn-delete" onclick="deleteOperation(${idx})" 
-                                        style="background:rgba(255,255,255,0.2); border:none; color:white; 
-                                            border-radius:50%; width:28px; height:28px; cursor:pointer; 
-                                            font-size:18px; line-height:1; display:flex; align-items:center; justify-content:center;">
-                                    ×
-                                </button>
+                    for (let valveId = 1; valveId <= 8; valveId++) {
+                        const valve = db[valveId];
+                        if (!valve?.active || !valve?.task) continue;
+                        const t = valve.task;
+                        let shouldWater = false, triggerType = 'schedule';
+                        
+                        switch(t.schedule_type) {
+                            case 'daily': if (t.schedule_time === currentTime) shouldWater = true; break;
+                            case 'weekly': 
+                                const days = (t.schedule_days || '').split(',').map(Number);
+                                if (days.includes(currentDay) && t.schedule_time === currentTime) shouldWater = true; 
+                                break;
+                            case 'interval':
+                                if (t.schedule_interval_min > 0 && now.getMinutes() % t.schedule_interval_min === 0 && now.getSeconds() < 10) shouldWater = true;
+                                break;
+                            case 'once': if (t.schedule_time === currentTime) shouldWater = true; break;
+                        }
+                        
+                        if (valve.moisture_mode && valve.sensor?.active) {
+                            const s = valve.sensor;
+                            if (s.last_moisture_percent < s.target_moisture_percent && Math.random() > 0.7) {
+                                shouldWater = true; triggerType = 'sensor';
+                            }
+                        }
+                        
+                        if (shouldWater) {
+                            const taskOp = t.operations.find(op => op.type === 'TASK_SUMMARY');
+                            const waterOp = taskOp?._params || t.operations.find(op => op.type === 'WATER');
+                            addLogEntry({
+                                valve: valveId, type: triggerType,
+                                duration: waterOp?.duration_sec || t.max_duration_sec || 30,
+                                volume: waterOp?.volume_ml || t.max_volume_ml || 200,
+                                status: 'completed'
+                            });
+                            flashValveToggle(valveId);
+                        }
+                    }
+                }, 10000);
+            }
+            function stopScheduleSimulation() { if (simulatedScheduleInterval) clearInterval(simulatedScheduleInterval); }
+            function flashValveToggle(valveId) {
+                const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
+                if (!toggle) return;
+                toggle.style.transform = 'scale(1.2)';
+                toggle.style.transition = 'transform 0.2s';
+                setTimeout(() => toggle.style.transform = 'scale(1)', 400);
+            }
+
+            // ===== РЕНДЕРИНГ САЙДБАРА =====
+            function renderSidebar() {
+                const container = document.getElementById('valvesSidebar');
+                if (!container) return;
+                container.innerHTML = '';
+                for (let i = 1; i <= 8; i++) {
+                    const d = db[i];
+                    const plant = plantsMap[i] || '—';
+                    const statusText = d.active ? (d.moisture_mode ? 'By Moisture' : 'Active') : 'Неактивен';
+                    const statusClass = d.active ? '' : 'inactive';
+                    container.innerHTML += `
+                        <div class="valve-item ${i === currentValve ? 'active' : ''}" data-valve="${i}" onclick="switchValve(${i})">
+                            <div class="valve-header">
+                                <span class="valve-title"><span class="valve-number">${i}</span>Клапан ${i}</span>
                             </div>
-                            
-                            <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; font-size:13px;">
-                                <div><b>Расписание:</b><br><span style="opacity:0.9;">${details.schedule || '—'}</span></div>
-                                <div><b>Приоритет:</b><br><span style="opacity:0.9;">${details.priority || '—'}</span></div>
-                                <div><b>Циклы:</b><br><span style="opacity:0.9;">${details.cycles || '—'}</span></div>
-                                <div><b>Длит.:</b><br><span style="opacity:0.9;">${waterDuration}</span></div>
-                                <div><b>Объём:</b><br><span style="opacity:0.9;">${waterVolume}</span></div>
-                                <div><b>Добавлено:</b><br><span style="opacity:0.9;">${op.timestamp || ''}</span></div>
-                            </div>
+                            <div class="valve-info">Pin: ${d.pin_number}</div>
+                            <div class="valve-info">Макс: ${d.max_duration_sec} сек</div>
+                            <div class="valve-info">Лимит: ${d.daily_limit_ml > 0 ? d.daily_limit_ml + ' мл' : '—'}</div>
+                            <div class="valve-info">Растение: ${plant}</div>
+                            <span class="valve-status ${statusClass}">${statusText}</span>
                         </div>`;
-                    
-                    opsList.insertAdjacentHTML('beforeend', content);
-                });
-                
-                if (t.operations.filter(op => op.type === 'TASK_SUMMARY').length === 0) {
-                    opsList.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b; font-style:italic;">Задач пока нет. Добавьте первую задачу выше.</div>';
                 }
             }
 
-            const sensorToggle = document.getElementById('input-sensor-active');
-            if (sensorToggle) s.active ? sensorToggle.classList.add('on') : sensorToggle.classList.remove('on');
-            setVal('input-sensor-interval', s.check_interval_min);
-            setVal('input-target-moisture', s.target_moisture_percent);
-            setVal('input-sensor-duration', s.max_watering_duration_sec);
-            setVal('input-min-pause', s.min_pause_hours);
-            setVal('input-last-moisture', s.last_moisture_percent);
-        }
+            // ===== ОБРАБОТКА КЛИКА ПО ЗАЩЁЛКЕ (РУЧНОЙ ПОЛИВ) =====
+            window.handleValveToggle = function(valveId, event) {
+                event?.stopPropagation();
+                const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
+                if (!toggle) return;
+                const isNowOn = !toggle.classList.contains('on');
+                toggle.classList.toggle('on');
+                db[valveId].active = isNowOn ? 1 : 0;
+                saveData();
+                
+                if (isNowOn) {
+                    const valveData = db[valveId];
+                    const t = valveData.task;
+                    const waterOp = t.operations?.find(op => op.type === 'WATER');
+                    addLogEntry({
+                        valve: valveId, type: 'manual',
+                        duration: waterOp?.duration_sec || t.max_duration_sec || 30,
+                        volume: waterOp?.volume_ml || t.max_volume_ml || 200,
+                        status: 'completed'
+                    });
+                    showNotification(`Клапан ${valveId}: ручной полив`);
+                }
+                if (valveId === currentValve) applyUI(valveId);
+                renderSidebar();
+            };
 
-        window.addTaskOperation = async function() {
-            const getVal = (id) => document.getElementById(id)?.value || '';
-            const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
-            
-            const valve = getVal('input-valve-select') || currentValve;
-            const scheduleType = getVal('input-schedule-type') || 'daily';
-            const scheduleTime = getVal('input-time') || '08:00';
-            const scheduleDays = getVal('input-days') || '';
-            const interval = getVal('input-interval') || '60';
-            const priority = getNum('input-priority', 5);
-            const cycles = getNum('input-cycles', 1);
-            const maxDuration = getNum('input-task-duration', 600);
-            const maxVolume = getNum('input-max-volume', 1000);
-            const waterVolume = getNum('input-water-volume', 200);
-            const waterDuration = getNum('input-water-duration', 30);
+            window.switchValve = function(id) {
+                collectUI(currentValve);
+                currentValve = id;
+                renderSidebar();
+                if (window.initValveEditButtons) window.initValveEditButtons();
+                applyUI(id);
+                updateFormLogic();
+            };
 
-            let scheduleDesc = '';
-            switch(scheduleType) {
-                case 'daily': scheduleDesc = `Ежедневно в ${scheduleTime}`; break;
-                case 'weekly': scheduleDesc = `Еженедельно: дни ${scheduleDays || '—'}`; break;
-                case 'interval': scheduleDesc = `Каждые ${interval} мин`; break;
-                case 'once': scheduleDesc = `Однократно: ${scheduleTime}`; break;
-                case 'sunrise': scheduleDesc = 'На рассвете (авто)'; break;
-                case 'sunset': scheduleDesc = 'На закате (авто)'; break;
-                default: scheduleDesc = scheduleType;
+            // ===== ПРИМЕНЕНИЕ ДАННЫХ В ФОРМУ (С ПОЛНЫМ ОТОБРАЖЕНИЕМ ЗАДАЧ) =====
+            function applyUI(id) {
+                const d = db[id]; if (!d) return;
+                const t = d.task, s = d.sensor;
+                const setVal = (id, val) => { const el = document.getElementById(id); if(el) el.value = val ?? ''; };
+                
+                setVal('input-valve-select', id);
+                setVal('input-schedule-type', t.schedule_type);
+                setVal('input-time', t.schedule_time || '');
+                setVal('input-days', t.schedule_days || '');
+                setVal('input-interval', t.schedule_interval_min || '');
+                setVal('input-priority', t.priority);
+                setVal('input-cycles', t.cycle_repeat);
+                setVal('input-task-duration', t.max_duration_sec);
+                setVal('input-max-volume', t.max_volume_ml);
+
+                if (db[id]?.task?.schedule_type === 'weekly' && db[id]?.task?.weekly_days) {
+                    const daysInput = document.getElementById('input-days');
+                    if (daysInput && daysInput.value) {
+                        generateWeeklyDayFields(daysInput.value);
+                    }
+                }
+
+                // === РЕНДЕР ОПЕРАЦИЙ С ПОЛНЫМ ОТОБРАЖЕНИЕМ ПАРАМЕТРОВ ===
+                const opsList = document.getElementById('operations-list');
+                if (opsList) {
+                    opsList.innerHTML = '';
+                    t.operations.forEach((op, idx) => {
+                        // Показываем ТОЛЬКО задачи типа TASK_SUMMARY
+                        if (op.type !== 'TASK_SUMMARY') return;
+                        
+                        const details = op.details || {};
+                        const waterDuration = details.limits?.duration || '—';
+                        const waterVolume = details.limits?.volume || '—';
+                        
+                        const content = `
+                            <div style="background:linear-gradient(135deg, #28a745 0%, #20c997 100%); color:white; padding:16px; border-radius:12px; margin:8px 0; box-shadow:0 2px 8px rgba(0,0,0,0.15);">
+                                <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px;">
+                                    <h4 style="margin:0; font-size:15px;">${op.label || 'Задача'}</h4>
+                                    <button class="btn-delete" onclick="deleteOperation(${idx})" 
+                                            style="background:rgba(255,255,255,0.2); border:none; color:white; 
+                                                border-radius:50%; width:28px; height:28px; cursor:pointer; 
+                                                font-size:18px; line-height:1; display:flex; align-items:center; justify-content:center;">
+                                        ×
+                                    </button>
+                                </div>
+                                
+                                <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; font-size:13px;">
+                                    <div>
+                                        <b>Расписание:</b><br>
+                                        <span style="opacity:0.9;">${details.schedule || '—'}</span>
+                                    </div>
+                                    <div>
+                                        <b>Приоритет:</b><br>
+                                        <span style="opacity:0.9;">${details.priority || '—'}</span>
+                                    </div>
+                                    <div>
+                                        <b>Циклы:</b><br>
+                                        <span style="opacity:0.9;">${details.cycles || '—'}</span>
+                                    </div>
+                                    <div>
+                                        <b>Длит.:</b><br>
+                                        <span style="opacity:0.9;">${waterDuration}</span>
+                                    </div>
+                                    <div>
+                                        <b>Объём:</b><br>
+                                        <span style="opacity:0.9;">${waterVolume}</span>
+                                    </div>
+                                    <div>
+                                        <b>Добавлено:</b><br>
+                                        <span style="opacity:0.9;">${op.timestamp || ''}</span>
+                                    </div>
+                                </div>
+                                
+                                ${op._weeklyDays ? `
+                                <div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.2); font-size:12px;">
+                                    <b>Настройки по дням:</b><br>
+                                    <span style="opacity:0.85;">${Object.keys(op._weeklyDays).length} дн. с индивидуальными параметрами</span>
+                                </div>` : ''}
+                            </div>`;
+                        
+                        opsList.insertAdjacentHTML('beforeend', content);
+                    });
+                    
+                    // Если задач нет
+                    if (t.operations.filter(op => op.type === 'TASK_SUMMARY').length === 0) {
+                        opsList.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b; font-style:italic;">Задач пока нет. Добавьте первую задачу выше.</div>';
+                    }
+                }
+
+                // Датчик
+                const sensorToggle = document.getElementById('input-sensor-active');
+                if (sensorToggle) s.active ? sensorToggle.classList.add('on') : sensorToggle.classList.remove('on');
+                setVal('input-sensor-interval', s.check_interval_min);
+                setVal('input-target-moisture', s.target_moisture_percent);
+                setVal('input-sensor-duration', s.max_watering_duration_sec);
+                setVal('input-min-pause', s.min_pause_hours);
+                setVal('input-last-moisture', s.last_moisture_percent);
             }
-            
-            const task = {
-                valve_id: parseInt(valve),
-                schedule_type: scheduleType,
-                schedule_time: scheduleTime,
-                schedule_days: scheduleDays,
-                schedule_interval_min: parseInt(interval),
-                priority: priority,
-                cycle_repeat: cycles,
-                max_duration_sec: maxDuration,
-                max_volume_ml: maxVolume,
-                weekly_days: {},
-                operations: [{
+
+            // ===== ОБНОВЛЕНИЕ ПАРАМЕТРА ОПЕРАЦИИ =====
+            window.updateOperationParam = function(opIdx, param, value) {
+                const numVal = parseFloat(value);
+                if (!isNaN(numVal)) {
+                    db[currentValve].task.operations[opIdx][param] = numVal;
+                    debounceSave();
+                }
+            };
+
+            // ===== ДОБАВЛЕНИЕ ЗАДАЧИ С ПОЛНЫМ НАБОРОМ ПАРАМЕТРОВ =====
+            window.addTaskOperation = function() {
+                const getVal = (id) => document.getElementById(id)?.value || '';
+                const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
+                
+                const valve = getVal('input-valve-select') || currentValve;
+                const scheduleType = getVal('input-schedule-type') || 'daily';
+                const scheduleTime = getVal('input-time') || '08:00';
+                const scheduleDays = getVal('input-days') || '';
+                const interval = getVal('input-interval') || '60';
+                const priority = getNum('input-priority', 5);
+                const cycles = getNum('input-cycles', 1);
+                const maxDuration = getNum('input-task-duration', 600);
+                const maxVolume = getNum('input-max-volume', 1000);
+
+                const waterVolume = getNum('input-water-volume', 200);
+                const waterDuration = getNum('input-water-duration', 30);
+
+                let scheduleDesc = '';
+                switch(scheduleType) {
+                    case 'daily': 
+                        scheduleDesc = `Ежедневно в ${scheduleTime}`; 
+                        break;
+                    case 'weekly': 
+                        scheduleDesc = `Еженедельно: дни ${scheduleDays || '—'}`; 
+                        break;
+                    case 'interval': 
+                        scheduleDesc = `Каждые ${interval} мин`; 
+                        break;
+                    case 'once': 
+                        scheduleDesc = `Однократно: ${scheduleTime}`; 
+                        break;
+                    case 'sunrise': 
+                        scheduleDesc = 'На рассвете (авто)'; 
+                        break;
+                    case 'sunset': 
+                        scheduleDesc = 'На закате (авто)'; 
+                        break;
+                    default: 
+                        scheduleDesc = scheduleType;
+                }
+                
+                let dailyConfigs = null;
+                if (scheduleType === 'weekly' && scheduleDays) {
+                    const days = scheduleDays.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
+                    dailyConfigs = {};
+                    
+                    days.forEach(dayId => {
+                        const timeInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-time`);
+                        const volInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-vol`);
+                        const durInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-dur`);
+                        
+                        if (timeInput && volInput && durInput) {
+                            dailyConfigs[dayId] = {
+                                time: timeInput.value || '08:00',
+                                volume: parseInt(volInput.value) || waterVolume,
+                                duration: parseInt(durInput.value) || waterDuration
+                            };
+                        }
+                    });
+                }
+                
+                // Создаём задачу
+                const task = {
                     type: 'TASK_SUMMARY',
                     label: `Задача для Клапана ${valve}`,
                     details: {
@@ -2024,558 +1331,941 @@ const char WATERING_HTML[] PROGMEM = R"rawliteral(
                         max_duration_sec: maxDuration,
                         max_volume_ml: maxVolume
                     }
-                }]
+                };
+                
+                if (dailyConfigs && Object.keys(dailyConfigs).length > 0) {
+                    task._dailyConfigs = dailyConfigs;
+                    task.details.schedule += ` (${Object.keys(dailyConfigs).length} дн. с индив. параметрами)`;
+                }
+                
+                db[currentValve].task.operations.push(task);
+                applyUI(currentValve);
+                saveData();
+                
+                const daysCount = dailyConfigs ? Object.keys(dailyConfigs).length : 0;
+                showNotification(`Задача добавлена${daysCount > 0 ? ` (${daysCount} дн.)` : ''}: ${waterVolume} мл / ${waterDuration} сек`);
+                console.log('Добавлена задача:', task);
             };
+
+            window.addOperation = function() {
+                const type = prompt('Тип: WATER, PAUSE, SENSOR_CHECK', 'WATER')?.toUpperCase();
+                if (!type || !['WATER','PAUSE','SENSOR_CHECK'].includes(type)) return;
+                const defaults = {
+                    WATER: { type:'WATER', duration_sec:30, volume_ml:200 },
+                    PAUSE: { type:'PAUSE', pause_duration_sec:60 },
+                    SENSOR_CHECK: { type:'SENSOR_CHECK', target_moisture_percent:65, volume_ml:150 }
+                };
+                db[currentValve].task.operations.push({ ...defaults[type] });
+                applyUI(currentValve);
+                saveData();
+            };
+
+            window.deleteOperation = function(idx) {
+                if(!confirm('Удалить задачу?')) return;
+                db[currentValve].task.operations.splice(idx, 1);
+                applyUI(currentValve);
+                saveData();
+                showNotification('Задача удалена');
+            };
+
+           // ===== ЛОГИКА ПОЛЕЙ =====
+            window.updateFormLogic = function() {
+                const type = document.getElementById('input-schedule-type')?.value;
+                if (!type) return;
+                
+                const timeGroup = document.getElementById('group-time');
+                const daysGroup = document.getElementById('group-days');
+                const intervalGroup = document.getElementById('group-interval');
+                const weeklyContainer = document.getElementById('weekly-details-container');
+                
+                const toggle = (el, show) => {
+                    if (!el) return;
+                    el.style.display = show ? 'block' : 'none';
+                    el.querySelectorAll('input')?.forEach(inp => inp.disabled = !show);
+                };
+                
+                // Скрыть всё
+                toggle(timeGroup, false);
+                toggle(daysGroup, false);
+                toggle(intervalGroup, false);
+                if (weeklyContainer) { 
+                    weeklyContainer.style.display = 'none'; 
+                    weeklyContainer.innerHTML = ''; 
+                }
+                
+                switch(type) {
+                    case 'daily':
+                    case 'once':
+                        toggle(timeGroup, true);
+                        break;
+                    case 'weekly':
+                        toggle(timeGroup, true);
+                        toggle(daysGroup, true);
+                        if (weeklyContainer) {
+                            const daysInput = document.getElementById('input-days');
+                            if (daysInput?.value.trim()) {
+                                generateWeeklyDayFields(daysInput.value);
+                            } else {
+                                weeklyContainer.style.display = 'block';
+                                weeklyContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-style:italic;">Введите дни недели выше (например: 1,3,5)</div>';
+                            }
+                        }
+                        break;
+                    case 'interval':
+                        toggle(intervalGroup, true);
+                        break;
+                    case 'sunrise':
+                    case 'sunset':
+                        showNotification('Время определяется автоматически');
+                        break;
+                }
+            };
+
+            // ===== ГЕНЕРАЦИЯ ПОЛЕЙ ДЛЯ КАЖДОГО ДНЯ (WEEKLY MODE) =====
+            function generateWeeklyDayFields(daysStr) {
+                const container = document.getElementById('weekly-details-container');
+                if (!container) return;
+                
+                const days = daysStr.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
+                if (days.length === 0) { 
+                    container.style.display = 'none'; 
+                    container.innerHTML = '';
+                    return; 
+                }
             
-            try {
-                const res = await fetch(API_BASE + '/task', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(task)
+                container.style.display = 'block';
+                
+                const WEEKDAYS = {1:'Пн',2:'Вт',3:'Ср',4:'Чт',5:'Пт',6:'Сб',7:'Вс'};
+                
+                let html = `<div style="background:rgba(33,200,95,0.1); padding:15px; border-radius:12px; margin:15px 0;">
+                    <strong style="color:var(--accent-green); display:block; margin-bottom:12px;">
+                        Индивидуальные настройки для каждого дня:
+                    </strong>
+                </div>`;
+                
+                days.forEach(dayId => {
+                    const existingConfig = db[currentValve]?.task?.weekly_days?.[dayId] || {};
+                    const defaultTime = existingConfig.time || '08:00';
+                    const defaultVolume = existingConfig.volume || 200;
+                    const defaultDuration = existingConfig.duration || 30;
+                    
+                    html += `
+                    <div class="weekly-day-row" data-day="${dayId}" style="
+                        display:grid; grid-template-columns: 70px 1fr 1fr 1fr; gap:10px;
+                        align-items:end; margin:10px 0; padding:15px; background:var(--card-bg);
+                        border-radius:12px; border:2px solid rgba(33,200,95,0.3);
+                        box-shadow:0 2px 8px rgba(0,0,0,0.08);
+                    ">
+                        <div style="font-weight:700; color:var(--accent-green); font-size:15px;">
+                            ${WEEKDAYS[dayId]}
+                        </div>
+                        <div>
+                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Время</label>
+                            <input type="time" class="wd-time" value="${defaultTime}" 
+                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
+                        </div>
+                        <div>
+                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Объём (мл)</label>
+                            <input type="number" class="wd-vol" value="${defaultVolume}" min="10" max="5000" step="10"
+                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
+                        </div>
+                        <div>
+                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Длит. (сек)</label>
+                            <input type="number" class="wd-dur" value="${defaultDuration}" min="1" max="600"
+                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
+                        </div>
+                    </div>`;
                 });
                 
-                if (res.ok) {
-                    await loadData();
-                    applyUI(currentValve);
-                    showNotification(`Задача добавлена: ${waterVolume} мл / ${waterDuration} сек`);
-                }
-            } catch (e) {
-                console.error('Ошибка добавления задачи:', e);
+                container.innerHTML = html;
+                
+                // Авто-сохранение
+                container.querySelectorAll('.wd-time, .wd-vol, .wd-dur').forEach(inp => {
+                    inp.onchange = saveWeeklyConfig;
+                    inp.oninput = debounce(() => saveWeeklyConfig(), 500);
+                });
             }
-        };
 
-        window.deleteOperation = async function(idx) {
-            if(!confirm('Удалить задачу?')) return;
-            
-            // Получаем ID задачи из БД
-            const task = db[currentValve].task;
-            if (task.id) {
-                try {
-                    await fetch(API_BASE + '/task?id=' + task.id, {method: 'DELETE'});
-                    await loadData();
-                    applyUI(currentValve);
-                    showNotification('Задача удалена');
-                } catch (e) {
-                    console.error('Ошибка удаления:', e);
+            function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn.apply(this,a), ms); }; }
+
+            // Удаление дня из weekly-расписания
+            window.removeWeeklyDay = function(dayId) {
+                const input = document.getElementById('input-days');
+                if (!input) return;
+                
+                const days = input.value.split(',')
+                    .map(d => parseInt(d.trim()))
+                    .filter(d => d !== dayId);
+                
+                input.value = days.join(',');
+                
+                // Удаляем из БД
+                if (db[currentValve]?.task?.weekly_days?.[dayId]) {
+                    delete db[currentValve].task.weekly_days[dayId];
                 }
-            }
-        };
-
-        window.updateFormLogic = function() {
-            const type = document.getElementById('input-schedule-type')?.value;
-            if (!type) return;
-            
-            const timeGroup = document.getElementById('group-time');
-            const daysGroup = document.getElementById('group-days');
-            const intervalGroup = document.getElementById('group-interval');
-            const weeklyContainer = document.getElementById('weekly-details-container');
-            
-            const toggle = (el, show) => {
-                if (!el) return;
-                el.style.display = show ? 'block' : 'none';
-                el.querySelectorAll('input')?.forEach(inp => inp.disabled = !show);
+                
+                saveData();
+                updateFormLogic(); // Перерисовать форму
+                showNotification(`День ${dayId} удалён`);
             };
-            
-            toggle(timeGroup, false);
-            toggle(daysGroup, false);
-            toggle(intervalGroup, false);
-            if (weeklyContainer) { 
-                weeklyContainer.style.display = 'none'; 
-                weeklyContainer.innerHTML = ''; 
-            }
-            
-            switch(type) {
-                case 'daily':
-                case 'once':
-                    toggle(timeGroup, true);
-                    break;
-                case 'weekly':
-                    toggle(timeGroup, true);
-                    toggle(daysGroup, true);
-                    if (weeklyContainer) {
-                        const daysInput = document.getElementById('input-days');
-                        if (daysInput?.value.trim()) {
-                            generateWeeklyDayFields(daysInput.value);
-                        } else {
-                            weeklyContainer.style.display = 'block';
-                            weeklyContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-style:italic;">Введите дни недели выше (например: 1,3,5)</div>';
-                        }
-                    }
-                    break;
-                case 'interval':
-                    toggle(intervalGroup, true);
-                    break;
-                case 'sunrise':
-                case 'sunset':
-                    showNotification('Время определяется автоматически');
-                    break;
-            }
-        };
 
-        function generateWeeklyDayFields(daysStr) {
-            const container = document.getElementById('weekly-details-container');
-            if (!container) return;
-            
-            const days = daysStr.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
-            if (days.length === 0) { 
-                container.style.display = 'none'; 
-                container.innerHTML = '';
-                return; 
-            }
-        
-            container.style.display = 'block';
-            const WEEKDAYS = {1:'Пн',2:'Вт',3:'Ср',4:'Чт',5:'Пт',6:'Сб',7:'Вс'};
-            
-            let html = `<div style="background:rgba(33,200,95,0.1); padding:15px; border-radius:12px; margin:15px 0;">
-                <strong style="color:var(--accent-green); display:block; margin-bottom:12px;">
-                    Индивидуальные настройки для каждого дня:
-                </strong>
-            </div>`;
-            
-            days.forEach(dayId => {
-                const existingConfig = db[currentValve]?.task?.weekly_days?.[dayId] || {};
-                const defaultTime = existingConfig.time || '08:00';
-                const defaultVolume = existingConfig.volume || 200;
-                const defaultDuration = existingConfig.duration || 30;
+            // Сохранение конфигурации дней в БД
+            function saveWeeklyConfig() {
+                const container = document.getElementById('weekly-details-container');
+                if (!container || !db[currentValve]) return;
                 
-                html += `
-                <div class="weekly-day-row" data-day="${dayId}" style="
-                    display:grid; grid-template-columns: 70px 1fr 1fr 1fr; gap:10px;
-                    align-items:end; margin:10px 0; padding:15px; background:var(--card-bg);
-                    border-radius:12px; border:2px solid rgba(33,200,95,0.3);
-                    box-shadow:0 2px 8px rgba(0,0,0,0.08);
-                ">
-                    <div style="font-weight:700; color:var(--accent-green); font-size:15px;">${WEEKDAYS[dayId]}</div>
-                    <div>
-                        <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Время</label>
-                        <input type="time" class="wd-time" value="${defaultTime}" style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
-                    </div>
-                    <div>
-                        <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Объём (мл)</label>
-                        <input type="number" class="wd-vol" value="${defaultVolume}" min="10" max="5000" step="10" style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
-                    </div>
-                    <div>
-                        <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Длит. (сек)</label>
-                        <input type="number" class="wd-dur" value="${defaultDuration}" min="1" max="600" style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
-                    </div>
-                </div>`;
-            });
-            
-            container.innerHTML = html;
-            
-            container.querySelectorAll('.wd-time, .wd-vol, .wd-dur').forEach(inp => {
-                inp.onchange = saveWeeklyConfig;
-                inp.oninput = debounce(() => saveWeeklyConfig(), 500);
-            });
-        }
-
-        function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn.apply(this,a), ms); }; }
-
-        function saveWeeklyConfig() {
-            const container = document.getElementById('weekly-details-container');
-            if (!container || !db[currentValve]) return;
-            
-            if (!db[currentValve].task.weekly_days) {
-                db[currentValve].task.weekly_days = {};
+                if (!db[currentValve].task.weekly_days) {
+                    db[currentValve].task.weekly_days = {};
+                }
+                
+                container.querySelectorAll('.weekly-day-row').forEach(row => {
+                    const dayId = parseInt(row.dataset.day);
+                    db[currentValve].task.weekly_days[dayId] = {
+                        time: row.querySelector('.wd-time')?.value || '08:00',
+                        volume: parseInt(row.querySelector('.wd-volume')?.value) || 200,
+                        duration: parseInt(row.querySelector('.wd-duration')?.value) || 60
+                    };
+                });
+                
+                debounceSave();
             }
-            
-            container.querySelectorAll('.weekly-day-row').forEach(row => {
-                const dayId = parseInt(row.dataset.day);
-                db[currentValve].task.weekly_days[dayId] = {
-                    time: row.querySelector('.wd-time')?.value || '08:00',
-                    volume: parseInt(row.querySelector('.wd-vol')?.value) || 200,
-                    duration: parseInt(row.querySelector('.wd-dur')?.value) || 60
+
+            // Debounce-утилита (если ещё нет в коде)
+            function debounce(func, wait) {
+                let timeout;
+                return function(...args) {
+                    clearTimeout(timeout);
+                    timeout = setTimeout(() => func.apply(this, args), wait);
                 };
-            });
-            
-            debounceSave();
-        }
+            }
 
-        async function renderJournal(filterValve = null) {
-            try {
-                const url = filterValve ? `${API_BASE}/log?valve_id=${filterValve}` : `${API_BASE}/log`;
-                const res = await fetch(url);
-                const logs = await res.json();
-                
+            // ===== ЖУРНАЛ =====
+            function renderJournal(filterValve = null) {
+                const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
                 const tbody = document.getElementById('journal-tbody');
                 const emptyMsg = document.getElementById('journal-empty');
                 if (!tbody) return;
-                
+                const filtered = filterValve ? logs.filter(l => l.valve === filterValve) : logs;
                 tbody.innerHTML = '';
-                if(logs.length === 0) { if(emptyMsg) emptyMsg.style.display = 'block'; return; }
+                if(filtered.length === 0) { if(emptyMsg) emptyMsg.style.display = 'block'; return; }
                 if(emptyMsg) emptyMsg.style.display = 'none';
-                
-                logs.forEach(log => {
+                filtered.sort((a,b)=>new Date(b.ts)-new Date(a.ts)).forEach(log => {
                     const statusClass = log.status==='completed'?'status-success':(log.status==='failed'?'status-fail':'status-pending');
                     const typeText = {schedule:'Расписание', sensor:'Датчик', manual:'Вручную'}[log.type]||log.type;
-                    tbody.innerHTML += `<tr><td>${new Date(log.ts * 1000).toLocaleString('ru-RU')}</td><td><b>Клапан ${log.valve}</b></td><td>${typeText}</td><td>${log.duration} сек</td><td>${log.volume} мл</td><td><span class="status-badge ${statusClass}">${log.status==='completed'?'Успешно':log.status==='failed'?'Провалено':'В ожидании'}</span></td></tr>`;
+                    tbody.innerHTML += `<tr><td>${new Date(log.ts).toLocaleString('ru-RU')}</td><td><b>Клапан ${log.valve}</b></td><td>${typeText}</td><td>${log.duration} сек</td><td>${log.volume} мл</td><td><span class="status-badge ${statusClass}">{{completed:'Успешно',failed:'Провалено',pending:'В ожидании'}[log.status]||'?'}</span></td></tr>`;
                 });
-            } catch (e) {
-                console.error('Ошибка загрузки журнала:', e);
             }
-        }
+            function addLogEntry(data) {
+                if(!data?.valve) return;
+                const logs = JSON.parse(localStorage.getItem(LOG_KEY)||'[]');
+                logs.push({ ts:new Date().toISOString(), valve:data.valve, type:data.type, duration:data.duration, volume:data.volume, status:data.status||'completed' });
+                localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+                renderJournal();
+            }
+            window.filterJournalByValve = function(valveId) {
+                const select = document.getElementById('journal-valve-filter');
+                const valve = valveId!==undefined ? parseInt(valveId) : (select?parseInt(select.value):null);
+                renderJournal(valve&&valve>0?valve:null);
+            };
+            window.switchTab = function(tabName) {
+                document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+                document.querySelector(`.tab[data-tab="${tabName}"]`)?.classList.add('active');
+                document.getElementById('configPanel').style.display = tabName==='config'?'block':'none';
+                document.getElementById('journalPanel').style.display = tabName==='journal'?'block':'none';
+                if(tabName==='journal') { ensureJournalFilter(); renderJournal(); }
+            };
+            function ensureJournalFilter() {
+                const panel = document.getElementById('journalPanel'); if(!panel||document.getElementById('journal-valve-filter')) return;
+                panel.insertAdjacentHTML('afterbegin', `<div style="margin:12px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;"><label style="font-size:0.9em; color:var(--text-secondary);">Фильтр:</label><select id="journal-valve-filter" onchange="filterJournalByValve(this.value)" style="padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:var(--card-bg); color:var(--text);">${[0,1,2,3,4,5,6,7,8].map(v=>`<option value="${v}">${v===0?'Все клапаны':'Клапан '+v}</option>`).join('')}</select><button onclick="filterJournalByValve(0)" style="padding:6px 12px; background:var(--accent-green); color:white; border:none; border-radius:6px; cursor:pointer;">Сброс</button></div>`);
+            }
 
-        window.switchTab = function(tabName) {
-            document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-            document.querySelector(`.tab[data-tab="${tabName}"]`)?.classList.add('active');
-            document.getElementById('configPanel').style.display = tabName==='config'?'block':'none';
-            document.getElementById('journalPanel').style.display = tabName==='journal'?'block':'none';
-            document.getElementById('manualPanel').style.display = tabName==='manual'?'block':'none';
-            if(tabName==='journal') { renderJournal(); }
-        };
+            // ===== СБОР ДАННЫХ ИЗ ФОРМЫ =====
+            function collectUI(id) {
+                const d = db[id]; if(!d) return;
+                const toggle = document.querySelector(`.valve-item[data-valve="${id}"] .valve-toggle`);
+                if(toggle) d.active = toggle.classList.contains('on')?1:0;
+                const t = d.task, s = d.sensor;
+                const getVal = (id)=>document.getElementById(id)?.value;
+                const getNum = (id,def)=>{const v=parseInt(getVal(id)); return isNaN(v)?def:v;};
+                t.schedule_type = getVal('input-schedule-type')||'daily';
+                t.priority = getNum('input-priority',5); t.cycle_repeat = getNum('input-cycles',1);
+                t.max_duration_sec = getNum('input-task-duration',600); t.max_volume_ml = getNum('input-max-volume',1000);
+                const isDisabled = (id)=>document.getElementById(id)?.disabled;
+                t.schedule_time = isDisabled('input-time')?null:getVal('input-time');
+                t.schedule_days = isDisabled('input-days')?'':getVal('input-days');
+                t.schedule_interval_min = isDisabled('input-interval')?0:getNum('input-interval',0);
+                // Операции уже сохранены в db, не перезаписываем их из UI
+                const sensorToggle = document.getElementById('input-sensor-active');
+                s.active = sensorToggle?.classList.contains('on')?1:0;
+                s.check_interval_min = getNum('input-sensor-interval',30);
+                s.target_moisture_percent = getNum('input-target-moisture',65);
+                s.max_watering_duration_sec = getNum('input-sensor-duration',180);
+                s.min_pause_hours = getNum('input-min-pause',2);
+                s.last_moisture_percent = getNum('input-last-moisture',0);
+                if (db[id]?.task?.schedule_type === 'weekly') {
+                    const container = document.getElementById('weekly-details-container');
+                    if (container && db[id]?.task) {
+                        if (!db[id].task.weekly_days) db[id].task.weekly_days = {};
+                        container.querySelectorAll('.weekly-day-row').forEach(row => {
+                            const dayId = parseInt(row.dataset.day);
+                            db[id].task.weekly_days[dayId] = {
+                                time: row.querySelector('.wd-time')?.value || '08:00',
+                                volume: parseInt(row.querySelector('.wd-volume')?.value) || 200,
+                                duration: parseInt(row.querySelector('.wd-duration')?.value) || 60
+                            };
+                        });
+                    }
+                }
+            }
 
-        function collectUI(id) {
-            const d = db[id]; if(!d) return;
-            const toggle = document.querySelector(`.valve-item[data-valve="${id}"] .valve-toggle`);
-            if(toggle) d.active = toggle.classList.contains('on')?1:0;
-            const t = d.task, s = d.sensor;
-            const getVal = (id)=>document.getElementById(id)?.value;
-            const getNum = (id,def)=>{const v=parseInt(getVal(id)); return isNaN(v)?def:v;};
-            t.schedule_type = getVal('input-schedule-type')||'daily';
-            t.priority = getNum('input-priority',5); t.cycle_repeat = getNum('input-cycles',1);
-            t.max_duration_sec = getNum('input-task-duration',600); t.max_volume_ml = getNum('input-max-volume',1000);
-            const isDisabled = (id)=>document.getElementById(id)?.disabled;
-            t.schedule_time = isDisabled('input-time')?null:getVal('input-time');
-            t.schedule_days = isDisabled('input-days')?'':getVal('input-days');
-            t.schedule_interval_min = isDisabled('input-interval')?0:getNum('input-interval',0);
-            const sensorToggle = document.getElementById('input-sensor-active');
-            s.active = sensorToggle?.classList.contains('on')?1:0;
-            s.check_interval_min = getNum('input-sensor-interval',30);
-            s.target_moisture_percent = getNum('input-target-moisture',65);
-            s.max_watering_duration_sec = getNum('input-sensor-duration',180);
-            s.min_pause_hours = getNum('input-min-pause',2);
-            s.last_moisture_percent = getNum('input-last-moisture',0);
-        }
+            // ===== СОБЫТИЯ =====
+            function setupListeners() {
+                const themeBtn = document.getElementById('themeSwitcher'); if(themeBtn) themeBtn.onclick = toggleTheme;
+                const sched = document.getElementById('input-schedule-type'); if(sched) sched.onchange = ()=>{updateFormLogic(); debounceSave();};
+                document.querySelectorAll('.tab').forEach(tab=>tab.onclick=function(){switchTab(this.dataset.tab);});
+                const sensTog = document.getElementById('input-sensor-active'); if(sensTog) sensTog.onclick=function(){this.classList.toggle('on'); debounceSave();};
+                const valveSel = document.getElementById('input-valve-select'); if(valveSel) valveSel.onchange=function(){switchValve(+this.value);};
+                document.querySelectorAll('#configPanel input,#configPanel select,#configPanel textarea').forEach(el=>{el.onchange=debounceSave; el.oninput=debounceSave;});
+                const addTaskBtn = findBtn('Добавить задачу'); if(addTaskBtn) addTaskBtn.onclick=(e)=>{e.preventDefault(); addTaskOperation();};
+                const addOpBtn = findBtn('Добавить операцию'); if(addOpBtn) addOpBtn.onclick=(e)=>{e.preventDefault(); addOperation();};
+                const saveBtn = findBtn('Сохранить все'); if(saveBtn) saveBtn.onclick=(e)=>{e.preventDefault(); saveAllData();};
+                const applyBtn = findBtn('Применить ко всем'); if(applyBtn) applyBtn.onclick=(e)=>{e.preventDefault(); applyToAll();};
+                const schedType = document.getElementById('input-schedule-type');
+                if (schedType) {
+                    schedType.onchange = function() {
+                        updateFormLogic();
+                        debounceSave();
+                    };
+                }
+                setTimeout(updateFormLogic, 100);
+            }
+            function findBtn(text){return Array.from(document.querySelectorAll('button,input[type="button"],.btn')).find(b=>b.textContent?.trim().includes(text)||b.value?.includes(text));}
+            function makeAllButtonsClickable(){document.querySelectorAll('button,input[type="button"],input[type="submit"],a[role="button"],.btn,.valve-toggle').forEach(btn=>{if(btn.onclick||btn.href)return; btn.style.cursor='pointer'; btn.addEventListener('click',e=>{const txt=btn.textContent?.trim()||btn.value||''; if(['Добавить задачу','Добавить операцию','Сохранить все','Применить ко всем'].some(t=>txt.includes(t)))return; console.log('Клик:',txt);});});}
+            function showNotification(msg){const ex=document.getElementById('gs-notify'); if(ex)ex.remove(); const n=document.createElement('div'); n.id='gs-notify'; n.style.cssText='position:fixed;top:20px;right:20px;background:var(--accent-green,#28a745);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);font-family:system-ui,sans-serif;'; n.textContent=msg; document.body.appendChild(n); setTimeout(()=>{n.style.opacity='0'; n.style.transition='opacity .3s'; setTimeout(()=>n.remove(),300);},2500);}
+            window.loadUserToHeader=function(){const d=JSON.parse(localStorage.getItem('userData')); if(!d)return; const ut=document.querySelector('.user-pill .user-text'); if(ut)ut.textContent=d.username; const ad=document.querySelector('.user-pill .avatar-dark'), al=document.querySelector('.user-pill .avatar-light'); if(ad)ad.src=d.avatar; if(al)al.src=d.avatar;};
+            window.addEventListener('beforeunload',()=>{stopScheduleSimulation(); collectUI(currentValve); saveData();});
+            document.addEventListener('DOMContentLoaded',()=>{init(); loadUserToHeader();});
+        })();
 
-        function setupListeners() {
-            const sched = document.getElementById('input-schedule-type'); if(sched) sched.onchange = ()=>{updateFormLogic(); debounceSave();};
-            document.querySelectorAll('.tab').forEach(tab=>tab.onclick=function(){switchTab(this.dataset.tab);});
-            const sensTog = document.getElementById('input-sensor-active'); if(sensTog) sensTog.onclick=function(){this.classList.toggle('on'); debounceSave();};
-            const valveSel = document.getElementById('input-valve-select'); if(valveSel) valveSel.onchange=function(){switchValve(+this.value);};
-            document.querySelectorAll('#configPanel input,#configPanel select,#configPanel textarea').forEach(el=>{el.onchange=debounceSave; el.oninput=debounceSave;});
-            setTimeout(updateFormLogic, 100);
-        }
+        (function() {
+            const STORAGE_PREFIX = 'valve_cfg_';
+            let currentValveNum = null;
+            let currentEditor = null;
 
-        function showNotification(msg){
-            const ex=document.getElementById('gs-notify'); if(ex)ex.remove(); 
-            const n=document.createElement('div'); n.id='gs-notify'; 
-            n.style.cssText='position:fixed;top:20px;right:20px;background:var(--accent-green,#28a745);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);font-family:system-ui,sans-serif;'; 
-            n.textContent=msg; document.body.appendChild(n); 
-            setTimeout(()=>{n.style.opacity='0'; n.style.transition='opacity .3s'; setTimeout(()=>n.remove(),300);},2500);
-        }
+            const getVal = (v, p) => localStorage.getItem(`${STORAGE_PREFIX}${v}_${p}`) || '';
+            const setVal = (v, p, val) => localStorage.setItem(`${STORAGE_PREFIX}${v}_${p}`, val);
 
-        // ===== РУЧНОЕ УПРАВЛЕНИЕ =====
-        let manualState = { isActive: false, startTime: null, valveId: null, timerId: null, flowRate: 8.33 };
-        
-        function fmt(sec) {
-            const m = Math.floor(sec/60).toString().padStart(2,'0');
-            const s = (sec%60).toString().padStart(2,'0');
-            return `${m}:${s}`;
-        }
+            // Обновление отображения на карточке клапана
+            function updateValveCardDisplay(valveNum) {
+                const valveItem = document.querySelector(`.valve-item[data-valve="${valveNum}"]`);
+                if (!valveItem) return;
+                
+                const maxDur = getVal(valveNum, 'max_duration');
+                const maxVol = getVal(valveNum, 'max_volume');
+                
+                const infoElements = valveItem.querySelectorAll('.valve-info');
+                infoElements.forEach(el => {
+                    const text = el.textContent.trim();
+                    if (text.startsWith('Макс:')) {
+                        el.textContent = `Макс: ${maxDur || '—'} сек`;
+                    } else if (text.startsWith('Лимит:')) {
+                        const volText = maxVol ? `${maxVol} мл` : '—';
+                        el.textContent = `Лимит: ${volText}`;
+                    }
+                });
+            }
 
-        window.startWatering = async function() {
-            if (manualState.isActive) return;
-            const sel = document.getElementById('manual-valve-select');
-            if (!sel) return;
+            // Добавление кнопки редактирования в карточку клапана
+            function injectEditButton(valveNum) {
+                const valveItem = document.querySelector(`.valve-item[data-valve="${valveNum}"]`);
+                if (!valveItem) return false;
+                
+                if (valveItem.querySelector('.edit-valve-btn')) return true;
+                
+                valveItem.style.position = 'relative';
+                
+                const btn = document.createElement('button');
+                btn.className = 'edit-valve-btn';
+                btn.type = 'button';
+                btn.innerHTML = '✏️';
+                btn.title = `Настроить параметры клапана ${valveNum}`;
+                btn.setAttribute('aria-label', `Редактировать клапан ${valveNum}`);
+                btn.dataset.valve = valveNum;
+                btn.style.cssText = `
+                    position: absolute;
+                    bottom: 12px;
+                    right: 12px;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 50%;
+                    border: none;
+                    background: rgba(33, 200, 95, 0.85);
+                    color: white;
+                    font-size: 16px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    opacity: 0;
+                    transition: all 0.25s ease;
+                    z-index: 15;
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                    padding: 0;
+                    line-height: 1;
+                `;
+                
+                valveItem.addEventListener('mouseenter', () => {
+                    btn.style.opacity = '1';
+                });
+                valveItem.addEventListener('mouseleave', () => {
+                    if (!currentEditor || currentValveNum !== valveNum) {
+                        btn.style.opacity = '0';
+                    }
+                });
+                
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    openEditor(valveNum, btn);
+                });
+                
+                valveItem.appendChild(btn);
+                return true;
+            }
+
+            // Открытие редактора
+            function openEditor(valveNum, triggerBtn) {
+                closeAllEditors();
+                currentValveNum = valveNum;
+                
+                const backdrop = document.createElement('div');
+                backdrop.className = 'valve-editor-backdrop';
+                backdrop.style.cssText = `
+                    position: fixed;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    background-color: rgba(15, 24, 43, 0.6);
+                    backdrop-filter: blur(8px);
+                    -webkit-backdrop-filter: blur(8px);
+                    z-index: 2147483639;
+                `;
+                document.body.appendChild(backdrop);
+
+                const editor = document.createElement('div');
+                editor.className = 'valve-editor-mini';
+                editor.style.cssText = `
+                    position: fixed;
+                    background: var(--card-bg, #ffffff);
+                    padding: 24px 28px;
+                    border-radius: 32px;
+                    width: 90%;
+                    max-width: 320px;
+                    box-shadow: 0 0 30px var(--glow-soft, rgba(33, 200, 95, 0.3));
+                    animation: modalFadeIn 0.3s ease;
+                    z-index: 2147483640;
+                    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                    color: var(--text-main, #000);
+                `;
+                
+                const rect = triggerBtn.getBoundingClientRect();
+                const editorWidth = 320;
+                const editorHeight = 280;
+                let left = rect.right - editorWidth;
+                let top = rect.top - editorHeight - 10;
+                
+                if (left < 10) left = 10;
+                if (top < 10) top = rect.bottom + 10;
+                
+                editor.style.left = `${left}px`;
+                editor.style.top = `${top}px`;
+                
+                editor.innerHTML = `
+                    <div class="valve-editor-title" style="
+                        color: var(--accent-green, #21C85F);
+                        font-size: 18px;
+                        font-weight: 600;
+                        margin-bottom: 18px;
+                        text-align: center;
+                    ">Клапан ${valveNum}</div>
+                    <div class="valve-editor-field" style="margin-bottom: 14px;">
+                        <label style="
+                            display: block;
+                            font-size: 13px;
+                            color: var(--text-main, #333);
+                            opacity: 0.85;
+                            margin-bottom: 6px;
+                        ">Макс. длительность (сек)</label>
+                        <input type="number" id="ved-max-dur" min="0" placeholder="300" 
+                               value="${getVal(valveNum, 'max_duration')}" style="
+                            width: 100%;
+                            padding: 12px 16px;
+                            border-radius: 24px;
+                            border: 2px solid var(--accent-green, #21C85F);
+                            background: transparent;
+                            font-size: 14px;
+                            color: var(--accent-green, #21C85F);
+                            box-sizing: border-box;
+                            outline: none;
+                        ">
+                    </div>
+                    <div class="valve-editor-field" style="margin-bottom: 14px;">
+                        <label style="
+                            display: block;
+                            font-size: 13px;
+                            color: var(--text-main, #333);
+                            opacity: 0.85;
+                            margin-bottom: 6px;
+                        ">Лимит объёма (мл)</label>
+                        <input type="number" id="ved-max-vol" min="0" placeholder="5000" 
+                               value="${getVal(valveNum, 'max_volume')}" style="
+                            width: 100%;
+                            padding: 12px 16px;
+                            border-radius: 24px;
+                            border: 2px solid var(--accent-green, #21C85F);
+                            background: transparent;
+                            font-size: 14px;
+                            color: var(--accent-green, #21C85F);
+                            box-sizing: border-box;
+                            outline: none;
+                        ">
+                    </div>
+                    <div class="valve-editor-actions" style="
+                        display: flex;
+                        gap: 10px;
+                        margin-top: 20px;
+                    ">
+                        <button class="valve-cancel-btn" style="
+                            flex: 1;
+                            padding: 12px;
+                            border-radius: 24px;
+                            border: none;
+                            font-size: 14px;
+                            font-weight: 600;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                            background: rgba(255, 255, 255, 0.15);
+                            color: var(--text-main, #333);
+                            border: 1px solid rgba(255, 255, 255, 0.2);
+                        ">Отмена</button>
+                        <button class="valve-save-btn" style="
+                            flex: 1;
+                            padding: 12px;
+                            border-radius: 24px;
+                            border: none;
+                            font-size: 14px;
+                            font-weight: 600;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                            background: var(--accent-green, #21C85F);
+                            color: #ffffff;
+                        ">Сохранить</button>
+                    </div>
+                `;
+                
+                document.body.appendChild(editor);
+                currentEditor = { editor, backdrop, triggerBtn };
+
+                setTimeout(() => editor.querySelector('input').focus(), 100);
+
+                editor.querySelector('.valve-save-btn').addEventListener('click', () => {
+                    const dur = document.getElementById('ved-max-dur').value.trim();
+                    const vol = document.getElementById('ved-max-vol').value.trim();
+                    setVal(valveNum, 'max_duration', dur);
+                    setVal(valveNum, 'max_volume', vol);
+                    
+                    updateValveCardDisplay(valveNum);
+                    
+                    triggerBtn.style.background = '#4CAF50';
+                    setTimeout(() => triggerBtn.style.background = '', 300);
+                    
+                    closeEditor();
+                });
+
+                editor.querySelector('.valve-cancel-btn').addEventListener('click', closeEditor);
+                backdrop.addEventListener('click', closeEditor);
+                
+                const onEsc = (e) => { if (e.key === 'Escape') closeEditor(); };
+                document.addEventListener('keydown', onEsc, { once: true });
+            }
+
+            function closeEditor() {
+                if (currentEditor) {
+                    currentEditor.editor?.remove();
+                    currentEditor.backdrop?.remove();
+                    currentEditor = null;
+                }
+                currentValveNum = null;
+            }
+
+            function closeAllEditors() {
+                document.querySelectorAll('.valve-editor-mini, .valve-editor-backdrop').forEach(el => el.remove());
+                currentEditor = null;
+                currentValveNum = null;
+            }
+
+            // Инициализация кнопок для всех клапанов
+            function initValveEditButtons() {
+                console.log('Добавляю кнопки редактирования для клапанов...');
+                let added = 0;
+                for (let i = 1; i <= 8; i++) {
+                    if (injectEditButton(i)) {
+                        added++;
+                        updateValveCardDisplay(i);
+                    }
+                }
+                console.log(`обавлено кнопок: ${added}/8`);
+            }
+
+            // Делаем функцию глобально доступной
+            window.initValveEditButtons = initValveEditButtons;
+
+            // Запуск после загрузки DOM
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initValveEditButtons);
+            } else {
+                setTimeout(initValveEditButtons, 500);
+            }
             
-            manualState.valveId = parseInt(sel.value);
-            manualState.startTime = Date.now();
-            manualState.isActive = true;
+            setTimeout(initValveEditButtons, 1500);
+            setTimeout(initValveEditButtons, 3000);
+        })();
+
+        // ===== РУЧНОЕ УПРАВЛЕНИЕ КЛАПАНОМ — ВСТРОЕННАЯ ВЕРСИЯ =====
+        (function() {
+            'use strict';
             
-            const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
-            if (toggle) toggle.classList.add('on');
+            // ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
+            const DB_KEY = 'greenShelfWateringDB';
+            const LOG_KEY = 'greenShelfWateringLog';
+            let db = {};
+            let manualState = { isActive: false, startTime: null, valveId: null, timerId: null, flowRate: 8.33 };
             
-            manualState.timerId = setInterval(() => {
-                const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
+            // ===== ЗАГРУЗКА ДАННЫХ =====
+            function loadData() {
+                const saved = localStorage.getItem(DB_KEY);
+                const DEFAULT_DB = {
+                    1: { active: 1, task: { operations: [] } },
+                    2: { active: 0, task: { operations: [] } },
+                    3: { active: 1, task: { operations: [] } },
+                    4: { active: 0, task: { operations: [] } },
+                    5: { active: 1, task: { operations: [] } },
+                    6: { active: 0, task: { operations: [] } },
+                    7: { active: 0, task: { operations: [] } },
+                    8: { active: 1, task: { operations: [] } }
+                };
+                db = saved ? JSON.parse(saved) : DEFAULT_DB;
+            }
+            function saveData() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+            
+            // ===== ФОРМАТИРОВАНИЕ ВРЕМЕНИ =====
+            function fmt(sec) {
+                const m = Math.floor(sec/60).toString().padStart(2,'0');
+                const s = (sec%60).toString().padStart(2,'0');
+                return `${m}:${s}`;
+            }
+            
+            // ===== ОБНОВЛЕНИЕ ПАНЕЛИ =====
+            function updatePanel() {
+                const st = document.getElementById('manual-status');
                 const tm = document.getElementById('manual-timer');
                 const vl = document.getElementById('manual-volume');
-                if (tm) tm.textContent = fmt(elapsed);
-                if (vl) vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
-            }, 1000);
-            
-            document.getElementById('manual-status').textContent = 'Работает';
-            document.getElementById('manual-status').style.color = '#22c55e';
-            document.getElementById('btn-manual-on').disabled = true;
-            document.getElementById('btn-manual-off').disabled = false;
-        };
-
-        window.stopWatering = async function() {
-            if (!manualState.isActive) return;
-            
-            clearInterval(manualState.timerId);
-            const duration = Math.floor((Date.now() - manualState.startTime) / 1000);
-            const volume = Math.round(duration * manualState.flowRate);
-            
-            manualState.isActive = false;
-            
-            const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
-            if (toggle) toggle.classList.remove('on');
-            
-            // Отправляем на сервер
-            try {
-                await fetch(API_BASE + '/manual', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        valve_id: manualState.valveId,
-                        duration: duration,
-                        volume: volume
-                    })
-                });
-            } catch (e) {
-                console.error('Ошибка сохранения ручного полива:', e);
+                const on = document.getElementById('btn-manual-on');
+                const off = document.getElementById('btn-manual-off');
+                if (!st || !tm || !vl || !on || !off) return;
+                
+                if (manualState.isActive) {
+                    const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
+                    tm.textContent = fmt(elapsed);
+                    vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
+                    st.textContent = 'Работает'; st.style.color = '#22c55e';
+                    on.disabled = true; off.disabled = false;
+                    on.style.opacity = '0.5'; off.style.opacity = '1';
+                } else {
+                    tm.textContent = '00:00'; vl.textContent = '—';
+                    st.textContent = 'Ожидание'; st.style.color = 'var(--accent-green)';
+                    on.disabled = false; off.disabled = true;
+                    on.style.opacity = '1'; off.style.opacity = '0.5';
+                }
             }
             
-            document.getElementById('manual-status').textContent = 'Ожидание';
-            document.getElementById('manual-status').style.color = 'var(--accent-green)';
-            document.getElementById('manual-timer').textContent = '00:00';
-            document.getElementById('manual-volume').textContent = '—';
-            document.getElementById('btn-manual-on').disabled = false;
-            document.getElementById('btn-manual-off').disabled = true;
+            // ===== ВКЛЮЧИТЬ =====
+            window.startWatering = function() {
+                if (manualState.isActive) return;
+                const sel = document.getElementById('manual-valve-select');
+                if (!sel) return;
+                
+                manualState.valveId = parseInt(sel.value);
+                manualState.startTime = Date.now();
+                manualState.isActive = true;
+                
+                if (db[manualState.valveId]) { db[manualState.valveId].active = 1; saveData(); }
+                
+                // МГНОВЕННОЕ обновление переключателя в сайдбаре
+                const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
+                if (toggle) toggle.classList.add('on');
+                
+                // Таймер обновляет UI каждый тик
+                manualState.timerId = setInterval(() => {
+                    const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
+                    const tm = document.getElementById('manual-timer');
+                    const vl = document.getElementById('manual-volume');
+                    if (tm) tm.textContent = fmt(elapsed);
+                    if (vl) vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
+                }, 1000);
+                
+                updatePanel();
+                console.log('▶ ВКЛЮЧЕН клапан', manualState.valveId);
+            };
             
-            await renderJournal();
-            alert(`Клапан ${manualState.valveId}: ${fmt(duration)}, ~${volume} мл — записано в журнал`);
-        };
-
-        document.addEventListener('DOMContentLoaded', () => {
-            init();
-        });
+            // ===== ВЫКЛЮЧИТЬ + ЖУРНАЛ =====
+            window.stopWatering = function() {
+                if (!manualState.isActive) return;
+                
+                clearInterval(manualState.timerId);
+                const duration = Math.floor((Date.now() - manualState.startTime) / 1000);
+                const volume = Math.round(duration * manualState.flowRate);
+                
+                manualState.isActive = false;
+                manualState.timerId = null;
+                
+                if (db[manualState.valveId]) { db[manualState.valveId].active = 0; saveData(); }
+                
+                const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
+                if (toggle) toggle.classList.remove('on');
+                
+                // Запись в журнал
+                const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+                logs.push({
+                    ts: new Date().toISOString(),
+                    valve: manualState.valveId,
+                    type: 'manual',
+                    duration: duration,
+                    volume: volume,
+                    status: 'completed'
+                });
+                localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+                
+                // Обновление журнала на странице
+                const tbody = document.getElementById('journal-tbody');
+                const empty = document.getElementById('journal-empty');
+                if (tbody) {
+                    if (empty) empty.style.display = 'none';
+                    const row = `<tr><td>${new Date().toLocaleString('ru-RU')}</td><td>Клапан ${manualState.valveId}</td><td>Вручную</td><td>${fmt(duration)}</td><td>${volume} мл</td><td><span class="status-badge status-success">Успешно</span></td></tr>`;
+                    tbody.insertAdjacentHTML('afterbegin', row);
+                }
+                
+                updatePanel();
+                alert(`Клапан ${manualState.valveId}: ${fmt(duration)}, ~${volume} мл — записано в журнал`);
+                console.log('■ ВЫКЛЮЧЕН клапан', manualState.valveId);
+            };
+            
+            // ===== ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК =====
+            window.switchTab = function(tabName) {
+                // Скрыть все панели
+                document.getElementById('configPanel').style.display = 'none';
+                document.getElementById('journalPanel').style.display = 'none';
+                document.getElementById('manualPanel').style.display = 'none';
+                
+                // Убрать active у всех табов
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                
+                // Показать нужное
+                if (tabName === 'manual') {
+                    document.getElementById('manualPanel').style.display = 'block';
+                    document.querySelector('.tab[data-tab="manual"]').classList.add('active');
+                    updatePanel();
+                } else if (tabName === 'config') {
+                    document.getElementById('configPanel').style.display = 'block';
+                    document.querySelector('.tab[data-tab="config"]').classList.add('active');
+                } else if (tabName === 'journal') {
+                    document.getElementById('journalPanel').style.display = 'block';
+                    document.querySelector('.tab[data-tab="journal"]').classList.add('active');
+                }
+            };
+            
+            // ===== ИНИЦИАЛИЗАЦИЯ ПОСЛЕ ЗАГРУЗКИ =====
+            document.addEventListener('DOMContentLoaded', function() {
+                loadData();
+                
+                // Прямая привязка кнопок через onclick в HTML уже работает, но добавим для надёжности:
+                const btnOn = document.getElementById('btn-manual-on');
+                const btnOff = document.getElementById('btn-manual-off');
+                if (btnOn) btnOn.onclick = function(e) { e.preventDefault(); window.startWatering(); };
+                if (btnOff) btnOff.onclick = function(e) { e.preventDefault(); window.stopWatering(); };
+                
+                // Привязка табов
+                document.querySelectorAll('.tab').forEach(tab => {
+                    tab.onclick = function(e) {
+                        e.preventDefault();
+                        window.switchTab(this.dataset.tab);
+                    };
+                });
+                
+                // Показать первую панель по умолчанию
+                window.switchTab('config');
+                
+                console.log('Модуль полива инициализирован');
+            });
+        })();
     </script>
 </body>
 </html>
 )rawliteral";
+// ===================== ИНИЦИАЛИЗАЦИЯ БД =====================
+void initDatabase() {
+  if (sqlite3_open("/sd/watering.db", &db) != SQLITE_OK) {
+    Serial.println("❌ Ошибка открытия БД");
+    return;
+  }
 
-// ==================== ВЕБ-ОБРАБОТЧИКИ ====================
-void handleWatering() {
-  server.send(200, "text/html", WATERING_HTML);
-}
-// Универсальный обработчик статических файлов с SD-карты
-void handleStaticImage() {
-  String uri = server.uri();
-  int qMark = uri.indexOf('?');
-  if (qMark > 0) uri = uri.substring(0, qMark);
-  
-  Serial.printf("📁 Static request: %s\n", uri.c_str());
-  
-  // URL-decode для кириллицы
-  String path = uri;
-  path.replace("%20", " ");
-  
-  if (!path.startsWith("/")) path = "/" + path;
-  
-  // Защита от path traversal
-  if (path.indexOf("..") >= 0) {
-    server.send(403, "text/plain", "Forbidden");
-    return;
-  }
-  
-  // Проверяем существование файла
-  if (!SD.exists(path)) {
-    Serial.printf("❌ File not found: %s\n", path.c_str());
-    server.send(404, "text/plain", "File not found: " + path);
-    return;
-  }
-  
-  // Определяем MIME тип
-  String contentType = "application/octet-stream";
-  if (path.endsWith(".png"))       contentType = "image/png";
-  else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) contentType = "image/jpeg";
-  else if (path.endsWith(".gif"))  contentType = "image/gif";
-  else if (path.endsWith(".svg"))  contentType = "image/svg+xml";
-  else if (path.endsWith(".css"))  contentType = "text/css";
-  else if (path.endsWith(".js"))   contentType = "application/javascript";
-  else if (path.endsWith(".html")) contentType = "text/html";
-  else if (path.endsWith(".json")) contentType = "application/json";
-  else if (path.endsWith(".ico"))  contentType = "image/x-icon";
-  
-  Serial.printf("✅ Sending: %s [%s]\n", path.c_str(), contentType.c_str());
-  
-  // Кэширование для изображений (1 час)
-  if (path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg")) {
-    server.sendHeader("Cache-Control", "public, max-age=3600");
-  }
-  
-  server.sendHeader("Content-Type", contentType);
-  File file = SD.open(path, FILE_READ);
-  if (file) {
-    server.streamFile(file, contentType);
-    file.close();
+  const char* schema = R"SQL(
+    PRAGMA foreign_keys = ON;
+
+    CREATE TABLE IF NOT EXISTS valves (
+      id INTEGER PRIMARY KEY, pin_number INTEGER, max_duration_sec INTEGER DEFAULT 300,
+      daily_limit_ml REAL, active INTEGER DEFAULT 1, moisture_mode INTEGER DEFAULT 0, created_ts INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS watering_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, suspended INTEGER DEFAULT 0, active INTEGER DEFAULT 1,
+      valve_id INTEGER, schedule_type TEXT NOT NULL, schedule_time TEXT, schedule_interval_min INTEGER,
+      schedule_days TEXT, last_executed_ts INTEGER, next_execution_ts INTEGER,
+      priority INTEGER DEFAULT 5, cycle_repeat INTEGER DEFAULT 1,
+      max_duration_sec INTEGER, max_volume_ml REAL, created_ts INTEGER, updated_ts INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS watering_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, valve_id INTEGER,
+      duration_sec INTEGER, volume_ml REAL, status TEXT DEFAULT 'completed',
+      error_text TEXT, triggered_by TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS moisture_sensors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      valve_id INTEGER NOT NULL,
+      active INTEGER DEFAULT 1,
+      check_interval_min INTEGER DEFAULT 30,
+      target_moisture_percent REAL DEFAULT 40.0,
+      max_watering_duration_sec INTEGER DEFAULT 180,
+      min_pause_hours INTEGER DEFAULT 2,
+      last_moisture_percent REAL DEFAULT 0,
+      last_check_ts INTEGER,
+      last_watering_ts INTEGER,
+      sensor_ok INTEGER DEFAULT 1,
+      failed_checks INTEGER DEFAULT 0,
+      created_ts INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS manual_watering (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      valve_id INTEGER NOT NULL,
+      start_ts INTEGER NOT NULL,
+      duration_sec INTEGER NOT NULL,
+      volume_ml REAL,
+      finished_ts INTEGER,
+      status TEXT DEFAULT 'completed',
+      error_text TEXT,
+      created_ts INTEGER
+    );
+  )SQL";
+
+  char *err = nullptr;
+  sqlite3_exec(db, schema, nullptr, nullptr, &err);
+  if (err) {
+    Serial.printf("SQL Error: %s\n", err);
+    sqlite3_free(err);
   } else {
-    server.send(500, "text/plain", "Failed to open file");
+    Serial.println("✅ БД готова");
   }
 }
 
-void handleGetAllValves() {
-  String data = getAllValvesData();
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.send(200, "application/json", data);
+// ===================== Минимальные функции =====================
+bool startWatering(int valve, unsigned long durationSec) {
+  if (valve < 0 || valve >= NUM_VALVES || valveStates[valve]) return false;
+  mosfet.digitalWrite(valve, HIGH);
+  valveStates[valve] = true;
+  valveStartTime[valve] = millis();
+  valveDuration[valve] = durationSec * 1000UL;
+  Serial.printf("Полив клапана %d\n", valve+1);
+  return true;
 }
 
-void handleNotFound() {
-  String uri = server.uri();
-  int qMark = uri.indexOf('?');
-  if (qMark > 0) uri = uri.substring(0, qMark);
-  
-  Serial.printf("🔍 404 handler: %s\n", uri.c_str());
-  
-  // === Проверяем: может это статический файл? ===
-  bool isStaticFile = false;
-  
-  // 1. По пути
-  if (uri.startsWith("/image/") || uri.startsWith("/avatar/") || 
-      uri.startsWith("/plant/") || uri.startsWith("/www/")) {
-    isStaticFile = true;
+void updateWateringTimers() {
+  unsigned long now = millis();
+  for (int i = 0; i < NUM_VALVES; i++) {
+    if (valveStates[i] && (now - valveStartTime[i] >= valveDuration[i])) {
+      mosfet.digitalWrite(i, LOW);
+      valveStates[i] = false;
+    }
   }
-  
-  // 2. По расширению (включая CSS и JS!)
-  if (uri.endsWith(".png") || uri.endsWith(".jpg") || uri.endsWith(".jpeg") ||
-      uri.endsWith(".gif") || uri.endsWith(".svg") || uri.endsWith(".css") ||
-      uri.endsWith(".js") || uri.endsWith(".ico") || uri.endsWith(".html") ||
-      uri.endsWith(".json") || uri.endsWith(".webp") || uri.endsWith(".bmp")) {
-    isStaticFile = true;
-  }
-  
-  // 3. Файлы из HTML страницы полива (в корне SD)
-  if (uri == "/myplant-style.css" || 
-      uri.endsWith(".png") || uri.endsWith(".jpg")) {
-    isStaticFile = true;
-  }
-  
-  // === Если это статический файл — отдаём его ===
-  if (isStaticFile) {
-    handleStaticImage();
-    return;
-  }
-  
-  // === Иначе — 404 ===
-  Serial.printf("❌ 404 Not Found: %s\n", uri.c_str());
-  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>404</title>";
-  html += "<style>body{font-family:Arial;text-align:center;padding:50px;background:#0F182B;color:#21C85F;}";
-  html += "h1{font-size:48px;}p{font-size:18px;}a{color:#21C85F;}</style>";
-  html += "</head><body>";
-  html += "<h1>404</h1>";
-  html += "<p>Страница не найдена</p>";
-  html += "<p>Запрошенный URL: " + uri + "</p>";
-  html += "<p><a href='/watering'>Перейти к модулю полива</a></p>";
-  html += "</body></html>";
-  server.send(404, "text/html", html);
 }
 
-// ==================== SETUP ====================
+void checkMoistureSensors() {
+  if (millis() - lastMoistureCheck < MOISTURE_INTERVAL) return;
+  lastMoistureCheck = millis();
+  // Простая проверка
+  for (int i = 0; i < NUM_VALVES; i++) {
+    int raw = analogRead(MOISTURE_PINS[i]);
+    int moisture = map(raw, 0, 4095, 0, 100);
+    if (moisture < DRY_THRESHOLD) startWatering(i, 120);
+  }
+}
+
+void checkSchedule() {
+  if (millis() - lastScheduleCheck < 60000UL) return;
+  lastScheduleCheck = millis();
+  Serial.println("Проверка расписания...");
+}
+
+// ===================== API =====================
+void handleValve() {
+  if (server.hasArg("id") && server.hasArg("state")) {
+    int id = server.arg("id").toInt();
+    int state = server.arg("state").toInt();
+    if (id >= 0 && id < NUM_VALVES) {
+      if (state) startWatering(id, 180);
+      else {
+        mosfet.digitalWrite(id, LOW);
+        valveStates[id] = false;
+      }
+      server.send(200, "application/json", "{\"ok\":true}");
+      return;
+    }
+  }
+  server.send(400, "application/json", "{\"ok\":false}");
+}
+
+// ===================== SETUP & LOOP =====================
 void setup() {
-  Serial.begin(SERIAL_BAUD);
-  delay(800);
-  Serial.println("\nESP32-C3 Watering Module Starting...");
-  
-  WiFi.setHostname(MDNS_NAME);
-  WiFi.begin(STA_SSID, STA_PASS);
-  
-  Serial.print("Connecting to WiFi");
-  int attempts = 15;
-  while (attempts-- && WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWiFi failed, starting AP mode");
-    WiFi.mode(WIFI_AP);
-    WiFi.softAPConfig(ap_ip, ap_ip, ap_mask);
-    WiFi.softAP(AP_SSID, AP_PASS);
-    Serial.println("AP: " + String(AP_SSID) + " | Pass: " + String(AP_PASS));
-  } else {
-    Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
-  }
-  
-  if (MDNS.begin(MDNS_NAME)) {
-    Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
-  }
-  
-  configTime(5 * 3600, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
-  Serial.print("Syncing time");
-  for (int i = 0; i < 40; i++) {
-    time_t now = time(nullptr);
-    if (now >= 1700000000) {
-      timeSynced = true;
-      Serial.println("\nTime: " + formatTime(now, true));
-      break;
-    }
-    delay(300);
-    Serial.print(".");
-  }
-  
-  if (!timeSynced) {
-    Serial.println("\nTime sync timeout, using uptime");
-    bootTime = millis() / 1000;
-  }
-  
-  // Инициализация БД
-  initDB();
-  createSDDirectories();
-  
-  if (!db) {
-    Serial.println("Критическая ошибка: БД не инициализирована!");
-    while (1) {
-      delay(1000);
-      Serial.println("Требуется SD-карта для работы!");
-    }
-  }
-  
-  // Инициализация пинов клапанов
-  for (int i = 0; i < 8; i++) {
-    pinMode(valvePins[i], OUTPUT);
-    digitalWrite(valvePins[i], LOW);
-  }
-  
-  // Инициализация пинов датчиков
-  for (int i = 0; i < 8; i++) {
-    pinMode(sensorPins[i], INPUT);
-  }
-  // === В начале setup(), ПЕРЕД server.on("/watering", ...) ===
+  Serial.begin(115200);
+  delay(2000);
 
-// Редирект с корня на страницу полива
-server.on("/", HTTP_GET, []() {
-  server.sendHeader("Location", "/watering");
-  server.send(302, "text/plain", "Redirecting to /watering");
-});
+  mosfet.begin();
+  mosfet.digitalWrite(ALL, LOW);
 
-// Обработчик для favicon.ico (чтобы не было 404 в логах)
-server.on("/favicon.ico", HTTP_GET, []() {
-  if (SD.exists("/favicon.ico")) {
-    File f = SD.open("/favicon.ico", FILE_READ);
-    server.streamFile(f, "image/x-icon");
-    f.close();
-  } else {
-    server.send(204, "text/plain", "");
+  for (int i = 0; i < NUM_VALVES; i++) {
+    mosfet.digitalWrite(i, HIGH); delay(350); mosfet.digitalWrite(i, LOW);
   }
-});
-  // Настройка веб-сервера
-  server.on("/watering", handleWatering);
-  server.on("/api/watering/valves", HTTP_GET, handleGetAllValves);
-  server.on("/api/watering/valve", HTTP_PUT, handleUpdateValve);
-  server.on("/api/watering/task", HTTP_POST, handleAddTask);
-  server.on("/api/watering/task", HTTP_DELETE, handleDeleteTask);
-  server.on("/api/watering/log", HTTP_GET, handleGetWateringLog);
-  server.on("/api/watering/manual", HTTP_POST, handleManualWatering);
-  server.on("/api/watering/apply-all", HTTP_POST, handleApplyToAll);
-  
-  server.onNotFound(handleNotFound);
+
+  if (SD.begin(PIN_CS_SD)) Serial.println("SD OK");
+
+  initDatabase();
+
+  WiFi.AP.begin();
+  WiFi.AP.config(ap_ip, ap_ip, ap_subnet, ap_leaseStart, ap_dns);
+  WiFi.AP.create(AP_SSID, AP_PASS);
+
+  server.on("/", [](){ server.send_P(200, "text/html", MAIN_HTML); });
+  server.on("/api/valve", HTTP_GET, handleValve);
+
   server.begin();
-  Serial.println("Web server started");
-  
-  // Настройка OTA
-  ArduinoOTA.setHostname("WateringC3");
-  ArduinoOTA.onStart([]() {
-    Serial.println("OTA update started");
-  });
-  ArduinoOTA.begin();
-  
-  Serial.println("\nSystem ready! Access via http://" + 
-    (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.10.1") + "/watering");
+  Serial.println("Сервер запущен");
 }
 
-// ====================== LOOP ======================
 void loop() {
   server.handleClient();
-  ArduinoOTA.handle();
+  updateWateringTimers();
+  checkMoistureSensors();
+  checkSchedule();
+  delay(10);
 }
