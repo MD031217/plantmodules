@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
+#include <Preferences.h>
 #include <ArduinoOTA.h>
 #include <SPI.h>
 #include <SD.h>
@@ -20,10 +21,10 @@
 
 // Эндпоинт /debug раскрывает пользователей, e-mail и токены сессий.
 // По умолчанию выключен. Установите 1 только для временной отладки.
-#define ENABLE_DEBUG_ENDPOINT 0
+#define ENABLE_DEBUG_ENDPOINT 1
 
 // ==================== Wi-Fi НАСТРОЙКИ ====================
-#define STA_SSID "linksys"
+#define STA_SSID "lin"
 #define STA_PASS ""
 #define AP_SSID  "netSensorModule-01"
 #define AP_PASS  "12345678"
@@ -48,6 +49,7 @@ char strData[10];
 BME280Spi::Settings settings(CS_BME280_PIN);
 BME280Spi bme(settings);
 WebServer server(80);
+Preferences prefs;
 
 // ==================== SQLite БАЗА ДАННЫХ на SD-карте ====================
 #define DB_FILE "/sd/sensor_log.db"
@@ -2947,7 +2949,7 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
             <a href="/profile" class="user-pill">
                 <img src="/image/dpol.png" alt="Avatar Dark" class="user-avatar avatar-dark" id="header-avatar-dark">
                 <img src="/image/lpol.png" alt="Avatar Light" class="user-avatar avatar-light" id="header-avatar-light">
-                <span class="user-text" id="header-username">User_login</span>
+                <span class="user-text" id="header-username">Загрузка...</span>
             </a>
 
             <div class="logo-container">
@@ -2993,8 +2995,8 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
                 </div>
                 
                 <div class="profile-info">
-                    <div class="profile-name" id="profile-name">User_login</div>
-                    <div class="profile-email" id="profile-email">name_mail@email.com</div>
+                    <div class="profile-name" id="profile-name">Загрузка...</div>
+                    <div class="profile-email" id="profile-email">Загрузка...</div>
                     
                     <div>
                         <div class="gender-label">Пол</div>
@@ -4328,6 +4330,7 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
 
 
 
+
 const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
@@ -4336,714 +4339,285 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Настройки</title>
     <style>
-        :root {
-            --card-radius: 24px;
-            --transition-speed: 0.4s;
-        }
-
-        /*ТЁМНАЯ ТЕМА*/
+        :root { --card-radius: 24px; --transition-speed: 0.4s; }
         body.theme-dark {
-            --page-bg: #0F182B;
-            --text-main: #00674B;
-            --accent-green: #21C85F;
-            --card-bg: rgba(255, 255, 255, 0.95);
-            --glow-color: rgba(33, 200, 95, 0.6);
-            --glow-soft: rgba(33, 200, 95, 0.3);
-            --user-pill-bg: #1a2d45;
-            --user-pill-text: #a0aab5;
-            --nav-bg: #21C85F;
-            --nav-btn-bg: rgba(255, 255, 255, 0.25);
-            --label-bg: rgba(33, 200, 95, 0.15);
-            --label-text: #21C85F;
-            --footer-bg: #21C85F;
-            --switcher-bg: #1a2d45;
+            --page-bg: #0F182B; --text-main: #00674B; --accent-green: #21C85F;
+            --card-bg: rgba(255, 255, 255, 0.95); --glow-color: rgba(33, 200, 95, 0.6);
+            --glow-soft: rgba(33, 200, 95, 0.3); --user-pill-bg: #1a2d45;
+            --user-pill-text: #a0aab5; --nav-bg: #21C85F;
+            --nav-btn-bg: rgba(255, 255, 255, 0.25); --label-bg: rgba(33, 200, 95, 0.15);
+            --label-text: #21C85F; --footer-bg: #21C85F; --switcher-bg: #1a2d45;
             --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
-
-            --body-bg: var(--page-bg);
-            --title-color: var(--text-main);
-            --green-primary: var(--accent-green);
-            --green-hover: #1aab4e;
-            --green-glow: var(--accent-green);
-            --card-glow: var(--glow-color);
-            --card-shadow: 0 0 20px var(--glow-soft);
-            --subtitle-color: #7f8c8d;
-            --network-row-bg: var(--label-bg);
-            --network-row-border: transparent;
-            --manual-section-bg: var(--card-bg);
-            --input-border: rgba(33, 200, 95, 0.4);
-            --input-focus-border: var(--accent-green);
-            --input-bg: #ffffff;
-            --label-color: #95a5a6;
-            --btn-scan-bg: var(--accent-green);
-            --btn-scan-text: #ffffff;
-            --btn-connect-bg: var(--accent-green);
-            --btn-connect-text: #ffffff;
-            --btn-disconnect-bg: #ffffff;
-            --btn-disconnect-text: #0a4d3a;
-            --footer-text: #ffffff;
-            --modal-overlay: rgba(15, 24, 43, 0.6);
-            --modal-blur: blur(8px);
-            --section-list-bg: var(--label-bg);
-            --section-list-shadow: var(--card-internal-shadow);
-            --plus-icon-bg: var(--accent-green);
-            --section-glow: var(--glow-color);
-            --empty-row-bg: rgba(33, 200, 95, 0.12);
-            --modal-bg: var(--card-bg);
-            --modal-input-bg: #ffffff;
-            --footer-column-title: #ffffff;
-            --footer-column-text: rgba(255,255,255,0.9);
-            --footer-copy: rgba(255,255,255,0.8);
+            --body-bg: var(--page-bg); --title-color: var(--text-main);
+            --green-primary: var(--accent-green); --green-hover: #1aab4e;
+            --green-glow: var(--accent-green); --card-glow: var(--glow-color);
+            --card-shadow: 0 0 20px var(--glow-soft); --subtitle-color: #7f8c8d;
+            --network-row-bg: var(--label-bg); --network-row-border: transparent;
+            --manual-section-bg: var(--card-bg); --input-border: rgba(33, 200, 95, 0.4);
+            --input-focus-border: var(--accent-green); --input-bg: #ffffff;
+            --label-color: #95a5a6; --btn-scan-bg: var(--accent-green);
+            --btn-scan-text: #ffffff; --btn-connect-bg: var(--accent-green);
+            --btn-connect-text: #ffffff; --btn-disconnect-bg: #ffffff;
+            --btn-disconnect-text: #0a4d3a; --footer-text: #ffffff;
+            --modal-overlay: rgba(15, 24, 43, 0.6); --modal-blur: blur(8px);
+            --section-list-bg: var(--label-bg); --section-list-shadow: var(--card-internal-shadow);
+            --plus-icon-bg: var(--accent-green); --section-glow: var(--glow-color);
+            --empty-row-bg: rgba(33, 200, 95, 0.12); --modal-bg: var(--card-bg);
+            --modal-input-bg: #ffffff; --footer-column-title: #ffffff;
+            --footer-column-text: rgba(255,255,255,0.9); --footer-copy: rgba(255,255,255,0.8);
         }
-
-        /*СВЕТЛАЯ ТЕМА*/
         body.theme-light {
-            --page-bg: #E8F0F2;
-            --text-main: #00674B;
-            --accent-green: #10B981;
-            --card-bg: #ffffff;
-            --glow-color: rgba(16, 185, 129, 0.4);
-            --glow-soft: rgba(16, 185, 129, 0.2);
-            --user-pill-bg: #ffffff;
-            --user-pill-text: #8899aa;
-            --nav-bg: #10B981;
-            --nav-btn-bg: rgba(255, 255, 255, 0.3);
-            --label-bg: rgba(16, 185, 129, 0.15);
-            --label-text: #10B981;
-            --footer-bg: #10B981;
-            --switcher-bg: #ffffff;
+            --page-bg: #E8F0F2; --text-main: #00674B; --accent-green: #10B981;
+            --card-bg: #ffffff; --glow-color: rgba(16, 185, 129, 0.4);
+            --glow-soft: rgba(16, 185, 129, 0.2); --user-pill-bg: #ffffff;
+            --user-pill-text: #8899aa; --nav-bg: #10B981;
+            --nav-btn-bg: rgba(255, 255, 255, 0.3); --label-bg: rgba(16, 185, 129, 0.15);
+            --label-text: #10B981; --footer-bg: #10B981; --switcher-bg: #ffffff;
             --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
-            --body-bg: var(--page-bg);
-            --title-color: var(--text-main);
-            --green-primary: var(--accent-green);
-            --green-hover: #0d9668;
-            --green-glow: var(--accent-green);
-            --card-glow: var(--glow-soft);
-            --card-shadow: 0 0 18px var(--glow-soft);
-            --subtitle-color: #7f8c8d;
-            --network-row-bg: var(--label-bg);
-            --network-row-border: transparent;
-            --manual-section-bg: var(--card-bg);
-            --input-border: rgba(16, 185, 129, 0.35);
-            --input-focus-border: var(--accent-green);
-            --input-bg: #ffffff;
-            --label-color: #a0a0a0;
-            --btn-scan-bg: #78d5b2;
-            --btn-scan-text: #0a4d3a;
-            --btn-connect-bg: var(--accent-green);
-            --btn-connect-text: #ffffff;
-            --btn-disconnect-bg: #ffffff;
-            --btn-disconnect-text: #0a4d3a;
-            --footer-text: #ffffff;
-            --modal-overlay: rgba(232, 240, 242, 0.7);
-            --modal-blur: blur(8px);
-            --section-list-bg: var(--label-bg);
+            --body-bg: var(--page-bg); --title-color: var(--text-main);
+            --green-primary: var(--accent-green); --green-hover: #0d9668;
+            --green-glow: var(--accent-green); --card-glow: var(--glow-soft);
+            --card-shadow: 0 0 18px var(--glow-soft); --subtitle-color: #7f8c8d;
+            --network-row-bg: var(--label-bg); --network-row-border: transparent;
+            --manual-section-bg: var(--card-bg); --input-border: rgba(16, 185, 129, 0.35);
+            --input-focus-border: var(--accent-green); --input-bg: #ffffff;
+            --label-color: #a0a0a0; --btn-scan-bg: #78d5b2; --btn-scan-text: #0a4d3a;
+            --btn-connect-bg: var(--accent-green); --btn-connect-text: #ffffff;
+            --btn-disconnect-bg: #ffffff; --btn-disconnect-text: #0a4d3a;
+            --footer-text: #ffffff; --modal-overlay: rgba(232, 240, 242, 0.7);
+            --modal-blur: blur(8px); --section-list-bg: var(--label-bg);
             --section-list-shadow: var(--card-internal-shadow);
-            --plus-icon-bg: var(--accent-green);
-            --section-glow: var(--glow-soft);
-            --empty-row-bg: rgba(16, 185, 129, 0.1);
-            --modal-bg: var(--card-bg);
-            --modal-input-bg: #ffffff;
-            --footer-column-title: #ffffff;
-            --footer-column-text: rgba(255,255,255,0.9);
-            --footer-copy: rgba(255,255,255,0.8);
+            --plus-icon-bg: var(--accent-green); --section-glow: var(--glow-soft);
+            --empty-row-bg: rgba(16, 185, 129, 0.1); --modal-bg: var(--card-bg);
+            --modal-input-bg: #ffffff; --footer-column-title: #ffffff;
+            --footer-column-text: rgba(255,255,255,0.9); --footer-copy: rgba(255,255,255,0.8);
         }
-
-        *, *::before, *::after {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            background: var(--body-bg);
-            color: var(--title-color);
-            min-height: 100vh;
-            transition: background var(--transition-speed) ease,
-                        color var(--transition-speed) ease;
+            background: var(--body-bg); color: var(--title-color); min-height: 100vh;
+            transition: background var(--transition-speed) ease, color var(--transition-speed) ease;
             line-height: 1.5;
         }
-
-        .mode-toggle {
-            display: none !important;
-            position: absolute;
-            opacity: 0;
-            pointer-events: none;
+        body.setup-mode .user-pill,
+        body.setup-mode .nav-btn:not(.active) {
+            pointer-events: none !important; opacity: 0.4 !important;
+            cursor: not-allowed !important; filter: grayscale(0.6) !important;
         }
-
-        .page-wrapper {
-            display: flex;
-            flex-direction: column;
-            min-height: calc(100vh - 200px);
+        body:not(.setup-mode) .manual-section {
+            pointer-events: none !important; opacity: 0.5 !important;
+            filter: grayscale(0.6) !important; cursor: not-allowed !important;
         }
-
-        .page-wrapper > .main-content {
-            flex: 1 0 auto;
+        body.setup-mode .btn-scan,
+        body.setup-mode .btn-connect,
+        body.setup-mode .btn-add-network {
+            pointer-events: auto !important; opacity: 1 !important;
+            cursor: pointer !important; filter: none !important;
         }
-
-        .top-sticky-wrapper {
-            position: sticky;
-            top: 0;
-            z-index: 1000;
-            width: 100%;
-            background: transparent;
-            pointer-events: none;
-        }
-
-        .top-sticky-wrapper > * {
-            pointer-events: auto;
-        }
-
+        .mode-toggle { display: none !important; position: absolute; opacity: 0; pointer-events: none; }
+        .page-wrapper { display: flex; flex-direction: column; min-height: calc(100vh - 200px); }
+        .page-wrapper > .main-content { flex: 1 0 auto; }
+        .top-sticky-wrapper { position: sticky; top: 0; z-index: 1000; width: 100%; background: transparent; pointer-events: none; }
+        .top-sticky-wrapper > * { pointer-events: auto; }
         .site-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 20px 40px;
-            background: transparent;
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            pointer-events: auto;
-            position: relative;
-            z-index: 2;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px 40px; background: transparent; backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px); pointer-events: auto; position: relative; z-index: 2;
         }
-
         .user-pill {
-            display: flex;
-            align-items: center;
-            text-decoration: none;
-            background: var(--user-pill-bg);
-            border-radius: 50px;
-            padding: 8px 16px 8px 8px;
-            gap: 10px;
-            width: 145px;
-            height: 44px;
-            box-shadow: 0 0 8px var(--glow-soft);
-            animation: userPulse 3s infinite alternate;
-            flex-shrink: 0;
+            display: flex; align-items: center; text-decoration: none;
+            background: var(--user-pill-bg); border-radius: 50px;
+            padding: 8px 16px 8px 8px; gap: 10px; width: 145px; height: 44px;
+            box-shadow: 0 0 8px var(--glow-soft); animation: userPulse 3s infinite alternate; flex-shrink: 0;
         }
-
-        @keyframes userPulse {
-            0% { box-shadow: 0 0 6px var(--glow-soft); }
-            100% { box-shadow: 0 0 16px var(--glow-color); }
-        }
-
-        .user-avatar {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            object-fit: cover;
-            display: none;
-        }
-
-        body.theme-dark .avatar-dark { display: block; }
-        body.theme-light .avatar-light { display: block; }
-
-        .user-text {
-            font-size: 14px;
-            font-weight: 400;
-            color: var(--user-pill-text);
-            letter-spacing: 0.5px;
-        }
-
-        .logo-container {
-            position: absolute;
-            left: 50%;
-            transform: translateX(-50%);
-            display: flex;
-            align-items: center;
-        }
-
-        .main-logo {
-            height: 100px;
-            display: none;
-            transition: height 0.3s ease;
-        }
-
-        body.theme-dark .logo-dark { display: block; }
-        body.theme-light .logo-light { display: block; }
-
+        @keyframes userPulse { 0% { box-shadow: 0 0 6px var(--glow-soft); } 100% { box-shadow: 0 0 16px var(--glow-color); } }
+        .user-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; display: none; }
+        body.theme-dark .avatar-dark { display: block; } body.theme-light .avatar-light { display: block; }
+        .user-text { font-size: 14px; font-weight: 400; color: var(--user-pill-text); letter-spacing: 0.5px; }
+        .logo-container { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; }
+        .main-logo { height: 100px; display: none; transition: height 0.3s ease; }
+        body.theme-dark .logo-dark { display: block; } body.theme-light .logo-light { display: block; }
         .theme-switcher {
-            width: 48px;
-            height: 48px;
-            background: var(--switcher-bg);
-            border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            box-shadow: 0 0 10px var(--glow-soft);
-            animation: switcherPulse 3s infinite alternate;
-            flex-shrink: 0;
+            width: 48px; height: 48px; background: var(--switcher-bg); border-radius: 14px;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            box-shadow: 0 0 10px var(--glow-soft); animation: switcherPulse 3s infinite alternate; flex-shrink: 0;
         }
-
-        @keyframes switcherPulse {
-            0% { box-shadow: 0 0 8px var(--glow-soft); }
-            100% { box-shadow: 0 0 18px var(--glow-color); }
-        }
-
-        .theme-icon-img {
-            width: 24px;
-            height: 24px;
-            filter: invert(1);
-        }
-
+        @keyframes switcherPulse { 0% { box-shadow: 0 0 8px var(--glow-soft); } 100% { box-shadow: 0 0 18px var(--glow-color); } }
+        .theme-icon-img { width: 24px; height: 24px; filter: invert(1); }
         .theme-light .theme-icon-img { filter: invert(0); }
-
         .navigation {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 8px;
-            background: var(--nav-bg);
-            border-radius: 40px;
-            padding: 6px;
-            margin: 0px 30px 35px 30px;
-            height: 52px;
-            pointer-events: auto;
+            display: flex; justify-content: center; align-items: center; gap: 8px;
+            background: var(--nav-bg); border-radius: 40px; padding: 6px;
+            margin: 0px 30px 35px 30px; height: 52px; pointer-events: auto;
             box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
         }
-
         .nav-btn {
-            color: #ffffff;
-            text-decoration: none;
-            font-size: 18px;
-            font-weight: 600;
-            padding: 8px 22px;
-            border-radius: 30px;
-            transition: all 0.3s ease;
-            white-space: nowrap;
-            position: relative;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffffff; text-decoration: none; font-size: 18px; font-weight: 600;
+            padding: 8px 22px; border-radius: 30px; transition: all 0.3s ease; white-space: nowrap;
+            position: relative; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px); border: 1px solid rgba(255, 255, 255, 0.1);
         }
-
-        .nav-btn:hover,
-        .nav-btn.active {
-            background: rgba(255, 255, 255, 0.35);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.25);
+        .nav-btn:hover, .nav-btn.active {
+            background: rgba(255, 255, 255, 0.35); backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.25);
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
-
-        .main-content {
-            max-width: 1100px; 
-            width: 100%;
-            margin: 0 auto;
-            padding: 0 30px 40px;
-        }
-
+        .main-content { max-width: 1100px; width: 100%; margin: 0 auto; padding: 0 30px 40px; }
         .scan-card {
-            background: var(--card-bg);
-            border-radius: var(--card-radius);
-            padding: 60px 40px 50px; 
-            text-align: center;
-            box-shadow: var(--card-shadow);
-            margin-bottom: 30px;
-            transition: background var(--transition-speed) ease,
-                        box-shadow var(--transition-speed) ease;
+            background: var(--card-bg); border-radius: var(--card-radius); padding: 60px 40px 50px;
+            text-align: center; box-shadow: var(--card-shadow); margin-bottom: 30px;
+            transition: background var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
             position: relative;
         }
-
         .scan-card::before {
-            content: '';
-            position: absolute;
-            inset: -2px;
-            border-radius: calc(var(--card-radius) + 2px);
-            box-shadow: 0 0 25px var(--card-glow);
-            z-index: -1;
+            content: ''; position: absolute; inset: -2px; border-radius: calc(var(--card-radius) + 2px);
+            box-shadow: 0 0 25px var(--card-glow); z-index: -1;
             transition: box-shadow var(--transition-speed) ease;
         }
-
-        .wifi-icon {
-            width: 150px;
-            height: 150px;
-            margin: 0 auto 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .wifi-img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            display: none;
-            transition: opacity var(--transition-speed) ease;
-        }
-
-        body.theme-dark .wifi-dark { display: block; }
-        body.theme-light .wifi-light { display: block; }
-
-        .scan-title {
-            font-size: 26px; 
-            font-weight: 700;
-            color: var(--title-color);
-            margin-bottom: 10px;
-            transition: color var(--transition-speed) ease;
-        }
-
-        .scan-subtitle {
-            font-size: 16px; 
-            color: var(--subtitle-color);
-            margin-bottom: 30px;
-            transition: color var(--transition-speed) ease;
-        }
-
+        .wifi-icon { width: 150px; height: 150px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; }
+        .wifi-img { width: 100%; height: 100%; object-fit: contain; display: none; transition: opacity var(--transition-speed) ease; }
+        body.theme-dark .wifi-dark { display: block; } body.theme-light .wifi-light { display: block; }
+        .scan-title { font-size: 26px; font-weight: 700; color: var(--title-color); margin-bottom: 10px; }
+        .scan-subtitle { font-size: 16px; color: var(--subtitle-color); margin-bottom: 30px; }
         .btn-scan {
-            display: inline-block;
-            background: var(--btn-scan-bg);
-            color: var(--btn-scan-text);
-            border: none;
-            border-radius: 40px;
-            padding: 16px 50px; 
-            font-size: 18px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
-            letter-spacing: 0.3px;
+            display: inline-block; background: var(--btn-scan-bg); color: var(--btn-scan-text);
+            border: none; border-radius: 40px; padding: 16px 50px; font-size: 18px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15); letter-spacing: 0.3px;
         }
-
-        .btn-scan:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2);
-            filter: brightness(1.05);
+        .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
+        .btn-scan:active { transform: translateY(0); }
+        .btn-scan:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
+        .btn-return-ap {
+            display: none; margin: 15px auto 0; background: #ffffff; color: #e55a5a;
+            border: 1.5px solid #ffb3b3; border-radius: 40px; padding: 14px 40px;
+            font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
         }
-
-        .btn-scan:active {
-            transform: translateY(0);
+        .btn-return-ap:hover {
+            transform: scale(1.03); background: #fff5f5; color: #d32f2f;
+            border-color: #ff8a8a; box-shadow: 0 0 25px rgba(229, 90, 90, 0.6), 0 0 10px rgba(229, 90, 90, 0.4);
         }
-
         .network-list-section {
-            background: var(--section-list-bg);
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 35px;
-            box-shadow: var(--section-list-shadow);
-            transition: background var(--transition-speed) ease;
+            background: var(--section-list-bg); border-radius: 16px; padding: 20px;
+            margin-top: 35px; box-shadow: var(--section-list-shadow);
         }
-
         .network-item {
-            display: flex;
-            align-items: center;
-            padding: 16px 20px;
-            border-radius: 14px;
-            margin-bottom: 12px;
-            background: var(--network-row-bg);
-            transition: background var(--transition-speed) ease;
+            display: flex; align-items: center; padding: 16px 20px; border-radius: 14px;
+            margin-bottom: 12px; background: var(--network-row-bg);
         }
-
         .network-item:last-child { margin-bottom: 0; }
         .network-item.empty { background: var(--empty-row-bg); }
-
-        .network-icon {
-            width: 22px;
-            height: 22px;
-            margin-right: 14px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .wifi-img-small {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            display: none;
-        }
-
-        body.theme-dark .wifi-dark { display: block; }
-        body.theme-light .wifi-light { display: block; }
-
-        .network-name {
-            font-size: 16px; 
-            font-weight: 600;
-            color: var(--title-color);
-            min-width: 80px;
-            transition: color var(--transition-speed) ease;
-        }
-
-        .network-security {
-            font-size: 15px; 
-            color: var(--subtitle-color);
-            flex: 1;
-            padding-left: 10px;
-            transition: color var(--transition-speed) ease;
-        }
-
+        .network-icon { width: 22px; height: 22px; margin-right: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        .wifi-img-small { width: 100%; height: 100%; object-fit: contain; display: none; }
+        body.theme-dark .wifi-dark { display: block; } body.theme-light .wifi-light { display: block; }
+        .network-name { font-size: 16px; font-weight: 600; color: var(--title-color); min-width: 80px; }
+        .network-security { font-size: 15px; color: var(--subtitle-color); flex: 1; padding-left: 10px; }
         .btn-connect, .btn-disconnect {
-            border: none;
-            border-radius: 30px;
-            padding: 8px 24px;
-            font-size: 14px; 
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.25s ease;
-            white-space: nowrap;
-            flex-shrink: 0;
+            border: none; border-radius: 30px; padding: 8px 24px; font-size: 14px;
+            font-weight: 600; cursor: pointer; transition: all 0.25s ease; white-space: nowrap; flex-shrink: 0;
         }
-
         .btn-connect { background: var(--btn-connect-bg); color: var(--btn-connect-text); }
         .btn-connect:hover { filter: brightness(1.1); transform: translateY(-1px); }
-
         .btn-disconnect { background: var(--btn-disconnect-bg); color: var(--btn-disconnect-text); box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
         .btn-disconnect:hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.15); }
-
         .btn-add-network {
-            display: inline-block;
-            background: var(--btn-scan-bg);
-            color: var(--btn-scan-text);
-            border: none;
-            border-radius: 40px;
-            padding: 12px 32px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
-            letter-spacing: 0.3px;
+            display: inline-block; background: var(--btn-scan-bg); color: var(--btn-scan-text);
+            border: none; border-radius: 40px; padding: 12px 32px; font-size: 16px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15); letter-spacing: 0.3px;
         }
-
-        .btn-add-network:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2);
-            filter: brightness(1.05);
-        }
-        .btn-add-network:active {
-            transform: translateY(0);
-        }
-
+        .btn-add-network:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
+        .btn-add-network:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
         .manual-section {
-            background: var(--manual-section-bg);
-            border-radius: var(--card-radius);
-            padding: 50px 50px 55px; 
-            box-shadow: var(--card-shadow);
-            margin-bottom: 30px;
-            transition: background var(--transition-speed) ease,
-                        box-shadow var(--transition-speed) ease;
-            position: relative;
+            background: var(--manual-section-bg); border-radius: var(--card-radius); padding: 50px 50px 55px;
+            box-shadow: var(--card-shadow); margin-bottom: 30px; position: relative;
         }
-
         .manual-section::before {
-            content: '';
-            position: absolute;
-            inset: -2px;
-            border-radius: calc(var(--card-radius) + 2px);
-            box-shadow: 0 0 20px var(--card-glow);
-            z-index: -1;
-            transition: box-shadow var(--transition-speed) ease;
+            content: ''; position: absolute; inset: -2px; border-radius: calc(var(--card-radius) + 2px);
+            box-shadow: 0 0 20px var(--card-glow); z-index: -1;
         }
-
         .manual-title {
-            display: flex;
-            align-items: center;
-            font-size: 24px; 
-            font-weight: 700;
-            color: var(--title-color);
-            margin-bottom: 30px;
-            transition: color var(--transition-speed) ease;
+            display: flex; align-items: center; font-size: 24px; font-weight: 700;
+            color: var(--title-color); margin-bottom: 30px;
         }
-
         .plus-icon {
-            width: 28px;
-            height: 28px;
-            background: var(--plus-icon-bg);
-            border-radius: 50%;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 12px;
-            flex-shrink: 0;
-            transition: background var(--transition-speed) ease;
+            width: 28px; height: 28px; background: var(--plus-icon-bg); border-radius: 50%;
+            display: inline-flex; align-items: center; justify-content: center; margin-right: 12px; flex-shrink: 0;
         }
-
         .plus-icon svg { width: 16px; height: 16px; }
         .plus-icon svg line { stroke: #ffffff; stroke-width: 2.5; stroke-linecap: round; }
-
-        .manual-form {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px 40px; 
-        }
-
+        .manual-form { display: grid; grid-template-columns: 1fr 1fr; gap: 24px 40px; }
         .form-group { display: flex; flex-direction: column; }
         .form-group.full-width { grid-column: 1 / -1; }
-
-        .form-label {
-            font-size: 16px; 
-            color: var(--label-color);
-            margin-bottom: 10px;
-            font-weight: 400;
-            transition: color var(--transition-speed) ease;
+        .form-label { font-size: 16px; color: var(--label-color); margin-bottom: 10px; font-weight: 400; }
+        .form-input, .form-select {
+            border: 2px solid var(--input-border); border-radius: 20px; padding: 16px 22px;
+            font-size: 16px; color: var(--title-color); background: var(--input-bg);
+            outline: none; transition: border-color 0.3s ease;
         }
-
-        .form-input {
-            border: 2px solid var(--input-border);
-            border-radius: 20px; 
-            padding: 16px 22px; 
-            font-size: 16px;
-            color: var(--title-color);
-            background: var(--input-bg);
-            outline: none;
-            transition: border-color 0.3s ease,
-                        background var(--transition-speed) ease,
-                        color var(--transition-speed) ease;
-        }
-
         .form-input::placeholder { color: var(--label-color); }
-        .form-input:focus { border-color: var(--input-focus-border); }
-
-        .site-footer {
-            background: var(--footer-bg);
-            color: var(--footer-text);
-            padding: 36px 40px 0;
-            transition: background var(--transition-speed) ease;
-            flex-shrink: 0;
-        }
-
-        .footer-columns {
-            display: grid;
-            grid-template-columns: 1.3fr 1fr 0.8fr;
-            gap: 30px;
-            max-width: 900px; 
-            margin: 0 auto;
-            padding-bottom: 24px;
-            border-bottom: 1px solid rgba(255,255,255,0.2);
-        }
-
-        .footer-column-title {
-            font-size: 20px;
-            font-weight: 700;
-            margin-bottom: 12px;
-            color: var(--footer-column-title);
-        }
-
+        .form-input:focus, .form-select:focus { border-color: var(--input-focus-border); }
+        .site-footer { background: var(--footer-bg); color: var(--footer-text); padding: 36px 40px 0; flex-shrink: 0; }
+        .footer-columns { display: grid; grid-template-columns: 1.3fr 1fr 0.8fr; gap: 30px; max-width: 900px; margin: 0 auto; padding-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.2); }
+        .footer-column-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: var(--footer-column-title); }
         .footer-column-text { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
         .footer-column-list { list-style: none; padding: 0; }
         .footer-column-list li { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
-
-        .footer-copyright {
-            text-align: center;
-            padding: 16px 0 12px;
-            font-size: 14px;
-            color: var(--footer-copy);
-            max-width: 900px; 
-            margin: 0 auto;
-        }
-
+        .footer-copyright { text-align: center; padding: 16px 0 12px; font-size: 14px; color: var(--footer-copy); max-width: 900px; margin: 0 auto; }
         .modal-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: var(--modal-overlay);
-            backdrop-filter: var(--modal-blur);
-            -webkit-backdrop-filter: var(--modal-blur);
-            z-index: 2000;
-            align-items: center;
-            justify-content: center;
-            transition: background var(--transition-speed) ease;
+            display: none; position: fixed; inset: 0; background: var(--modal-overlay);
+            backdrop-filter: var(--modal-blur); -webkit-backdrop-filter: var(--modal-blur);
+            z-index: 2000; align-items: center; justify-content: center;
         }
-
         .modal-overlay.active { display: flex; }
-
         .modal-card {
-            background: var(--modal-bg);
-            border-radius: 20px;
-            padding: 28px 32px;
-            width: 90%;
-            max-width: 480px;
-            box-shadow: 0 8px 40px rgba(0,0,0,0.15);
-            position: relative;
-            transition: background var(--transition-speed) ease;
+            background: var(--modal-bg); border-radius: 20px; padding: 28px 32px;
+            width: 90%; max-width: 480px; box-shadow: 0 8px 40px rgba(0,0,0,0.15); position: relative;
         }
-
         .modal-network-row {
-            display: flex;
-            align-items: center;
-            padding: 10px 14px;
-            border-radius: 14px;
-            background: var(--network-row-bg);
-            margin-bottom: 18px;
-            transition: background var(--transition-speed) ease;
+            display: flex; align-items: center; padding: 10px 14px; border-radius: 14px;
+            background: var(--network-row-bg); margin-bottom: 18px;
         }
-
-        .modal-network-name {
-            font-size: 15px;
-            font-weight: 600;
-            color: var(--title-color);
-            transition: color var(--transition-speed) ease;
-        }
-
-        .modal-network-security {
-            font-size: 14px;
-            color: var(--subtitle-color);
-            margin-left: 16px;
-            transition: color var(--transition-speed) ease;
-        }
-
-        .modal-label {
-            font-size: 14px;
-            color: var(--label-color);
-            margin-bottom: 8px;
-            display: block;
-            transition: color var(--transition-speed) ease;
-        }
-
-        .modal-input-wrapper {
-            position: relative;
-            display: flex;
-            align-items: center;
-        }
-
+        .modal-network-name { font-size: 15px; font-weight: 600; color: var(--title-color); }
+        .modal-network-security { font-size: 14px; color: var(--subtitle-color); margin-left: 16px; }
+        .modal-label { font-size: 14px; color: var(--label-color); margin-bottom: 8px; display: block; }
+        .modal-input-wrapper { position: relative; display: flex; align-items: center; }
         .modal-input {
-            width: 100%;
-            border: 2px solid var(--input-border);
-            border-radius: 16px;
-            padding: 12px 48px 12px 18px;
-            font-size: 15px;
-            color: var(--title-color);
-            background: var(--modal-input-bg);
-            outline: none;
-            transition: border-color 0.3s ease,
-                        background var(--transition-speed) ease,
-                        color var(--transition-speed) ease;
+            width: 100%; border: 2px solid var(--input-border); border-radius: 16px;
+            padding: 12px 48px 12px 18px; font-size: 15px; color: var(--title-color);
+            background: var(--modal-input-bg); outline: none;
+            transition: border-color 0.3s ease;
         }
-
         .modal-input:focus { border-color: var(--input-focus-border); }
-
         .modal-eye-btn {
-            position: absolute;
-            right: 14px;
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            position: absolute; right: 14px; background: none; border: none;
+            cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center;
         }
-
-        #eyeImg {
-            width: 22px;
-            height: 22px;
-            object-fit: contain;
+        #eyeImg { width: 22px; height: 22px; object-fit: contain; }
+        .modal-actions { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+        .btn-cancel-return {
+            background: var(--btn-disconnect-bg); color: var(--btn-disconnect-text);
+            border: 1.5px solid var(--input-border); border-radius: 30px; padding: 12px 24px;
+            font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease;
         }
-
-        body.theme-dark .theme-light-only { display: none !important; }
-        body.theme-light .theme-dark-only { display: none !important; }
-
+        .btn-cancel-return:hover { transform: scale(1.03); filter: brightness(0.95); }
+        .btn-confirm-return {
+            background: #ffffff; color: #e55a5a; border: 1.5px solid #ffb3b3;
+            border-radius: 30px; padding: 12px 24px; font-size: 15px; font-weight: 600;
+            cursor: pointer; transition: all 0.3s ease; box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
+        }
+        .btn-confirm-return:hover {
+            transform: scale(1.03); background: #fff5f5; color: #d32f2f;
+            border-color: #ff8a8a; box-shadow: 0 0 25px rgba(229, 90, 90, 0.6);
+        }
+        #connectStatus { margin-top: 12px; font-size: 14px; text-align: center; min-height: 20px; }
+        #connectStatus.success { color: var(--accent-green); }
+        #connectStatus.error { color: #e55a5a; }
         @media (max-width: 700px) {
             .page-wrapper { min-height: calc(100vh - 170px); }
             .site-header { padding: 14px 16px; }
             .main-logo { height: 60px; }
-            .user-pill { width: 110px; height: 38px; padding: 6px 10px 6px 6px; gap: 7px; }
-            .user-avatar { width: 26px; height: 26px; }
-            .user-text { font-size: 12px; }
-            .theme-switcher { width: 40px; height: 40px; border-radius: 12px; }
             .navigation { margin: 0 12px 24px; height: 44px; gap: 4px; }
             .nav-btn { font-size: 14px; padding: 6px 14px; }
             .main-content { padding: 0 14px 30px; max-width: 100%; }
@@ -5051,31 +4625,16 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             .manual-section { padding: 25px 20px 30px; }
             .wifi-icon { width: 72px; height: 56px; }
             .scan-title { font-size: 20px; }
-            .scan-subtitle { font-size: 13px; }
             .btn-scan { padding: 12px 36px; font-size: 15px; }
             .network-item { padding: 10px 12px; flex-wrap: wrap; gap: 6px 0; }
-            .network-name { font-size: 13px; min-width: 60px; }
-            .network-security { font-size: 12px; padding-left: 4px; }
-            .btn-connect, .btn-disconnect { font-size: 12px; padding: 5px 14px; }
-            .manual-title { font-size: 18px; }
             .manual-form { grid-template-columns: 1fr; gap: 14px; }
             .footer-columns { grid-template-columns: 1fr; gap: 20px; }
             .site-footer { padding: 28px 20px 0; }
-            .modal-card { padding: 22px 20px; margin: 0 14px; }
         }
-
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(16px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
         .scan-card { animation: fadeInUp 0.5s ease forwards; }
         .manual-section { animation: fadeInUp 0.5s ease 0.15s forwards; opacity: 0; animation-fill-mode: forwards; }
         .site-footer { animation: fadeInUp 0.5s ease 0.3s forwards; opacity: 0; animation-fill-mode: forwards; }
-        .network-item { animation: fadeInUp 0.35s ease forwards; opacity: 0; }
-        .network-item:nth-child(1) { animation-delay: 0.1s; }
-        .network-item:nth-child(2) { animation-delay: 0.2s; }
-        .network-item:nth-child(3) { animation-delay: 0.3s; }
     </style>
 </head>
 <body class="theme-dark">
@@ -5086,19 +4645,15 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                 <img src="/image/lpol.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">Загрузка...</span>
             </a>
-
             <div class="logo-container">
                 <img src="/image/light.png" alt="Зелёная полка" class="main-logo logo-dark">
                 <img src="/image/dark.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
-
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
                 <img src="/image/topic.png" alt="" class="theme-icon-img">
             </label>
         </header>
-        <!-- ВАЖНО: чекбокс вынесен за пределы header -->
         <input type="checkbox" id="themeToggle" class="mode-toggle">
-
         <nav class="navigation">
             <a href="/index" class="nav-btn">Главная</a>
             <a href="/plant" class="nav-btn">Мои растения</a>
@@ -5112,41 +4667,11 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                     <img src="/image/light_big.png" alt="WiFi" class="wifi-img wifi-light">
                     <img src="/image/dark_big.png" alt="WiFi" class="wifi-img wifi-dark">
                 </div>
-
                 <h1 class="scan-title">Сканирование сетей</h1>
                 <p class="scan-subtitle">Нажмите кнопку ниже для сканирования доступных Wi-Fi сетей</p>
-
-                <button class="btn-scan" id="scanBtn" onclick="toggleScan()">Начать сканирование</button>
-                <div class="network-list-section" id="networkList" style="display: none;">
-                    <div class="network-item">
-                        <div class="network-icon">
-                            <img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
-                            <img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
-                        </div>
-                        <span class="network-name">HONOR 7</span>
-                        <span class="network-security">Защищено/Общедоступная</span>
-                        <button class="btn-connect" onclick="openModal('HONOR 7')">Отключиться</button>
-                    </div>
-
-                    <div class="network-item">
-                        <div class="network-icon">
-                            <img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
-                            <img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
-                        </div>
-                        <span class="network-name">iPhone</span>
-                        <span class="network-security">Защищено/Общедоступная</span>
-                        <button class="btn-disconnect" onclick="openModal('iPhone')">Подключиться</button>
-                    </div>
-
-                    <div class="network-item empty">
-                        <div class="network-icon">
-                            <img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
-                            <img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
-                        </div>
-                        <span class="network-name" style="visibility: hidden;">—</span>
-                        <span class="network-security"></span>
-                    </div>
-                </div>
+                <button class="btn-scan" id="scanBtn">Начать сканирование</button>
+                <button class="btn-return-ap" id="returnApBtn">Вернуться к настройкам Wi-Fi</button>
+                <div class="network-list-section" id="networkList" style="display: none;"></div>
             </div>
 
             <div class="manual-section">
@@ -5159,26 +4684,30 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                     </span>
                     Добавить сеть вручную
                 </h2>
-
                 <div class="manual-form">
                     <div class="form-group">
                         <label class="form-label">Название сети (SSID)</label>
-                        <input type="text" class="form-input" placeholder="">
+                        <input type="text" id="wifiSsid" class="form-input" placeholder="">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Тип безопасности</label>
-                        <input type="text" class="form-input" placeholder="">
+                        <select id="wifiSec" class="form-select">
+                            <option value="WPA2">WPA/WPA2-Personal</option>
+                            <option value="WPA">WPA-Personal</option>
+                            <option value="WEP">WEP</option>
+                            <option value="OPEN">Открытая (без пароля)</option>
+                        </select>
                     </div>
-                    <div class="form-group full-width">
+                    <div class="form-group full-width" id="passGroup">
                         <label class="form-label">Пароль</label>
-                        <input type="password" class="form-input" placeholder="">
+                        <input type="password" id="wifiPass" class="form-input" placeholder="">
                     </div>
                     <div class="form-group full-width" style="margin-top: 16px; display: flex; justify-content: flex-end;">
                         <button type="button" class="btn-add-network" id="addNetworkBtn">Добавить</button>
                     </div>
                 </div>
+                <div id="connectStatus"></div>
             </div>
-
         </main>
 
         <footer class="site-footer">
@@ -5203,12 +4732,11 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                     </ul>
                 </div>
             </div>
-            <div class="footer-copyright">
-                2026 Зелёная полка
-            </div>
+            <div class="footer-copyright">2026 Зелёная полка</div>
         </footer>
-
     </div>
+
+    <!-- Модальное окно ввода пароля сети -->
     <div class="modal-overlay" id="passwordModal">
         <div class="modal-card">
             <div class="modal-network-row">
@@ -5216,42 +4744,55 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
                     <img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
                     <img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
                 </div>
-                <span class="modal-network-name" id="modalNetworkName">iPhone</span>
+                <span class="modal-network-name" id="modalNetworkName">Сеть</span>
                 <span class="modal-network-security">Защищено</span>
             </div>
-
             <label class="modal-label">Введите код безопасности</label>
             <div class="modal-input-wrapper">
                 <input type="password" class="modal-input" id="modalPasswordInput">
                 <button type="button" class="modal-eye-btn" id="eyeBtn">
-                    <img src="/image/open.png" id="eyeImg" alt="Показать пароль">
+                    <img src="/image/Open.png" id="eyeImg" alt="Показать пароль">
                 </button>
             </div>
         </div>
     </div>
 
+    <!-- Модальное окно возврата к AP -->
+    <div class="modal-overlay" id="returnApModal">
+        <div class="modal-card" style="text-align: center;">
+            <div class="wifi-icon" style="width: 64px; height: 64px; margin: 0 auto 15px;">
+                <img src="/image/light_big.png" alt="WiFi" class="wifi-img wifi-light" style="width:100%; height:100%;">
+                <img src="/image/dark_big.png" alt="WiFi" class="wifi-img wifi-dark" style="width:100%; height:100%;">
+            </div>
+            <h3 style="font-size: 20px; font-weight: 700; color: var(--title-color); margin-bottom: 12px;">Возврат к настройкам Wi-Fi</h3>
+            <p style="font-size: 15px; color: var(--subtitle-color); margin-bottom: 24px; line-height: 1.5;">
+                Для возврата к настройкам вам необходимо вручную подключиться к сети <strong>"GreenShelf_Setup"</strong> на вашем устройстве.<br><br>
+                После подключения вы будете автоматически перенаправлены на эту страницу.
+            </p>
+            <div class="modal-actions">
+                <button class="btn-cancel-return" id="cancelReturnApBtn">Отмена</button>
+                <button class="btn-confirm-return" id="confirmReturnApBtn">Понятно, перейти</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        // Функция загрузки профиля с сервера
+        // ===== ЗАГРУЗКА ПРОФИЛЯ С СЕРВЕРА =====
         async function loadProfileFromServer() {
             const token = localStorage.getItem('auth_token');
             if (!token) {
                 console.log('❌ Нет токена');
                 return null;
             }
-            
             try {
-                console.log('🔄 Загружаю профиль для settings...');
                 const res = await fetch('/api/profile', {
                     headers: {'Authorization': 'Bearer ' + token}
                 });
-                
                 if (res.status === 401) {
-                    console.log('❌ Токен недействителен');
                     localStorage.removeItem('auth_token');
                     window.location.href = '/login';
                     return null;
                 }
-                
                 const profile = await res.json();
                 console.log('✅ Профиль загружен:', profile.username);
                 return profile;
@@ -5261,48 +4802,27 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             }
         }
 
-        // Функция для правильного формирования пути к аватару
         function resolveAvatarPath(path) {
-            if (!path || path === '') {
-                return '/image/default-avatar.jpg';
-            }
+            if (!path || path === '') return '/image/default-avatar.jpg';
             if (path.startsWith('http')) return path;
-            // Нормализуем путь
             let cleanPath = path.replace(/^\/+/, '');
             return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
         }
 
-        // Загрузка данных пользователя в шапку
         async function loadUserToHeader() {
             const profile = await loadProfileFromServer();
             if (!profile) return;
-            
-            // Обновляем имя пользователя
             const userText = document.querySelector('.user-pill .user-text');
-            if (userText) {
-                userText.textContent = profile.username;
-                console.log('✅ Имя обновлено:', profile.username);
-            }
-            
-            // Обновляем аватар
+            if (userText) userText.textContent = profile.username;
             const avatarSrc = resolveAvatarPath(profile.avatar);
             const avDark = document.querySelector('.user-pill .avatar-dark');
             const avLight = document.querySelector('.user-pill .avatar-light');
-            
-            if (avDark) {
-                avDark.src = avatarSrc;
-                avDark.onerror = () => { avDark.src = '/image/default-avatar.jpg'; };
-            }
-            if (avLight) {
-                avLight.src = avatarSrc;
-                avLight.onerror = () => { avLight.src = '/image/default-avatar.jpg'; };
-            }
-            
-            console.log('✅ Аватар обновлен:', avatarSrc);
+            if (avDark) { avDark.src = avatarSrc; avDark.onerror = () => { avDark.src = '/image/default-avatar.jpg'; }; }
+            if (avLight) { avLight.src = avatarSrc; avLight.onerror = () => { avLight.src = '/image/default-avatar.jpg'; }; }
         }
 
-        const initThemes = () => {
-            // Первый инициализатор темы
+        // ===== ТЕМА =====
+        (function initTheme() {
             const toggle = document.getElementById('themeToggle');
             const body = document.body;
             const KEY = 'theme';
@@ -5310,131 +4830,204 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             body.classList.remove('theme-dark', 'theme-light');
             body.classList.add('theme-' + saved);
             if (toggle) toggle.checked = (saved === 'light');
-
             if (toggle) {
-                toggle.addEventListener('change', () => {
+                toggle.addEventListener('change', function() {
                     const next = toggle.checked ? 'light' : 'dark';
                     body.classList.remove('theme-dark', 'theme-light');
                     body.classList.add('theme-' + next);
                     localStorage.setItem(KEY, next);
                 });
             }
-        };
+        })();
 
-        // Второй инициализатор темы
-        const initThemeSwitcher = () => {
-            const body = document.body;
-            let savedTheme = localStorage.getItem('theme') || 'dark';
-            body.classList.remove('theme-light', 'theme-dark');
-            body.classList.add('theme-' + savedTheme);
-
-            const themeBtn = document.getElementById('themeSwitcher');
-            if (savedTheme) {
-                body.className = savedTheme === 'dark' ? 'theme-dark' : 'theme-light';
-            }
-
-            if (themeBtn) {
-                themeBtn.addEventListener('click', () => {
-                    if (body.classList.contains('theme-light')) {
-                        body.className = 'theme-dark';
-                        localStorage.setItem('theme', 'dark');
-                    } else {
-                        body.className = 'theme-light';
-                        localStorage.setItem('theme', 'light');
-                    }
-                });
-            }
-        };
-
-        // Остальные функции
-        let isScanned = false;
-        const toggleScan = () => {
-            const btn = document.getElementById('scanBtn');
-            const list = document.getElementById('networkList');
-            if (!isScanned) {
-                btn.textContent = 'Обновить список';
-                list.style.display = 'block';
-                isScanned = true;
-            } else {
-                list.style.display = 'none';
-                void list.offsetWidth;
-                list.style.display = 'block';
-            }
-        };
-
-        let passwordVisible = false;
-        const updateEyeSource = () => {
-            const eyeImg = document.getElementById('eyeImg');
-            if (passwordVisible) {
-                eyeImg.src = '/image/closed.png';
-                eyeImg.alt = 'Скрыть пароль';
-            } else {
-                eyeImg.src = '/image/open.png';
-                eyeImg.alt = 'Показать пароль';
-            }
-        };
-
-        const openModal = (networkName) => {
-            const modal = document.getElementById('passwordModal');
-            document.getElementById('modalNetworkName').textContent = networkName;
-            modal.classList.add('active');
-            passwordVisible = false;
-            document.getElementById('modalPasswordInput').type = 'password';
-            updateEyeSource();
-        };
-
-        const closeModal = () => {
-            document.getElementById('passwordModal').classList.remove('active');
-        };
-
-        // Проверка авторизации при загрузке
+        // ===== ПРОВЕРКА АВТОРИЗАЦИИ =====
         function checkAuth() {
             const token = localStorage.getItem('auth_token');
             if (!token) {
-                console.log('❌ Нет токена, редирект на /login');
                 window.location.href = '/login';
                 return false;
             }
             return true;
         }
 
-        // Запуск всего после загрузки страницы
-        document.addEventListener('DOMContentLoaded', async () => {
+        // ===== WiFi ЛОГИКА =====
+        document.addEventListener('DOMContentLoaded', function() {
             if (!checkAuth()) return;
-            initThemes();
-            initThemeSwitcher();
             loadUserToHeader();
 
-            // Обработчик для eyeBtn
+            const isSetupMode = window.location.hostname === '192.168.10.1' || window.location.hostname === '';
+            if (isSetupMode) {
+                document.body.classList.add('setup-mode');
+                console.log('[Mode] Setup mode (192.168.10.1)');
+            }
+
+            // Кнопка "Вернуться к AP"
+            const returnApBtn = document.getElementById('returnApBtn');
+            const returnApModal = document.getElementById('returnApModal');
+            if (returnApBtn && !isSetupMode) {
+                returnApBtn.style.display = 'block';
+                returnApBtn.addEventListener('click', function() {
+                    returnApModal.classList.add('active');
+                });
+            }
+            document.getElementById('cancelReturnApBtn').addEventListener('click', function() {
+                returnApModal.classList.remove('active');
+            });
+            document.getElementById('confirmReturnApBtn').addEventListener('click', function() {
+                returnApModal.classList.remove('active');
+                window.location.href = 'http://192.168.10.1/settings';
+            });
+            returnApModal.addEventListener('click', function(e) {
+                if (e.target === e.currentTarget) returnApModal.classList.remove('active');
+            });
+
+            // Показать/скрыть пароль в модалке
+            const passwordInput = document.getElementById('modalPasswordInput');
             const eyeBtn = document.getElementById('eyeBtn');
-            if (eyeBtn) {
-                eyeBtn.addEventListener('click', () => {
-                    passwordVisible = !passwordVisible;
-                    const passwordInput = document.getElementById('modalPasswordInput');
-                    if (passwordInput) {
-                        passwordInput.type = passwordVisible ? 'text' : 'password';
-                    }
-                    updateEyeSource();
+            const eyeImg = document.getElementById('eyeImg');
+            let passwordVisible = false;
+            function updateEyeSource() {
+                eyeImg.src = passwordVisible ? '/image/Closed.png' : '/image/Open.png';
+                eyeImg.alt = passwordVisible ? 'Скрыть пароль' : 'Показать пароль';
+            }
+            if (eyeBtn) eyeBtn.addEventListener('click', function() {
+                passwordVisible = !passwordVisible;
+                passwordInput.type = passwordVisible ? 'text' : 'password';
+                updateEyeSource();
+            });
+
+            // Закрытие модалки пароля по клику на фон
+            const passwordModal = document.getElementById('passwordModal');
+            if (passwordModal) {
+                passwordModal.addEventListener('click', function(e) {
+                    if (e.target === e.currentTarget) passwordModal.classList.remove('active');
                 });
             }
 
-            // Обработчик закрытия модального окна
-            const modal = document.getElementById('passwordModal');
-            if (modal) {
-                modal.addEventListener('click', (e) => {
-                    if (e.target === modal) closeModal();
+            // Тип безопасности — показать/скрыть поле пароля
+            const secSelect = document.getElementById('wifiSec');
+            const passGroup = document.getElementById('passGroup');
+            const passInput = document.getElementById('wifiPass');
+            if (secSelect) {
+                secSelect.addEventListener('change', function() {
+                    if (this.value === 'OPEN') {
+                        passGroup.style.display = 'none';
+                        passInput.value = '';
+                    } else {
+                        passGroup.style.display = '';
+                    }
                 });
             }
-            // Кнопка сканирования Wi-Fi
+
+            // ===== СКАНИРОВАНИЕ СЕТЕЙ =====
             const scanBtn = document.getElementById('scanBtn');
-            if (scanBtn) {
-                scanBtn.onclick = toggleScan;
-            }
+            const networkList = document.getElementById('networkList');
+            const ssidInput = document.getElementById('wifiSsid');
+
+            if (scanBtn) scanBtn.addEventListener('click', async function() {
+                scanBtn.disabled = true;
+                scanBtn.textContent = 'Сканирование...';
+                networkList.style.display = 'block';
+                networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Поиск сетей...</span></div>';
+
+                try {
+                    const res = await fetch('/api/scan', { cache: 'no-store' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const nets = await res.json();
+
+                    if (!nets.length) {
+                        networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Сети не найдены</span></div>';
+                    } else {
+                        networkList.innerHTML = nets.map(function(n) {
+                            const sec = n.encryption !== 'OPEN' ? 'Защищено' : 'Открытая';
+                            const esc = n.ssid.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            return '<div class="network-item">' +
+                                '<div class="network-icon">' +
+                                '<img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">' +
+                                '<img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">' +
+                                '</div>' +
+                                '<span class="network-name">' + esc + '</span>' +
+                                '<span class="network-security">' + sec + '</span>' +
+                                '<button class="btn-connect" onclick="selectNetwork(\'' + esc + '\',\'' + n.encryption + '\')">Выбрать</button>' +
+                                '</div>';
+                        }).join('');
+                    }
+                } catch (e) {
+                    networkList.innerHTML = '<div class="network-item empty"><span style="color:#e55a5a; padding:10px;">Ошибка: ' + e.message + '</span></div>';
+                } finally {
+                    scanBtn.disabled = false;
+                    scanBtn.textContent = 'Обновить список';
+                }
+            });
+
+            window.selectNetwork = function(ssid, encryption) {
+                ssidInput.value = ssid;
+                secSelect.value = encryption || 'WPA2';
+                if (encryption === 'OPEN') {
+                    passGroup.style.display = 'none';
+                    passInput.value = '';
+                } else {
+                    passGroup.style.display = '';
+                    passInput.focus();
+                }
+                document.querySelector('.manual-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            // ===== ПОДКЛЮЧЕНИЕ К СЕТИ =====
+            const addNetworkBtn = document.getElementById('addNetworkBtn');
+            const statusDiv = document.getElementById('connectStatus');
+
+            if (addNetworkBtn) addNetworkBtn.addEventListener('click', async function() {
+                const ssid = ssidInput.value.trim();
+                const pass = passInput.value;
+                const sec = secSelect.value;
+
+                if (!ssid) { alert('Введите название сети'); return; }
+                if (sec !== 'OPEN' && !pass) { alert('Введите пароль для защищённой сети'); return; }
+
+                addNetworkBtn.disabled = true;
+                addNetworkBtn.textContent = 'Подключение...';
+                statusDiv.textContent = '';
+                statusDiv.className = '';
+
+                const formData = new URLSearchParams();
+                formData.append('ssid', ssid);
+                formData.append('pass', pass);
+                formData.append('sec', sec);
+
+                try {
+                    const res = await fetch('/api/configure', {
+                        method: 'POST',
+                        body: formData,
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                    });
+                    const data = await res.json();
+
+                    if (data.status === 'success') {
+                        statusDiv.textContent = 'Подключено! Сейчас подключитесь к выбранной сети на своём устройстве!';
+                        statusDiv.className = 'success';
+                        setTimeout(function() {
+                            window.location.href = 'http://' + data.ip + '/settings';
+                        }, 2000);
+                    } else {
+                        statusDiv.textContent = data.message || 'Ошибка подключения';
+                        statusDiv.className = 'error';
+                        addNetworkBtn.disabled = false;
+                        addNetworkBtn.textContent = 'Добавить';
+                    }
+                } catch (e) {
+                    statusDiv.textContent = 'Ошибка соединения: ' + e.message;
+                    statusDiv.className = 'error';
+                    addNetworkBtn.disabled = false;
+                    addNetworkBtn.textContent = 'Добавить';
+                }
+            });
         });
     </script>
 </body>
 </html>
 )rawliteral";
+
 
 
 const char PLANT_HTML[] PROGMEM = R"rawliteral(
@@ -6328,7 +5921,7 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="page-wrapper">
-        <div class="cards-area">
+        <div class="cards-area" id="plants-container">
             <div class="plant-card add-card glowing" id="addPlantCard">
                 <div class="add-link">
                     <img src="/image/dark_icon.png" alt="Добавить" class="plus-icon icon-dark">
@@ -6387,7 +5980,7 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <!-- Модальное окно редактирования -->
-    <div id="editModal" class="modal-overlay">
+    <div id="editModal" class="modal-overlay" style="display: none;">
         <div class="modal-content">
             <button class="modal-close" id="closeEditModal">✕</button>
             <h3 class="modal-title">Редактировать растение</h3>
@@ -6405,9 +5998,9 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
             
             <h4 class="modal-title-sub">Измените параметры<br>модуля сбора данных:</h4>
             <div class="modal-params-list">
-                <input type="number" id="editParamTemp" class="modal-input" placeholder="Параметр влажности воздуха (%)">
-                <input type="number" id="editParamHumid" class="modal-input" placeholder="Параметр влажности почвы (%)">
-                <input type="number" id="editParamLight" class="modal-input" placeholder="Параметр температуры (°C)">
+                <input type="number" id="editParamHumid" class="modal-input" placeholder="Параметр влажности воздуха (%)">
+                <input type="number" id="editParamSoil" class="modal-input" placeholder="Параметр влажности почвы (%)">
+                <input type="number" id="editParamTemp" class="modal-input" placeholder="Параметр температуры (°C)">
                 <input type="number" id="editParamWater" class="modal-input" placeholder="Параметр атм. давление (мм рт.ст.)">
             </div>
             
@@ -9216,32 +8809,47 @@ void handleDebug() {
     // Пользователи
     html += "<h2>📋 Таблица Users</h2><pre>";
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT id, username, email, gender, avatar, created_at FROM Users;", -1, &stmt, nullptr) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT id, username, email, gender, timezone, avatar, created_at FROM Users;", -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             html += "ID: " + String(sqlite3_column_int(stmt, 0)) +
                     " | User: " + String((const char*)sqlite3_column_text(stmt, 1)) +
                     " | Email: " + String((const char*)sqlite3_column_text(stmt, 2)) +
-                    " | Avatar: " + String((const char*)sqlite3_column_text(stmt, 4)) + "<br>";
+                    " | Gender: " + String((const char*)sqlite3_column_text(stmt, 3)) +
+                    " | TZ: " + String((const char*)sqlite3_column_text(stmt, 4)) +
+                    " | Avatar: " + String((const char*)sqlite3_column_text(stmt, 5)) + "<br>";
         }
         sqlite3_finalize(stmt);
+    } else {
+        html += "Ошибка запроса Users: " + String(sqlite3_errmsg(db));
     }
     html += "</pre>";
 
-    // Растения
-    html += "<h2>🌱 Таблица Plants</h2><pre>";
-    if (sqlite3_prepare_v2(db, "SELECT id, user_id, name, photo_path FROM Plants;", -1, &stmt, nullptr) == SQLITE_OK) {
+// === ТАБЛИЦА РАСТЕНИЙ ===
+    html += "<h2>🌱 Растения (Plants)</h2>";
+    if (sqlite3_prepare_v2(db, "SELECT id, user_id, name, comment, photo_path, temp_param, humidity_param, soil_param, pressure_param, created_at FROM Plants ORDER BY id;", -1, &stmt, nullptr) == SQLITE_OK) {
+        html += "<table><tr><th>ID</th><th>UserID</th><th>Название</th><th>Комментарий</th><th>Фото</th><th>Temp</th><th>Hum</th><th>Soil</th><th>Press</th><th>Создано</th></tr>";
+        bool hasPlants = false;
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            html += "ID: " + String(sqlite3_column_int(stmt, 0)) +
-                    " | UserID: " + String(sqlite3_column_int(stmt, 1)) +
-                    " | Name: " + String((const char*)sqlite3_column_text(stmt, 2)) +
-                    " | Photo: " + String((const char*)sqlite3_column_text(stmt, 3)) + "<br>";
+            hasPlants = true;
+            html += "<tr>";
+            html += "<td>" + String(sqlite3_column_int(stmt, 0)) + "</td>";
+            html += "<td>" + String(sqlite3_column_int(stmt, 1)) + "</td>";
+            html += "<td>" + String((const char*)sqlite3_column_text(stmt, 2) ? (const char*)sqlite3_column_text(stmt, 2) : "") + "</td>";
+            html += "<td>" + String((const char*)sqlite3_column_text(stmt, 3) ? (const char*)sqlite3_column_text(stmt, 3) : "") + "</td>";
+            html += "<td>" + String((const char*)sqlite3_column_text(stmt, 4) ? (const char*)sqlite3_column_text(stmt, 4) : "") + "</td>";
+            html += "<td>" + String(sqlite3_column_double(stmt, 5)) + "</td>";
+            html += "<td>" + String(sqlite3_column_double(stmt, 6)) + "</td>";
+            html += "<td>" + String(sqlite3_column_double(stmt, 7)) + "</td>";
+            html += "<td>" + String(sqlite3_column_double(stmt, 8)) + "</td>";
+            html += "<td>" + String(sqlite3_column_int(stmt, 9)) + "</td>";
+            html += "</tr>";
         }
         sqlite3_finalize(stmt);
+        if (!hasPlants) html += "<tr><td colspan='10' class='empty'>— Растений пока нет —</td></tr>";
+        html += "</table>";
     }
-    html += "</pre>";
-
-    // Сессии
-    html += "<h2>🔑 Сессии</h2><pre>";
+/*    // Сессии
+    html += "<h2> Сессии</h2><pre>";
     if (sqlite3_prepare_v2(db, "SELECT token, user_id, created_at FROM Sessions;", -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             html += "Token: " + String((const char*)sqlite3_column_text(stmt, 0)).substring(0,12) + "..." +
@@ -9250,7 +8858,22 @@ void handleDebug() {
         sqlite3_finalize(stmt);
     }
     html += "</pre>";
-
+*/
+    // === СЕССИИ ===
+    html += "<h2>🔑 Сессии (Sessions)</h2>";
+    if (sqlite3_prepare_v2(db, "SELECT id, token, user_id, created_at FROM Sessions ORDER BY id;", -1, &stmt, nullptr) == SQLITE_OK) {
+        html += "<table><tr><th>ID</th><th>Токен</th><th>UserID</th><th>Создано</th></tr>";
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            html += "<tr>";
+            html += "<td>" + String(sqlite3_column_int(stmt, 0)) + "</td>";
+            html += "<td>" + String((const char*)sqlite3_column_text(stmt, 1)) + "</td>";
+            html += "<td>" + String(sqlite3_column_int(stmt, 2)) + "</td>";
+            html += "<td>" + String(sqlite3_column_int(stmt, 3)) + "</td>";
+            html += "</tr>";
+        }
+        sqlite3_finalize(stmt);
+        html += "</table>";
+    }
     // Содержимое SD
     html += "<h2>💾 Содержимое SD-карты</h2><pre>";
     File root = SD.open("/");
@@ -9273,29 +8896,100 @@ void handleDebug() {
 #endif
 }
 
+// ====================== WiFi API ======================
+
+// GET /api/scan — сканирует доступные Wi-Fi сети и возвращает JSON
+void handleScan() {
+    int n = WiFi.scanNetworks();
+    String json = "[";
+    for (int i = 0; i < n; ++i) {
+        String ssid = WiFi.SSID(i);
+        ssid.replace("\"", "\\\"");
+        String enc = WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "OPEN" : "WPA2";
+        json += "{\"ssid\":\"" + ssid + "\",\"encryption\":\"" + enc + "\"}";
+        if (i < n - 1) json += ",";
+    }
+    json += "]";
+    WiFi.scanDelete();
+    server.sendHeader("Cache-Control", "no-cache");
+    server.send(200, "application/json", json);
+}
+
+// POST /api/configure — сохраняет SSID/пароль и подключается к новой сети
+void handleConfigure() {
+    if (!server.hasArg("ssid")) {
+        server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Отсутствует SSID\"}");
+        return;
+    }
+
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
+
+    // Сохраняем учётные данные в NVS
+    prefs.putString("wifi_ssid", ssid);
+    prefs.putString("wifi_pass", pass);
+
+    WiFi.disconnect(true);
+    delay(500);
+
+    if (pass.length() > 0) {
+        WiFi.begin(ssid.c_str(), pass.c_str());
+    } else {
+        WiFi.begin(ssid.c_str());
+    }
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 50) {
+        delay(500);
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        String ip = WiFi.localIP().toString();
+        Serial.println("[WiFi] Connected to " + ssid + " | IP: " + ip);
+        server.send(200, "application/json", "{\"status\":\"success\",\"ip\":\"" + ip + "\",\"message\":\"Подключено!\"}");
+    } else {
+        server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Не удалось подключиться. Проверьте пароль.\"}");
+    }
+}
+
 // ====================== SETUP ======================
 void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(800);
   Serial.println("\nESP32-C3 Sensor Module Starting...");
-  
+
+  // Открываем хранилище Wi-Fi учётных данных
+  prefs.begin("wifi-config", false);
+  String savedSsid = prefs.getString("wifi_ssid", String(STA_SSID));
+  String savedPass = prefs.getString("wifi_pass", String(STA_PASS));
+
+  // Запускаем AP + STA одновременно
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPConfig(ap_ip, ap_ip, ap_mask);
+  WiFi.softAP(AP_SSID, AP_PASS);
+  Serial.println("[WiFi] AP started: " + String(AP_SSID) + " | IP: " + WiFi.softAPIP().toString());
+
   WiFi.setHostname(MDNS_NAME);
-  WiFi.begin(STA_SSID, STA_PASS);
-  Serial.print("Connecting to WiFi");
-  int attempts = 15;
-  while (attempts-- && WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWiFi failed, starting AP mode");
-    WiFi.mode(WIFI_AP);
-    WiFi.softAPConfig(ap_ip, ap_ip, ap_mask);
-    WiFi.softAP(AP_SSID, AP_PASS);
-    Serial.println("AP: " + String(AP_SSID) + " | Pass: " + String(AP_PASS));
+  if (savedSsid.length() > 0) {
+    if (savedPass.length() > 0) {
+      WiFi.begin(savedSsid.c_str(), savedPass.c_str());
+    } else {
+      WiFi.begin(savedSsid.c_str());
+    }
+    Serial.print("Connecting to WiFi: " + savedSsid);
+    int attempts = 30;
+    while (attempts-- && WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\n[WiFi] Connected! IP: " + WiFi.localIP().toString());
+    } else {
+      Serial.println("\n[WiFi] STA connection failed, running AP-only mode");
+    }
   } else {
-    Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
+    Serial.println("[WiFi] No STA credentials, running AP-only mode");
   }
   
   if (MDNS.begin(MDNS_NAME)) {
@@ -9390,6 +9084,10 @@ void setup() {
     server.on("/time", handleTime);
     server.on("/clear", HTTP_POST, handleClear);
     server.on("/debug", handleDebug);
+
+    // WiFi API (для страницы настроек)
+    server.on("/api/scan", HTTP_GET, handleScan);
+    server.on("/api/configure", HTTP_POST, handleConfigure);
 
     // ВАЖНО: WebServer по умолчанию НЕ сохраняет произвольные заголовки.
     // Без этого server.header("Authorization") вернёт "" и вся авторизация сломается.
