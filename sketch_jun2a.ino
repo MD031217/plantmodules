@@ -27,7 +27,6 @@ IPAddress ap_subnet(255, 255, 255, 0);
 IPAddress ap_leaseStart(192, 168, 5, 2);
 IPAddress ap_dns(192, 168, 5, 1);
 
-// ===================== HTML-СТРАНИЦА =====================
 const char PAGE_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
@@ -439,7 +438,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                     </div>
                 </div>
 
-                <!-- ===== ПАНЕЛЬ КОНФИГУРАЦИИ ===== -->
                 <div id="configPanel">
                     <div style="background:rgba(33,200,95,0.06); border-radius:16px; padding:20px; margin-bottom:25px; border:1px solid rgba(33,200,95,0.2);">
                         <h4 style="margin:0 0 15px 0; color:var(--accent-green);">Настройка новой задачи</h4>
@@ -509,11 +507,8 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                     <div class="operations-list" id="operations-list"></div>
                 </div>
 
-                <!-- ===== ПАНЕЛЬ ЖУРНАЛА ===== -->
                 <div id="journalPanel">
                     <h3 class="section-title">История полива</h3>
-
-                    <!-- === НОВОЕ: Фильтр по клапанам и суммарный объём === -->
                     <div class="journal-filter-bar">
                         <label for="journal-valve-filter">Показать:</label>
                         <select id="journal-valve-filter" class="form-select">
@@ -535,7 +530,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                             <span class="value" id="journal-total-volume">0 мл</span>
                         </div>
                     </div>
-                    <!-- ================================================== -->
 
                     <div id="journal-content">
                         <table class="journal-table">
@@ -885,7 +879,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         }
     };
 
-    // === ИЗМЕНЁНО: renderJournal теперь читает фильтр и считает сумму ===
     function renderJournal() {
         const filterSelect = document.getElementById('journal-valve-filter');
         const filterValve = filterSelect ? parseInt(filterSelect.value) : 0;
@@ -985,7 +978,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         // === НОВОЕ: обработчик фильтра журнала ===
         const journalFilter = document.getElementById('journal-valve-filter');
         if (journalFilter) journalFilter.onchange = () => renderJournal();
-        // ========================================
 
         setTimeout(updateFormLogic, 100);
     }
@@ -1132,7 +1124,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         }
 
         updatePanel();
-        if (window.showNotification) window.showNotification('■ Клапан ' + manualState.valveId + ': ' + fmt(duration) + ', ~' + volume + ' мл');
+        if (window.showNotification) window.showNotification('Клапан ' + manualState.valveId + ': ' + fmt(duration) + ', ~' + volume + ' мл');
     };
 
     document.addEventListener('DOMContentLoaded', function() {
@@ -1147,10 +1139,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
-// ==========================================================
-
-
-// ===================== HTTP-ОБРАБОТЧИКИ =====================
 
 void handleRoot() {
   server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
@@ -1204,9 +1192,6 @@ void handleStates() {
   json += "]}";
   server.send(200, "application/json", json);
 }
-
-
-// ===================== SETUP & LOOP =====================
 
 void setup() {
   Serial.begin(115200);
