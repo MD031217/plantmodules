@@ -45,8 +45,857 @@ const char MAIN_HTML[] PROGMEM = R"rawliteral(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Модуль полива</title>
-    <link rel="stylesheet" href="myplant-style.css">
     <style>
+        :root {
+            /* ТЁМНАЯ ТЕМА */
+            --page-bg: #0F182B;
+            --text-main: #ffffff;
+            --accent-green: #21C85F;
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --glow-color: rgba(33, 200, 95, 0.6);
+            --glow-soft: rgba(33, 200, 95, 0.3);
+            --user-pill-bg: #1a2d45;
+            --user-pill-text: #a0aab5;
+            --nav-bg: #21C85F;
+            --nav-btn-bg: rgba(255, 255, 255, 0.25);
+            --label-bg: rgba(33, 200, 95, 0.15);
+            --label-text: #21C85F;
+            --footer-bg: #21C85F;
+            --switcher-bg: #1a2d45;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
+        }
+
+        .theme-light {
+            /* СВЕТЛАЯ ТЕМА */
+            --page-bg: #E8F0F2;
+            --text-main: #ffffff;
+            --accent-green: #10B981;
+            --card-bg: #ffffff;
+            --glow-color: rgba(16, 185, 129, 0.4);
+            --glow-soft: rgba(16, 185, 129, 0.2);
+            --user-pill-bg: #ffffff;
+            --user-pill-text: #8899aa;
+            --nav-bg: #10B981;
+            --nav-btn-bg: rgba(255, 255, 255, 0.3);
+            --label-bg: rgba(16, 185, 129, 0.15);
+            --label-text: #10B981;
+            --footer-bg: #10B981;
+            --switcher-bg: #ffffff;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--page-bg);
+            color: var(--text-main);
+            transition: background-color 0.4s ease;
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .mode-toggle {
+            display: none !important;
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .top-sticky-wrapper {
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            width: 100%;
+            background: transparent;
+            pointer-events: none;
+        }
+
+        .top-sticky-wrapper > * {
+            pointer-events: auto;
+        }
+
+        .site-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 40px;
+            background: transparent;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px); 
+            pointer-events: auto;
+            position: relative;
+            z-index: 2;
+        }
+
+        .user-pill {
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+            background: var(--user-pill-bg);
+            border-radius: 50px;
+            padding: 8px 16px 8px 8px;
+            gap: 10px;
+            width: 145px;
+            height: 44px;
+            box-shadow: 0 0 8px var(--glow-soft);
+            animation: userPulse 3s infinite alternate;
+            flex-shrink: 0;
+        }
+
+        @keyframes userPulse {
+            0% { box-shadow: 0 0 6px var(--glow-soft); }
+            100% { box-shadow: 0 0 16px var(--glow-color); }
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+            display: none;
+        }
+
+        body.theme-dark .avatar-dark {
+            display: block;
+        }
+
+        body.theme-light .avatar-light {
+            display: block;
+        }
+
+        .user-text {
+            font-size: 14px;
+            font-weight: 400;
+            color: var(--user-pill-text);
+            letter-spacing: 0.5px;
+        }
+
+        .logo-container {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+        }
+
+        .main-logo {
+            height: 100px;
+            display: none;
+            transition: height 0.3s ease;
+        }
+
+        body.theme-dark .logo-dark { display: block; }
+        body.theme-light .logo-light { display: block; }
+
+        .theme-switcher {
+            width: 48px;
+            height: 48px;
+            background: var(--switcher-bg);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 0 10px var(--glow-soft);
+            animation: switcherPulse 3s infinite alternate;
+            flex-shrink: 0;
+        }
+
+        @keyframes switcherPulse {
+            0% { box-shadow: 0 0 8px var(--glow-soft); }
+            100% { box-shadow: 0 0 18px var(--glow-color); }
+        }
+
+        .theme-icon-img {
+            width: 24px;
+            height: 24px;
+            filter: invert(1);
+        }
+
+        .theme-light .theme-icon-img { filter: invert(0); }
+
+        .navigation {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            background: var(--nav-bg);
+            border-radius: 40px;
+            padding: 6px;
+            margin: 0px 30px 35px 30px;
+            height: 52px;
+            pointer-events: auto;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); 
+        }
+
+        .nav-btn {
+            color: #ffffff;
+            text-decoration: none;
+            font-size: 18px;
+            font-weight: 600;
+            padding: 8px 22px;
+            border-radius: 30px;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            position: relative;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .nav-btn:hover,
+        .nav-btn.active {
+            background: rgba(255, 255, 255, 0.35);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+
+        .page-wrapper {
+            flex: 1;
+            padding: 0 20px;
+        }
+
+        .cards-area {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 40px;
+            padding: 20px 0 60px 0;
+            flex-wrap: wrap;
+        }
+
+        .plant-card {
+            width: 350px;
+            height: 420px;
+            background: var(--card-bg);
+            border-radius: 32px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            transition: transform 0.3s;
+            box-shadow: var(--card-internal-shadow);
+        }
+
+        .plant-card:hover { transform: translateY(-5px); }
+
+        .glowing {
+            animation: glowPulse 3s infinite alternate;
+        }
+
+        @keyframes glowPulse {
+            0% { 
+                box-shadow: 0 0 12px var(--glow-color), var(--card-internal-shadow); 
+            }
+            100% { 
+                box-shadow: 0 0 28px var(--glow-color), var(--card-internal-shadow); 
+            }
+        }
+
+        .plant-img {
+            width: 300px;
+            height: 300px;
+            object-fit: contain;
+            margin-bottom: 16px;
+        }
+
+        .plant-label {
+            background: var(--label-bg);
+            color: var(--label-text);
+            font-size: 19px;
+            font-weight: 300;
+            padding: 8px 32px;
+            border-radius: 24px;
+            text-decoration: none;  
+            display: inline-block;    
+        }
+
+        .add-card { cursor: pointer; }
+
+        .plus-icon {
+            display: none;
+            width: 90px;
+            height: 90px;
+            object-fit: contain;
+        }
+
+        body.theme-dark .icon-dark { display: block; }
+        body.theme-light .icon-light { display: block; }
+
+        .site-footer {
+            background: var(--footer-bg);
+            color: var(--footer-text);
+            padding: 36px 40px 0;
+            transition: background var(--transition-speed) ease;
+        }
+
+        .footer-columns {
+            display: grid;
+            grid-template-columns: 1.3fr 1fr 0.8fr;
+            gap: 30px;
+            max-width: 900px;
+            margin: 0 auto;
+            padding-bottom: 24px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .footer-column-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: var(--footer-column-title);
+        }
+
+        .footer-column-text {
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--footer-column-text);
+        }
+
+        .footer-column-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .footer-column-list li {
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--footer-column-text);
+        }
+
+        .footer-copyright {
+            text-align: center;
+            padding: 16px 0 12px;
+            font-size: 14px;
+            color: var(--footer-copy);
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .falling-leaf {
+            position: fixed;
+            pointer-events: none;
+            z-index: 9999;
+            animation: fallingLeaf var(--fall-duration, 3s) linear forwards;
+        }
+
+        .add-link {
+            display: flex; 
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* --- Стили для модального окна --- */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(15, 24, 43, 0.6); /* Полупрозрачный фон */
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 2000; /* Поверх всего */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 32px;
+            width: 90%;
+            max-width: 450px;
+            position: relative;
+            box-shadow: 0 0 30px var(--glow-soft);
+            animation: modalFadeIn 0.3s ease;
+            text-align: center;
+            color: var(--text-main);
+        }
+
+        /* Цвет текста внутри модального окна */
+        .modal-content h3, 
+        .modal-content .modal-title,
+        .modal-content .modal-title-sub {
+            color: var(--accent-green);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            line-height: 1.4;
+        }
+
+        .modal-title-sub {
+            margin-top: 20px;
+            font-size: 16px;
+        }
+
+        @keyframes modalFadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            background: var(--accent-green);
+            border: none;
+            color: white;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-input {
+            width: 100%;
+            padding: 14px 20px;
+            border-radius: 24px;
+            border: 2px solid var(--accent-green);
+            background: transparent;
+            font-size: 16px;
+            color: var(--accent-green);
+            box-sizing: border-box;
+            margin-bottom: 15px;
+            outline: none;
+        }
+
+        .modal-input::placeholder {
+            color: var(--accent-green);
+            opacity: 0.5;
+        }
+
+        .modal-photo-area {
+            margin: 20px 0;
+        }
+
+        .modal-preview-area {
+            margin: 15px 0 20px 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .plant-preview {
+            width: 120px;
+            height: 120px;
+            object-fit: contain;
+            margin-bottom: 5px;
+        }
+
+        .modal-caption {
+            font-size: 12px;
+            color: var(--text-main);
+            opacity: 0.6;
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .modal-link {
+            color: var(--accent-green);
+            font-size: 18px;
+            font-weight: 600;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .modal-btn {
+            width: 100%;
+            padding: 14px;
+            border-radius: 24px;
+            border: none;
+            background: rgba(16, 185, 129, 0.3); /* Полупрозрачный по умолчанию (Disabled) */
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 20px;
+            font-weight: 700;
+            cursor: not-allowed;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+        }
+
+        /* Активная кнопка (как на картинках) */
+        .modal-btn.active {
+            background: var(--accent-green);
+            color: #ffffff;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        /* Адаптив для мобильных */
+        @media (max-width: 480px) {
+            .modal-content {
+                padding: 20px;
+                width: 95%;
+            }
+            .modal-input {
+                padding: 12px 16px;
+                font-size: 14px;
+            }
+        }
+
+        /* Контейнер для динамических растений */
+        .plants-container {
+            display: contents;
+        }
+
+        /* Кнопка удаления растения */
+        .delete-plant-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 0, 0, 0.8);
+            color: white;
+            font-size: 22px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .plant-card:hover .delete-plant-btn {
+            opacity: 1;
+        }
+
+        .delete-plant-btn:hover {
+            background: rgba(255, 0, 0, 1);
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(255, 0, 0, 0.4);
+        }
+
+        /* Стили для модального окна по умолчанию скрыто */
+        .modal-overlay {
+            display: none; /* Переопределяем из базового CSS */
+        }
+
+        /* Кнопка редактирования (карандаш) */
+        .edit-plant-btn {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(33, 200, 95, 0.8);
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .plant-card:hover .edit-plant-btn {
+            opacity: 1;
+        }
+
+        .edit-plant-btn:hover {
+            background: var(--accent-green);
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(33, 200, 95, 0.4);
+        }
+
+        /* Адаптив кнопки редактирования */
+        @media (max-width: 768px) {
+            .edit-plant-btn {
+                opacity: 1;
+                top: 10px;
+                left: 10px;
+                width: 28px;
+                height: 28px;
+                font-size: 14px;
+            }
+        }
+        @media (max-width: 480px) {
+            .edit-plant-btn {
+                width: 26px;
+                height: 26px;
+                font-size: 12px;
+            }
+        }
+
+        /* Адаптив для кнопки удаления */
+        @media (max-width: 768px) {
+            .delete-plant-btn {
+                opacity: 1;
+                top: 10px;
+                right: 10px;
+                width: 28px;
+                height: 28px;
+                font-size: 18px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .delete-plant-btn {
+                width: 26px;
+                height: 26px;
+                font-size: 16px;
+            }
+        }
+
+        /* Стили для параметров в модальном окне */
+        .modal-params-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .modal-step {
+            animation: modalFadeIn 0.3s ease;
+        }
+
+        @keyframes fallingLeaf {
+            0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 1; }
+            100% { transform: translateY(110vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg)); opacity: 0; }
+        }
+
+        @media (max-width: 768px) {
+        /* Шапка */
+        .site-header { 
+            padding: 12px 16px; 
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .logo-container { 
+            position: relative !important;
+            left: auto !important;
+            transform: none !important;
+            order: -1; 
+            width: 100%; 
+            justify-content: center; 
+            margin-bottom: 0;
+        }
+
+        .main-logo { 
+            height: 80px; 
+        }
+
+        .user-pill { 
+            width: auto;
+            padding: 6px 12px 6px 6px;
+            height: 38px;
+            order: 1;
+            margin-right: auto;
+            animation: none; /* Отключаем анимацию для экономии батареи */
+        }
+
+        .user-avatar {
+            width: 26px;
+            height: 26px;
+        }
+
+        .user-text {
+            font-size: 13px;
+        }
+
+        .theme-switcher { 
+            position: relative !important;
+            top: auto !important;
+            right: auto !important;
+            width: 42px;
+            height: 42px;
+            order: 2;
+            animation: none; /* Отключаем анимацию для экономии батареи */
+        }
+
+        .theme-icon-img {
+            width: 20px;
+            height: 20px;
+        }
+
+        /* Навигация */
+        .navigation { 
+            order: 3;
+            margin: 8px 12px 20px 12px; 
+            flex-wrap: wrap; 
+            height: auto; 
+            gap: 6px; 
+            padding: 6px;
+            justify-content: center;
+        }
+
+        .nav-btn { 
+            padding: 8px 16px; 
+            font-size: 15px;
+            flex: 0 1 auto;
+        }
+
+        /* Карточки */
+        .page-wrapper {
+            padding: 0 12px;
+        }
+
+        .cards-area { 
+            gap: 20px; 
+            padding: 10px 0 40px 0;
+        }
+
+        .plant-card { 
+            width: 100%;
+            max-width: 340px;
+            height: auto; 
+            min-height: 360px;
+            padding: 20px;
+        }
+
+        .plant-img { 
+            width: 200px; 
+            height: 200px; 
+        }
+
+        .plant-label {
+            font-size: 17px;
+            padding: 6px 24px;
+        }
+
+        .plus-icon {
+            width: 70px;
+            height: 70px;
+        }
+
+        /* Подвал */
+        .footer-grid { 
+            flex-direction: column; 
+            text-align: center; 
+            gap: 30px; 
+            padding: 30px 20px 20px 20px; 
+        }
+
+        .footer-col {
+            text-align: center !important;
+        }
+
+        .footer-col h3 {
+            font-size: 19px;
+            margin-bottom: 10px;
+        }
+
+        .footer-col p {
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .copyright-bar {
+            padding: 12px;
+            font-size: 12px;
+        }
+
+        /* Листья */
+        .falling-leaf {
+            display: none; /* Отключаем падающие листья на мобильных для производительности */
+        }
+        }
+
+        /* Очень маленькие экраны */
+        @media (max-width: 480px) {
+        .site-header {
+            padding: 10px 12px;
+        }
+
+        .main-logo {
+            height: 80px;
+        }
+
+        .user-pill {
+            padding: 5px 10px 5px 5px;
+            height: 34px;
+            gap: 8px;
+        }
+
+        .user-avatar {
+            width: 24px;
+            height: 24px;
+        }
+
+        .user-text {
+            font-size: 12px;
+        }
+
+        .theme-switcher {
+            width: 38px;
+            height: 38px;
+        }
+
+        .navigation {
+            margin: 0px 8px 16px 8px;
+            padding: 5px;
+            gap: 5px;
+        }
+
+        .nav-btn {
+            padding: 7px 12px;
+            font-size: 14px;
+            border-radius: 24px;
+        }
+
+        .plant-card {
+            padding: 16px;
+            min-height: 320px;
+            border-radius: 24px;
+        }
+
+        .plant-img {
+            width: 160px;
+            height: 160px;
+            margin-bottom: 12px;
+        }
+
+        .plant-label {
+            font-size: 16px;
+            padding: 6px 20px;
+            border-radius: 20px;
+        }
+
+        .plus-icon {
+            width: 60px;
+            height: 60px;
+        }
+
+        .footer-grid {
+            padding: 25px 16px 16px 16px;
+            gap: 24px;
+        }
+
+        .footer-col h3 {
+            font-size: 17px;
+        }
+
+        .footer-col p {
+            font-size: 12px;
+        }
         /* Дополнительные стили для страницы полива */
         .irrigation-container {
             display: flex;
