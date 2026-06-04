@@ -397,7 +397,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                     <button class="tab" data-tab="journal">Журнал</button>
                 </div>
 
-                <!-- ===== ПАНЕЛЬ РУЧНОГО УПРАВЛЕНИЯ ===== -->
                 <div id="manualPanel" style="display: none;">
                     <div style="text-align: center; padding: 30px 20px;">
                         <select class="form-select" id="manual-valve-select" style="margin-bottom: 25px;">
@@ -509,6 +508,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
 
                 <div id="journalPanel">
                     <h3 class="section-title">История полива</h3>
+
                     <div class="journal-filter-bar">
                         <label for="journal-valve-filter">Показать:</label>
                         <select id="journal-valve-filter" class="form-select">
@@ -975,7 +975,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         const valveSel = document.getElementById('input-valve-select');
         if (valveSel) valveSel.onchange = function() { switchValve(+this.value); };
 
-        // === НОВОЕ: обработчик фильтра журнала ===
         const journalFilter = document.getElementById('journal-valve-filter');
         if (journalFilter) journalFilter.onchange = () => renderJournal();
 
@@ -1002,7 +1001,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
     function stopScheduleSimulation() { if (simulatedScheduleInterval) clearInterval(simulatedScheduleInterval); }
 })();
 
-// ===== РУЧНОЕ УПРАВЛЕНИЕ КЛАПАНОМ — СВЯЗЬ С ESP32 =====
 (function() {
     'use strict';
     const DB_KEY = 'greenShelfWateringDB';
@@ -1139,6 +1137,10 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+// ==========================================================
+
+
+// ===================== HTTP-ОБРАБОТЧИКИ =====================
 
 void handleRoot() {
   server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
