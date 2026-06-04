@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <FS.h>
 #include <WebServer.h>
+#include <sqlite3.h>
+#include <ArduinoJson.h>
 
 #include "AmperkaFET.h"
 
@@ -14,22 +16,88 @@
 #define NUM_VALVES   8
 
 #define FLOW_RATE_ML 2.23
+#define DB_PATH "/sd/watering.db"
 
 FET mosfet(PIN_CS_FET);
 WebServer server(80);
 
 bool valveStates[NUM_VALVES] = {false};
+volatile uint32_t flowmetr = 0;
+sqlite3 *db = NULL;
 
 char ap_ssid[]     = "RoboLab";
 char ap_password[] = "Qwe123!!";
 const char* espName = "mWatering";
 
-volatile uint32_t flowmetr = 0;
-
 IPAddress ap_ip(192, 168, 5, 1);
 IPAddress ap_subnet(255, 255, 255, 0);
 IPAddress ap_leaseStart(192, 168, 5, 2);
 IPAddress ap_dns(192, 168, 5, 1);
+
+
+bool initDatabase() {
+  if (!SD.exists("/sd")) {
+    SD.mkdir("/sd");
+  }
+  
+  int rc = sqlite3_open(DB_PATH, &db);
+  if (rc != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка открытия БД: %s\n", sqlite3_errmsg(db));
+    return false;
+  }
+
+  const char* createValvesSQL = 
+    "CREATE TABLE IF NOT EXISTS valves ("
+    "  id INTEGER PRIMARY KEY,"
+    "  plant_name TEXT DEFAULT '—',"
+    "  active INTEGER DEFAULT 0"
+    ");";
+  
+  const char* createJournalSQL = 
+    "CREATE TABLE IF NOT EXISTS journal ("
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  ts TEXT NOT NULL,"
+    "  valve_id INTEGER NOT NULL,"
+    "  type TEXT NOT NULL,"
+    "  duration_sec INTEGER NOT NULL,"
+    "  volume_ml REAL NOT NULL,"
+    "  status TEXT DEFAULT 'completed'"
+    ");";
+
+  char* errMsg = NULL;
+  if (sqlite3_exec(db, createValvesSQL, NULL, NULL, &errMsg) != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка создания таблицы valves: %s\n", errMsg);
+    sqlite3_free(errMsg);
+  }
+  if (sqlite3_exec(db, createJournalSQL, NULL, NULL, &errMsg) != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка создания таблицы journal: %s\n", errMsg);
+    sqlite3_free(errMsg);
+  }
+
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM valves;", -1, &stmt, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      int count = sqlite3_column_int(stmt, 0);
+      if (count == 0) {
+        sqlite3_finalize(stmt);
+        const char* insertSQL = "INSERT INTO valves (id, plant_name, active) VALUES (?, '—', 0);";
+        sqlite3_prepare_v2(db, insertSQL, -1, &stmt, NULL);
+        for (int i = 1; i <= NUM_VALVES; i++) {
+          sqlite3_bind_int(stmt, 1, i);
+          sqlite3_step(stmt);
+          sqlite3_reset(stmt);
+        }
+        Serial.println("[SQLite] Таблица valves инициализирована 8 клапанами");
+      } else {
+        Serial.printf("[SQLite] В базе уже есть %d записей клапанов\n", count);
+      }
+    }
+    sqlite3_finalize(stmt);
+  }
+
+  Serial.println("[SQLite] База данных успешно инициализирована");
+  return true;
+}
 
 const char PAGE_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -304,7 +372,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         .esp-status.online  .esp-dot { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
         .esp-status.offline .esp-dot { background: #dc2626; }
 
-        /* === ИЗМЕНЕНО: панель фильтра в одну строку === */
         .journal-filter-bar {
             display: flex;
             gap: 12px;
@@ -363,7 +430,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         }
         .journal-count-box b { color: var(--accent-green); }
 
-        /* === ИЗМЕНЕНО: кнопка очистки — только иконка === */
         .btn-clear-journal {
             background: rgba(244, 67, 54, 0.12);
             color: #dc2626;
@@ -393,6 +459,14 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
             opacity: 0.4;
             cursor: not-allowed;
             transform: none;
+        }
+        
+        .ntp-clock {
+            text-align: center;
+            font-size: 14px;
+            color: var(--user-pill-text);
+            margin-bottom: 8px;
+            font-weight: 500;
         }
     </style>
 </head>
@@ -425,6 +499,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
             <div class="valves-sidebar" id="valvesSidebar"></div>
 
             <div class="main-content">
+                <div class="ntp-clock" id="ntpClock">Загрузка времени...</div>
                 <div class="content-header">
                     <h1 class="page-title">Конфигурация модуля полива
                         <span class="esp-status offline" id="espStatus"><span class="esp-dot"></span>Контроллер</span>
@@ -549,7 +624,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                 <div id="journalPanel">
                     <h3 class="section-title">История полива</h3>
 
-                    <!-- === ИЗМЕНЕНО: всё в одну строку, кнопка справа от "всего вылилось" === -->
                     <div class="journal-filter-bar">
                         <label for="journal-valve-filter">Показать:</label>
                         <select id="journal-valve-filter" class="form-select">
@@ -648,610 +722,461 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
 <script>
-(function () {
-    'use strict';
-    const DB_KEY = 'greenShelfWateringDB';
-    const LOG_KEY = 'greenShelfWateringLog';
-    const THEME_KEY = 'greenShelfTheme';
-    const PLANTS_KEY = 'myPlants';
+let appState = {
+    valves: {},
+    journal: [],
+    currentValve: 1,
+    manualState: { isActive: false, startTime: null, valveId: null, timerId: null }
+};
 
-    let db = {};
-    let currentValve = 1;
-    let plantsMap = {};
-    let saveTimeout = null;
-    let simulatedScheduleInterval = null;
+async function init() {
+    loadTheme();
+    setupThemeToggle();
+    await loadFromDB();
+    renderSidebar();
+    renderJournal();
+    setupListeners();
+    startClock();
+    syncWithESP();
+}
 
-    const DEFAULT_DB = {};
-    for (let i = 1; i <= 8; i++) {
-        DEFAULT_DB[i] = {
-            active: 0, pin_number: i - 1, max_duration_sec: 300, daily_limit_ml: 5000, moisture_mode: 0,
-            task: { schedule_type: 'daily', schedule_time: '08:00', schedule_days: '', schedule_interval_min: 60,
-                    priority: 5, cycle_repeat: 1, max_duration_sec: 600, max_volume_ml: 1000, operations: [], weekly_days: {} },
-            sensor: { active: 0, check_interval_min: 30, target_moisture_percent: 65, max_watering_duration_sec: 180, min_pause_hours: 2, last_moisture_percent: 0 }
-        };
-    }
+function loadTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.body.className = 'theme-' + savedTheme;
+}
 
-    function init() {
-        loadTheme();
-        loadData();
-        loadPlants();
-        renderSidebar();
-        switchValve(1);
-        setupListeners();
-        updateFormLogic();
-        renderJournal();
-        makeAllButtonsClickable();
-        startScheduleSimulation();
-        syncWithESP();
-    }
-
-    function syncWithESP() {
-        fetch('/states')
-            .then(r => r.json())
-            .then(data => {
-                if (data.states && Array.isArray(data.states)) {
-                    data.states.forEach((state, idx) => {
-                        const valveId = idx + 1;
-                        if (db[valveId]) db[valveId].active = state ? 1 : 0;
-                    });
-                    saveData();
-                    renderSidebar();
-                    setESPStatus(true);
-                }
-            })
-            .catch(e => {
-                console.log('ESP32 недоступен, работаем автономно');
-                setESPStatus(false);
-            });
-    }
-
-    function setESPStatus(online) {
-        const el = document.getElementById('espStatus');
-        if (!el) return;
-        el.className = 'esp-status ' + (online ? 'online' : 'offline');
-        el.innerHTML = '<span class="esp-dot"></span>' + (online ? 'Подключён' : 'Нет связи');
-    }
-
-    function loadTheme() {
-        const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
-        document.body.className = 'theme-' + savedTheme;
-    }
-    function toggleTheme() {
-        const isDark = document.body.classList.contains('theme-dark');
-        const newTheme = isDark ? 'light' : 'dark';
-        document.body.className = 'theme-' + newTheme;
-        localStorage.setItem(THEME_KEY, newTheme);
-    }
-
-    function loadData() {
-        const saved = localStorage.getItem(DB_KEY);
-        db = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(DEFAULT_DB));
-    }
-    function saveData() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-    function saveAllData() { collectUI(currentValve); saveData(); showNotification('Настройки сохранены'); }
-    function applyToAll() {
-        collectUI(currentValve);
-        const currentSettings = JSON.parse(JSON.stringify(db[currentValve]));
-        for (let i = 1; i <= 8; i++) {
-            if (i !== currentValve) {
-                db[i].task = JSON.parse(JSON.stringify(currentSettings.task));
-                db[i].sensor = JSON.parse(JSON.stringify(currentSettings.sensor));
-                db[i].active = currentSettings.active;
-            }
-        }
-        saveData(); renderSidebar();
-        showNotification('Настройки применены ко всем клапанам');
-    }
-    function loadPlants() {
-        const saved = localStorage.getItem(PLANTS_KEY);
-        if (saved) JSON.parse(saved).forEach(p => { if (p.valve) plantsMap[p.valve] = p.name; });
-    }
-    function debounceSave() {
-        clearTimeout(saveTimeout);
-        saveTimeout = setTimeout(() => { collectUI(currentValve); saveData(); }, 800);
-    }
-
-    function startScheduleSimulation() {
-        simulatedScheduleInterval = setInterval(() => {
-            const now = new Date();
-            const currentDay = now.getDay() || 7;
-            const currentTime = now.toTimeString().slice(0, 5);
-            for (let valveId = 1; valveId <= 8; valveId++) {
-                const valve = db[valveId];
-                if (!valve || !valve.active || !valve.task) continue;
-                const t = valve.task;
-                let shouldWater = false, triggerType = 'schedule';
-                switch (t.schedule_type) {
-                    case 'daily': if (t.schedule_time === currentTime) shouldWater = true; break;
-                    case 'weekly':
-                        const days = (t.schedule_days || '').split(',').map(Number);
-                        if (days.includes(currentDay) && t.schedule_time === currentTime) shouldWater = true;
-                        break;
-                    case 'interval':
-                        if (t.schedule_interval_min > 0 && now.getMinutes() % t.schedule_interval_min === 0 && now.getSeconds() < 10) shouldWater = true;
-                        break;
-                    case 'once': if (t.schedule_time === currentTime) shouldWater = true; break;
-                }
-                if (shouldWater) {
-                    addLogEntry({ valve: valveId, type: triggerType, duration: 30, volume: 200, status: 'completed' });
-                }
-            }
-        }, 10000);
-    }
-
-    function renderSidebar() {
-        const container = document.getElementById('valvesSidebar');
-        if (!container) return;
-        container.innerHTML = '';
-        for (let i = 1; i <= 8; i++) {
-            const d = db[i];
-            const plant = plantsMap[i] || '—';
-            const statusText = d.active ? (d.moisture_mode ? 'By Moisture' : 'Active') : 'Неактивен';
-            const statusClass = d.active ? '' : 'inactive';
-            container.innerHTML +=
-                '<div class="valve-item ' + (i === currentValve ? 'active' : '') + '" data-valve="' + i + '" onclick="switchValve(' + i + ')">' +
-                    '<div class="valve-header"><span class="valve-title"><span class="valve-number">' + i + '</span>Клапан ' + i + '</span></div>' +
-                    '<div class="valve-info">Pin: ' + d.pin_number + '</div>' +
-                    '<div class="valve-info">Макс: ' + d.max_duration_sec + ' сек</div>' +
-                    '<div class="valve-info">Лимит: ' + (d.daily_limit_ml > 0 ? d.daily_limit_ml + ' мл' : '—') + '</div>' +
-                    '<div class="valve-info">Растение: ' + plant + '</div>' +
-                    '<span class="valve-status ' + statusClass + '">' + statusText + '</span>' +
-                '</div>';
-        }
-    }
-
-    window.renderSidebar = renderSidebar;
-    window.saveData = saveData;
-    window.getDb = function() { return db; };
-    window.setDbValveActive = function(valveId, active) {
-        if (db[valveId]) {
-            db[valveId].active = active ? 1 : 0;
-        }
-    };
-
-    window.switchValve = function(id) {
-        collectUI(currentValve);
-        currentValve = id;
-        renderSidebar();
-        applyUI(id);
-        updateFormLogic();
-    };
-
-    function applyUI(id) {
-        const d = db[id]; if (!d) return;
-        const t = d.task, s = d.sensor;
-        const setVal = (elId, val) => { const el = document.getElementById(elId); if (el) el.value = val ?? ''; };
-        setVal('input-valve-select', id);
-        setVal('input-schedule-type', t.schedule_type);
-        setVal('input-time', t.schedule_time || '');
-        setVal('input-days', t.schedule_days || '');
-        setVal('input-interval', t.schedule_interval_min || '');
-        setVal('input-priority', t.priority);
-        setVal('input-cycles', t.cycle_repeat);
-
-        const opsList = document.getElementById('operations-list');
-        if (opsList) {
-            opsList.innerHTML = '';
-            t.operations.forEach((op, idx) => {
-                if (op.type !== 'TASK_SUMMARY') return;
-                const details = op.details || {};
-                opsList.insertAdjacentHTML('beforeend',
-                    '<div style="background:linear-gradient(135deg,#28a745 0%,#20c997 100%);color:white;padding:16px;border-radius:12px;margin:8px 0;">' +
-                        '<div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:12px;">' +
-                            '<h4 style="margin:0;font-size:15px;">' + (op.label || 'Задача') + '</h4>' +
-                            '<button class="btn-delete" onclick="deleteOperation(' + idx + ')" style="background:rgba(255,255,255,0.2);border:none;color:white;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:18px;">×</button>' +
-                        '</div>' +
-                        '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;font-size:13px;">' +
-                            '<div><b>Расписание:</b><br><span style="opacity:0.9;">' + (details.schedule || '—') + '</span></div>' +
-                            '<div><b>Приоритет:</b><br><span style="opacity:0.9;">' + (details.priority || '—') + '</span></div>' +
-                            '<div><b>Циклы:</b><br><span style="opacity:0.9;">' + (details.cycles || '—') + '</span></div>' +
-                            '<div><b>Длит.:</b><br><span style="opacity:0.9;">' + (details.limits?.duration || '—') + '</span></div>' +
-                            '<div><b>Объём:</b><br><span style="opacity:0.9;">' + (details.limits?.volume || '—') + '</span></div>' +
-                            '<div><b>Добавлено:</b><br><span style="opacity:0.9;">' + (op.timestamp || '') + '</span></div>' +
-                        '</div>' +
-                    '</div>');
-            });
-            if (t.operations.filter(op => op.type === 'TASK_SUMMARY').length === 0) {
-                opsList.innerHTML = '<div style="text-align:center;padding:30px;color:#64748b;font-style:italic;">Задач пока нет.</div>';
-            }
-        }
-
-        const sensorToggle = document.getElementById('input-sensor-active');
-        if (sensorToggle) s.active ? sensorToggle.classList.add('on') : sensorToggle.classList.remove('on');
-        setVal('input-sensor-interval', s.check_interval_min);
-        setVal('input-target-moisture', s.target_moisture_percent);
-        setVal('input-sensor-duration', s.max_watering_duration_sec);
-        setVal('input-min-pause', s.min_pause_hours);
-        setVal('input-last-moisture', s.last_moisture_percent);
-    }
-
-    window.addTaskOperation = function() {
-        const getVal = (id) => document.getElementById(id)?.value || '';
-        const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
-        const valve = getVal('input-valve-select') || currentValve;
-        const scheduleType = getVal('input-schedule-type') || 'daily';
-        const scheduleTime = getVal('input-time') || '08:00';
-        const scheduleDays = getVal('input-days') || '';
-        const interval = getVal('input-interval') || '60';
-        const priority = getNum('input-priority', 5);
-        const cycles = getNum('input-cycles', 1);
-        const waterVolume = getNum('input-water-volume', 200);
-        const waterDuration = getNum('input-water-duration', 30);
-
-        let scheduleDesc = '';
-        switch (scheduleType) {
-            case 'daily': scheduleDesc = 'Ежедневно в ' + scheduleTime; break;
-            case 'weekly': scheduleDesc = 'Еженедельно: дни ' + (scheduleDays || '—'); break;
-            case 'interval': scheduleDesc = 'Каждые ' + interval + ' мин'; break;
-            case 'once': scheduleDesc = 'Однократно: ' + scheduleTime; break;
-            case 'sunrise': scheduleDesc = 'На рассвете (авто)'; break;
-            case 'sunset': scheduleDesc = 'На закате (авто)'; break;
-            default: scheduleDesc = scheduleType;
-        }
-
-        const task = {
-            type: 'TASK_SUMMARY',
-            label: 'Задача для Клапана ' + valve,
-            details: {
-                schedule: scheduleDesc, priority: priority, cycles: cycles,
-                limits: { duration: waterDuration + ' сек', volume: waterVolume + ' мл' }
-            },
-            timestamp: new Date().toLocaleString('ru-RU'),
-            _params: {
-                valve: parseInt(valve), schedule_type: scheduleType, schedule_time: scheduleTime,
-                schedule_days: scheduleDays, schedule_interval_min: parseInt(interval),
-                duration_sec: waterDuration, volume_ml: waterVolume, priority: priority, cycles: cycles
-            }
-        };
-        db[currentValve].task.operations.push(task);
-        applyUI(currentValve); saveData();
-        showNotification('Задача добавлена: ' + waterVolume + ' мл / ' + waterDuration + ' сек');
-    };
-
-    window.deleteOperation = function(idx) {
-        if (!confirm('Удалить задачу?')) return;
-        db[currentValve].task.operations.splice(idx, 1);
-        applyUI(currentValve); saveData();
-        showNotification('Задача удалена');
-    };
-
-    window.updateFormLogic = function() {
-        const type = document.getElementById('input-schedule-type')?.value;
-        if (!type) return;
-        const timeGroup = document.getElementById('group-time');
-        const daysGroup = document.getElementById('group-days');
-        const intervalGroup = document.getElementById('group-interval');
-        const weeklyContainer = document.getElementById('weekly-details-container');
-        const toggle = (el, show) => { if (!el) return; el.style.display = show ? 'block' : 'none'; };
-        toggle(timeGroup, false); toggle(daysGroup, false); toggle(intervalGroup, false);
-        if (weeklyContainer) { weeklyContainer.style.display = 'none'; weeklyContainer.innerHTML = ''; }
-        switch (type) {
-            case 'daily': case 'once': toggle(timeGroup, true); break;
-            case 'weekly': toggle(timeGroup, true); toggle(daysGroup, true); break;
-            case 'interval': toggle(intervalGroup, true); break;
-        }
-    };
-
-    // === ИЗМЕНЕНО: округление до сотых ===
-    function renderJournal() {
-        const filterSelect = document.getElementById('journal-valve-filter');
-        const filterValve = filterSelect ? parseInt(filterSelect.value) : 0;
-
-        const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
-        const tbody = document.getElementById('journal-tbody');
-        const emptyMsg = document.getElementById('journal-empty');
-        const totalEl = document.getElementById('journal-total-volume');
-        const countEl = document.getElementById('journal-count');
-
-        if (!tbody) return;
-
-        const filtered = filterValve ? logs.filter(l => l.valve === filterValve) : logs;
-        const totalVolume = filtered.reduce((sum, log) => sum + (Number(log.volume) || 0), 0);
-
-        if (totalEl) totalEl.textContent = totalVolume.toFixed(2) + ' мл';
-        if (countEl) countEl.textContent = filtered.length;
-
-        tbody.innerHTML = '';
-        if (filtered.length === 0) {
-            if (emptyMsg) emptyMsg.style.display = 'block';
-            return;
-        }
-        if (emptyMsg) emptyMsg.style.display = 'none';
-
-        filtered.sort((a, b) => new Date(b.ts) - new Date(a.ts)).forEach(log => {
-            const statusClass = log.status === 'completed' ? 'status-success' : (log.status === 'failed' ? 'status-fail' : 'status-pending');
-            const typeText = { schedule: 'Расписание', sensor: 'Датчик', manual: 'Вручную' }[log.type] || log.type;
-            const statusText = { completed: 'Успешно', failed: 'Провалено', pending: 'В ожидании' }[log.status] || '?';
-            const volDisplay = Number(log.volume).toFixed(2);
-            tbody.innerHTML += '<tr><td>' + new Date(log.ts).toLocaleString('ru-RU') + '</td><td><b>Клапан ' + log.valve + '</b></td><td>' + typeText + '</td><td>' + log.duration + ' сек</td><td>' + volDisplay + ' мл</td><td><span class="status-badge ' + statusClass + '">' + statusText + '</span></td></tr>';
+function setupThemeToggle() {
+    const themeSwitcher = document.querySelector('.theme-switcher');
+    if (themeSwitcher) {
+        themeSwitcher.addEventListener('click', () => {
+            const isDark = document.body.classList.contains('theme-dark');
+            const newTheme = isDark ? 'light' : 'dark';
+            document.body.className = 'theme-' + newTheme;
+            localStorage.setItem('theme', newTheme);
         });
     }
+}
 
-    window.renderJournal = renderJournal;
-
-    function addLogEntry(data) {
-        if (!data || !data.valve) return;
-        const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
-        logs.push({ ts: new Date().toISOString(), valve: data.valve, type: data.type, duration: data.duration, volume: data.volume, status: data.status || 'completed' });
-        localStorage.setItem(LOG_KEY, JSON.stringify(logs));
-        renderJournal();
-    }
-
-    window.clearValveJournal = function() {
-        const filterSelect = document.getElementById('journal-valve-filter');
-        const filterValve = filterSelect ? parseInt(filterSelect.value) : 0;
-        const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
-
-        let filteredLogs;
-        let msg;
-
-        if (filterValve === 0) {
-            if (logs.length === 0) {
-                showNotification('Журнал уже пуст');
-                return;
-            }
-            if (!confirm('Удалить ВСЕ записи журнала?\nЗаписей: ' + logs.length)) return;
-            filteredLogs = [];
-            msg = 'Журнал полностью очищен (записей: ' + logs.length + ')';
-        } else {
-            const countBefore = logs.length;
-            filteredLogs = logs.filter(l => l.valve !== filterValve);
-            const removed = countBefore - filteredLogs.length;
-            if (removed === 0) {
-                showNotification('Записей по Клапану ' + filterValve + ' нет');
-                return;
-            }
-            if (!confirm('Удалить записи по Клапану ' + filterValve + '?\nБудет удалено записей: ' + removed)) return;
-            msg = 'Удалено записей по Клапану ' + filterValve + ': ' + removed;
-        }
-
-        localStorage.setItem(LOG_KEY, JSON.stringify(filteredLogs));
-        renderJournal();
-        showNotification(msg);
-    };
-
-    window.switchTab = function(tabName) {
-        document.getElementById('configPanel').style.display = 'none';
-        document.getElementById('journalPanel').style.display = 'none';
-        document.getElementById('manualPanel').style.display = 'none';
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        if (tabName === 'manual') {
-            document.getElementById('manualPanel').style.display = 'block';
-            document.querySelector('.tab[data-tab="manual"]').classList.add('active');
-        } else if (tabName === 'config') {
-            document.getElementById('configPanel').style.display = 'block';
-            document.querySelector('.tab[data-tab="config"]').classList.add('active');
-        } else if (tabName === 'journal') {
-            document.getElementById('journalPanel').style.display = 'block';
-            document.querySelector('.tab[data-tab="journal"]').classList.add('active');
-            renderJournal();
-        }
-    };
-
-    function collectUI(id) {
-        const d = db[id]; if (!d) return;
-        const t = d.task, s = d.sensor;
-        const getVal = (elId) => document.getElementById(elId)?.value;
-        const getNum = (elId, def) => { const v = parseInt(getVal(elId)); return isNaN(v) ? def : v; };
-        t.schedule_type = getVal('input-schedule-type') || 'daily';
-        t.priority = getNum('input-priority', 5);
-        t.cycle_repeat = getNum('input-cycles', 1);
-        t.schedule_time = getVal('input-time');
-        t.schedule_days = getVal('input-days') || '';
-        t.schedule_interval_min = getNum('input-interval', 0);
-        const sensorToggle = document.getElementById('input-sensor-active');
-        s.active = sensorToggle?.classList.contains('on') ? 1 : 0;
-        s.check_interval_min = getNum('input-sensor-interval', 30);
-        s.target_moisture_percent = getNum('input-target-moisture', 65);
-        s.max_watering_duration_sec = getNum('input-sensor-duration', 180);
-        s.min_pause_hours = getNum('input-min-pause', 2);
-        s.last_moisture_percent = getNum('input-last-moisture', 0);
-    }
-
-    function setupListeners() {
-        const themeBtn = document.querySelector('.theme-switcher');
-        if (themeBtn) themeBtn.onclick = toggleTheme;
-        const sched = document.getElementById('input-schedule-type');
-        if (sched) sched.onchange = () => { updateFormLogic(); debounceSave(); };
-        document.querySelectorAll('.tab').forEach(tab => tab.onclick = function() { switchTab(this.dataset.tab); });
-        const sensTog = document.getElementById('input-sensor-active');
-        if (sensTog) sensTog.onclick = function() { this.classList.toggle('on'); debounceSave(); };
-        const valveSel = document.getElementById('input-valve-select');
-        if (valveSel) valveSel.onchange = function() { switchValve(+this.value); };
-
-        const journalFilter = document.getElementById('journal-valve-filter');
-        if (journalFilter) journalFilter.onchange = () => renderJournal();
-
-        setTimeout(updateFormLogic, 100);
-    }
-
-    function makeAllButtonsClickable() {}
-
-    function showNotification(msg) {
-        const ex = document.getElementById('gs-notify'); if (ex) ex.remove();
-        const n = document.createElement('div');
-        n.id = 'gs-notify';
-        n.style.cssText = 'position:fixed;top:20px;right:20px;background:var(--accent-green,#28a745);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);font-family:system-ui,sans-serif;transition:opacity .3s;';
-        n.textContent = msg;
-        document.body.appendChild(n);
-        setTimeout(() => { n.style.opacity = '0'; setTimeout(() => n.remove(), 300); }, 2500);
-    }
-
-    window.showNotification = showNotification;
-
-    window.addEventListener('beforeunload', () => { stopScheduleSimulation(); collectUI(currentValve); saveData(); });
-    document.addEventListener('DOMContentLoaded', () => { init(); });
-
-    function stopScheduleSimulation() { if (simulatedScheduleInterval) clearInterval(simulatedScheduleInterval); }
-})();
-
-(function() {
-    'use strict';
-    const DB_KEY = 'greenShelfWateringDB';
-    const LOG_KEY = 'greenShelfWateringLog';
-    let db = {};
-    let manualState = { isActive: false, startTime: null, valveId: null, timerId: null };
-
-    const DEFAULT_DB = {};
-    for (let i = 1; i <= 8; i++) {
-        DEFAULT_DB[i] = { active: 0, task: { operations: [] } };
-    }
-
-    function loadData() {
-        const saved = localStorage.getItem(DB_KEY);
-        db = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(DEFAULT_DB));
-    }
-    function saveData() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-
-    function fmt(sec) {
-        const m = Math.floor(sec / 60).toString().padStart(2, '0');
-        const s = (sec % 60).toString().padStart(2, '0');
-        return m + ':' + s;
-    }
-
-    function updatePanel() {
-        const st = document.getElementById('manual-status');
-        const tm = document.getElementById('manual-timer');
-        const vl = document.getElementById('manual-volume');
-        const on = document.getElementById('btn-manual-on');
-        const off = document.getElementById('btn-manual-off');
-        if (!st || !tm || !vl || !on || !off) return;
-
-        if (manualState.isActive) {
-            const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
-            tm.textContent = fmt(elapsed);
-            if (!manualState.realVolume) {
-                vl.textContent = 'Измерение...';
-            }
-            st.textContent = 'Работает'; st.style.color = '#22c55e';
-            on.disabled = true; off.disabled = false;
-            on.style.opacity = '0.5'; off.style.opacity = '1';
-        } else {
-            tm.textContent = '00:00'; vl.textContent = '—';
-            st.textContent = 'Ожидание'; st.style.color = 'var(--accent-green)';
-            on.disabled = false; off.disabled = true;
-            on.style.opacity = '1'; off.style.opacity = '0.5';
-        }
-    }
-
-    window.startWatering = async function() {
-        if (manualState.isActive) return;
-        const sel = document.getElementById('manual-valve-select');
-        if (!sel) return;
-
-        manualState.valveId = parseInt(sel.value);
-        manualState.realVolume = null;
-
-        try {
-            const response = await fetch('/valve?id=' + (manualState.valveId - 1) + '&state=1');
-            const data = await response.json();
-            if (!data.ok) {
-                if (window.showNotification) window.showNotification('Ошибка: ' + (data.error || 'неизвестная'));
-                return;
-            }
-        } catch (e) {
-            if (window.showNotification) window.showNotification('⚠ Контроллер недоступен');
-            return;
-        }
-
-        manualState.startTime = Date.now();
-        manualState.isActive = true;
-
-        if (window.setDbValveActive) window.setDbValveActive(manualState.valveId, true);
-        if (window.saveData) window.saveData();
-        if (window.renderSidebar) window.renderSidebar();
-
-        manualState.timerId = setInterval(() => {
-            const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
-            const tm = document.getElementById('manual-timer');
-            if (tm) tm.textContent = fmt(elapsed);
-        }, 1000);
-
-        updatePanel();
-        if (window.showNotification) window.showNotification('Клапан ' + manualState.valveId + ' открыт');
-    };
-
-    // === ИЗМЕНЕНО: округление до сотых ===
-    window.stopWatering = async function() {
-        if (!manualState.isActive) return;
-
-        let realVolumeMl = 0;
-        let pulses = 0;
-
-        try {
-            await fetch('/valve?id=' + (manualState.valveId - 1) + '&state=0');
-        } catch (e) {
-            console.log('Ошибка связи при выключении');
-        }
-
-        try {
-            const flowResponse = await fetch('/flowmeter');
-            const flowData = await flowResponse.json();
-            if (flowData.ok) {
-                pulses = flowData.pulses || 0;
-                realVolumeMl = flowData.volume_ml || 0;
-                manualState.realVolume = realVolumeMl;
-            }
-        } catch (e) {
-            console.log('Не удалось получить данные с расходометра');
-        }
-
-        clearInterval(manualState.timerId);
-        const duration = Math.floor((Date.now() - manualState.startTime) / 1000);
-
-        manualState.isActive = false;
-        manualState.timerId = null;
-
-        if (window.setDbValveActive) window.setDbValveActive(manualState.valveId, false);
-        if (window.saveData) window.saveData();
-        if (window.renderSidebar) window.renderSidebar();
-
-        const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
-        logs.push({
-            ts: new Date().toISOString(),
-            valve: manualState.valveId,
-            type: 'manual',
-            duration: duration,
-            volume: Number(realVolumeMl.toFixed(2)),
-            status: 'completed'
+function startClock() {
+    function updateClock() {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('ru-RU', { 
+            day: '2-digit', month: '2-digit', year: 'numeric' 
         });
-        localStorage.setItem(LOG_KEY, JSON.stringify(logs));
+        const timeStr = now.toLocaleTimeString('ru-RU');
+        document.getElementById('ntpClock').textContent = `${dateStr} ${timeStr}`;
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+}
 
-        const tbody = document.getElementById('journal-tbody');
-        const empty = document.getElementById('journal-empty');
-        if (tbody) {
-            if (empty) empty.style.display = 'none';
-            const volStr = realVolumeMl.toFixed(2);
-            const row = '<tr><td>' + new Date().toLocaleString('ru-RU') + '</td><td>Клапан ' + manualState.valveId + '</td><td>Вручную</td><td>' + fmt(duration) + '</td><td>' + volStr + ' мл</td><td><span class="status-badge status-success">Успешно</span></td></tr>';
-            tbody.insertAdjacentHTML('afterbegin', row);
-        }
+async function loadFromDB() {
+    try {
+        const [valvesRes, journalRes] = await Promise.all([
+            fetch('/api/valves'),
+            fetch('/api/journal')
+        ]);
+        
+        const valvesData = await valvesRes.json();
+        const journalData = await journalRes.json();
+        
+        appState.valves = {};
+        valvesData.forEach(v => {
+            appState.valves[v.id] = {
+                active: v.active,
+                plant_name: v.plant_name,
+                max_duration_sec: v.max_duration_sec,
+                daily_limit_ml: v.daily_limit_ml
+            };
+        });
+        
+        appState.journal = journalData;
+        
+        document.getElementById('espStatus').className = 'esp-status online';
+        document.getElementById('espStatus').innerHTML = '<span class="esp-dot"></span>Подключён';
+    } catch (e) {
+        console.error('Ошибка загрузки из БД', e);
+        document.getElementById('espStatus').className = 'esp-status offline';
+        document.getElementById('espStatus').innerHTML = '<span class="esp-dot"></span>Нет связи';
+    }
+}
 
-        const vl = document.getElementById('manual-volume');
-        if (vl) vl.textContent = realVolumeMl.toFixed(2) + ' мл';
+async function saveValveToDB(valveId, data) {
+    try {
+        await fetch('/api/valves', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ id: valveId, ...data })
+        });
+        appState.valves[valveId] = { ...appState.valves[valveId], ...data };
+    } catch(e) {
+        console.error('Ошибка сохранения клапана', e);
+    }
+}
 
-        updatePanel();
-        if (window.showNotification) window.showNotification('Клапан ' + manualState.valveId + ': ' + fmt(duration) + ', ' + realVolumeMl.toFixed(2) + ' мл (' + pulses + ' имп.)');
-    };
+async function addJournalEntryToDB(entry) {
+    try {
+        await fetch('/api/journal', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(entry)
+        });
+        await loadFromDB();
+        renderJournal();
+    } catch(e) {
+        console.error('Ошибка записи в журнал', e);
+    }
+}
 
-    document.addEventListener('DOMContentLoaded', function() {
-        loadData();
-        const btnOn = document.getElementById('btn-manual-on');
-        const btnOff = document.getElementById('btn-manual-off');
-        if (btnOn) btnOn.onclick = function(e) { e.preventDefault(); window.startWatering(); };
-        if (btnOff) btnOff.onclick = function(e) { e.preventDefault(); window.stopWatering(); };
+async function clearJournalInDB(valveId) {
+    try {
+        const url = valveId === 0 ? '/api/journal?all=1' : `/api/journal?valve_id=${valveId}`;
+        await fetch(url, { method: 'DELETE' });
+        await loadFromDB();
+        renderJournal();
+    } catch(e) {
+        console.error('Ошибка очистки журнала', e);
+    }
+}
+
+function renderSidebar() {
+    const container = document.getElementById('valvesSidebar');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    for (let i = 1; i <= 8; i++) {
+        const d = appState.valves[i] || { active: 0, plant_name: '—'};
+        const statusText = d.active ? 'Active' : 'Неактивен';
+        const statusClass = d.active ? '' : 'inactive';
+        
+        container.innerHTML += `
+            <div class="valve-item ${appState.currentValve === i ? 'active' : ''}" data-valve="${i}" onclick="switchValve(${i})">
+                <div class="valve-header"><span class="valve-title"><span class="valve-number">${i}</span>Клапан ${i}</span></div>
+                <div class="valve-info">Растение: ${d.plant_name}</div>
+                <span class="valve-status ${statusClass}">${statusText}</span>
+            </div>`;
+    }
+}
+
+function renderJournal() {
+    const filterValve = parseInt(document.getElementById('journal-valve-filter').value) || 0;
+    const filtered = filterValve === 0 ? appState.journal : appState.journal.filter(l => l.valve_id === filterValve);
+    
+    const totalVolume = filtered.reduce((sum, log) => sum + (Number(log.volume_ml) || 0), 0);
+    document.getElementById('journal-total-volume').textContent = totalVolume.toFixed(2) + ' мл';
+    document.getElementById('journal-count').textContent = filtered.length;
+
+    const tbody = document.getElementById('journal-tbody');
+    const emptyMsg = document.getElementById('journal-empty');
+    tbody.innerHTML = '';
+    
+    if (filtered.length === 0) {
+        emptyMsg.style.display = 'block';
+        return;
+    }
+    emptyMsg.style.display = 'none';
+
+    filtered.sort((a, b) => new Date(b.ts) - new Date(a.ts)).forEach(log => {
+        const statusClass = log.status === 'completed' ? 'status-success' : 'status-fail';
+        const typeText = { schedule: 'Расписание', sensor: 'Датчик', manual: 'Вручную' }[log.type] || log.type;
+        const volStr = Number(log.volume_ml).toFixed(2);
+        
+        tbody.innerHTML += `<tr>
+            <td>${new Date(log.ts).toLocaleString('ru-RU')}</td>
+            <td><b>Клапан ${log.valve_id}</b></td>
+            <td>${typeText}</td>
+            <td>${log.duration_sec} сек</td>
+            <td>${volStr} мл</td>
+            <td><span class="status-badge ${statusClass}">${log.status === 'completed' ? 'Успешно' : 'Провалено'}</span></td>
+        </tr>`;
     });
-})();
+}
+
+function switchValve(id) {
+    appState.currentValve = id;
+    renderSidebar();
+    document.getElementById('input-valve-select').value = id;
+}
+
+async function startWatering() {
+    if (appState.manualState.isActive) return;
+    const sel = document.getElementById('manual-valve-select');
+    appState.manualState.valveId = parseInt(sel.value);
+
+    try {
+        const res = await fetch(`/valve?id=${appState.manualState.valveId - 1}&state=1`);
+        if (!(await res.json()).ok) throw new Error('Ошибка');
+    } catch (e) {
+        showNotification('Контроллер недоступен');
+        return;
+    }
+
+    appState.manualState.startTime = Date.now();
+    appState.manualState.isActive = true;
+    
+    await saveValveToDB(appState.manualState.valveId, { active: 1 });
+    renderSidebar();
+
+    appState.manualState.timerId = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - appState.manualState.startTime) / 1000);
+        const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+        const s = (elapsed % 60).toString().padStart(2, '0');
+        document.getElementById('manual-timer').textContent = `${m}:${s}`;
+    }, 1000);
+
+    document.getElementById('manual-status').textContent = 'Работает';
+    document.getElementById('manual-status').style.color = '#22c55e';
+    document.getElementById('manual-volume').textContent = 'Измерение...';
+    document.getElementById('btn-manual-on').disabled = true;
+    document.getElementById('btn-manual-off').disabled = false;
+    showNotification(`Клапан ${appState.manualState.valveId} открыт`);
+}
+
+async function stopWatering() {
+    if (!appState.manualState.isActive) return;
+    let realVolumeMl = 0;
+    let pulses = 0;
+
+    try { await fetch(`/valve?id=${appState.manualState.valveId - 1}&state=0`); } catch(e) {}
+
+    try {
+        const flowRes = await fetch('/flowmeter');
+        const flowData = await flowRes.json();
+        if (flowData.ok) {
+            pulses = flowData.pulses || 0;
+            realVolumeMl = flowData.volume_ml || 0;
+        }
+    } catch(e) {}
+
+    clearInterval(appState.manualState.timerId);
+    const duration = Math.floor((Date.now() - appState.manualState.startTime) / 1000);
+    appState.manualState.isActive = false;
+
+    await saveValveToDB(appState.manualState.valveId, { active: 0 });
+    renderSidebar();
+
+    const volRounded = Number(realVolumeMl.toFixed(2));
+    const entry = {
+        ts: new Date().toISOString(),
+        valve_id: appState.manualState.valveId,
+        type: 'manual',
+        duration_sec: duration,
+        volume_ml: volRounded,
+        status: 'completed'
+    };
+
+    await addJournalEntryToDB(entry);
+
+    document.getElementById('manual-timer').textContent = '00:00';
+    document.getElementById('manual-volume').textContent = volRounded.toFixed(2) + ' мл';
+    document.getElementById('manual-status').textContent = 'Ожидание';
+    document.getElementById('manual-status').style.color = 'var(--accent-green)';
+    document.getElementById('btn-manual-on').disabled = false;
+    document.getElementById('btn-manual-off').disabled = true;
+    
+    showNotification(`Клапан ${appState.manualState.valveId}: ${Math.floor(duration/60)}м ${duration%60}с, ${volRounded.toFixed(2)} мл`);
+}
+
+function clearValveJournal() {
+    const filterValve = parseInt(document.getElementById('journal-valve-filter').value) || 0;
+    const count = filterValve === 0 ? appState.journal.length : appState.journal.filter(l => l.valve_id === filterValve).length;
+    
+    if (count === 0) { showNotification('Журнал уже пуст'); return; }
+    if (!confirm(`Удалить ${count} записей?`)) return;
+    
+    clearJournalInDB(filterValve).then(() => {
+        showNotification(filterValve === 0 ? 'Журнал полностью очищен' : `Записи клапана ${filterValve} удалены`);
+    });
+}
+
+function saveAllData() {
+    showNotification('Настройки сохранены в БД');
+}
+
+function showNotification(msg) {
+    const ex = document.getElementById('gs-notify'); if (ex) ex.remove();
+    const n = document.createElement('div');
+    n.id = 'gs-notify';
+    n.style.cssText = 'position:fixed;top:20px;right:20px;background:var(--accent-green);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);transition:opacity .3s;';
+    n.textContent = msg;
+    document.body.appendChild(n);
+    setTimeout(() => { n.style.opacity = '0'; setTimeout(() => n.remove(), 300); }, 2500);
+}
+
+function setupListeners() {
+    document.querySelectorAll('.tab').forEach(tab => tab.onclick = function() {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+        document.getElementById('manualPanel').style.display = this.dataset.tab === 'manual' ? 'block' : 'none';
+        document.getElementById('configPanel').style.display = this.dataset.tab === 'config' ? 'block' : 'none';
+        document.getElementById('journalPanel').style.display = this.dataset.tab === 'journal' ? 'block' : 'none';
+        if (this.dataset.tab === 'journal') renderJournal();
+    });
+    document.getElementById('journal-valve-filter').onchange = renderJournal;
+}
+
+async function syncWithESP() {
+    setInterval(async () => {
+        try {
+            const res = await fetch('/states');
+            const data = await res.json();
+            let changed = false;
+            data.states.forEach((state, idx) => {
+                const id = idx + 1;
+                if (appState.valves[id] && appState.valves[id].active !== (state ? 1 : 0)) {
+                    appState.valves[id].active = state ? 1 : 0;
+                    changed = true;
+                }
+            });
+            if (changed) renderSidebar();
+        } catch(e) {}
+    }, 3000);
+}
+
+document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>
 )rawliteral";
-// ==========================================================
-
-
-// ===================== HTTP-ОБРАБОТЧИКИ =====================
 
 void handleRoot() {
   server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
+}
+
+void handleApiValvesGet() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  
+  const char* sql = "SELECT id, plant_name, max_duration_sec, daily_limit_ml, active FROM valves ORDER BY id;";
+  sqlite3_stmt* stmt;
+  
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      JsonObject obj = arr.add<JsonObject>();
+      obj["id"] = sqlite3_column_int(stmt, 0);
+      obj["plant_name"] = (const char*)sqlite3_column_text(stmt, 1);
+      obj["max_duration_sec"] = sqlite3_column_int(stmt, 2);
+      obj["daily_limit_ml"] = sqlite3_column_int(stmt, 3);
+      obj["active"] = sqlite3_column_int(stmt, 4);
+    }
+    sqlite3_finalize(stmt);
+  }
+  
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleApiValvesPost() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"ok\":false}");
+    return;
+  }
+  
+  JsonDocument doc;
+  deserializeJson(doc, server.arg("plain"));
+  
+  const char* sql = "UPDATE valves SET plant_name=?, max_duration_sec=?, daily_limit_ml=?, active=? WHERE id=?;";
+  sqlite3_stmt* stmt;
+  
+  sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+  sqlite3_bind_text(stmt, 1, doc["plant_name"] | "—", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 4, doc["active"] | 0);
+  sqlite3_bind_int(stmt, 5, doc["id"] | 1);
+  
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleApiJournalGet() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  
+  const char* sql = "SELECT ts, valve_id, type, duration_sec, volume_ml, status FROM journal ORDER BY id DESC;";
+  sqlite3_stmt* stmt;
+  
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      JsonObject obj = arr.add<JsonObject>();
+      obj["ts"] = (const char*)sqlite3_column_text(stmt, 0);
+      obj["valve_id"] = sqlite3_column_int(stmt, 1);
+      obj["type"] = (const char*)sqlite3_column_text(stmt, 2);
+      obj["duration_sec"] = sqlite3_column_int(stmt, 3);
+      obj["volume_ml"] = sqlite3_column_double(stmt, 4);
+      obj["status"] = (const char*)sqlite3_column_text(stmt, 5);
+    }
+    sqlite3_finalize(stmt);
+  }
+  
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleApiJournalPost() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"ok\":false}");
+    return;
+  }
+  
+  JsonDocument doc;
+  deserializeJson(doc, server.arg("plain"));
+  
+  const char* sql = "INSERT INTO journal (ts, valve_id, type, duration_sec, volume_ml, status) VALUES (?, ?, ?, ?, ?, ?);";
+  sqlite3_stmt* stmt;
+  
+  sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+  sqlite3_bind_text(stmt, 1, doc["ts"] | "", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 2, doc["valve_id"] | 0);
+  sqlite3_bind_text(stmt, 3, doc["type"] | "manual", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 4, doc["duration_sec"] | 0);
+  sqlite3_bind_double(stmt, 5, doc["volume_ml"] | 0.0);
+  sqlite3_bind_text(stmt, 6, doc["status"] | "completed", -1, SQLITE_TRANSIENT);
+  
+  if (sqlite3_step(stmt) == SQLITE_DONE) {
+    long long newId = sqlite3_last_insert_rowid(db);
+    
+    Serial.println();
+    Serial.println("╔══════════════════════════════════════════════════╗");
+    Serial.println("║         НОВАЯ ЗАПИСЬ ДОБАВЛЕНА В БД              ║");
+    Serial.println("╠══════════════════════════════════════════════════╣");
+    Serial.printf("║ ID записи : %-42lld ║\n", newId);
+    Serial.printf("║ Время     : %-42s ║\n", (const char*)(doc["ts"] | "N/A"));
+    Serial.printf("║ Клапан    : %-42d ║\n", doc["valve_id"] | 0);
+    Serial.printf("║ Тип       : %-42s ║\n", (const char*)(doc["type"] | "N/A"));
+    Serial.printf("║ Длительность: %-39d сек ║\n", doc["duration_sec"] | 0);
+    Serial.printf("║ Объём     : %-39.2f мл  ║\n", (double)(doc["volume_ml"] | 0.0));
+    Serial.printf("║ Статус    : %-42s ║\n", (const char*)(doc["status"] | "N/A"));
+    Serial.println("╚══════════════════════════════════════════════════╝");
+    Serial.println();
+  }
+  
+  sqlite3_finalize(stmt);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleApiJournalDelete() {
+  int valveId = server.arg("valve_id").toInt();
+  int all = server.arg("all").toInt();
+  
+  char sql[256];
+  if (all == 1) {
+    strcpy(sql, "DELETE FROM journal;");
+  } else {
+    snprintf(sql, sizeof(sql), "DELETE FROM journal WHERE valve_id = %d;", valveId);
+  }
+  
+  char* errMsg = NULL;
+  if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) == SQLITE_OK) {
+    Serial.printf("[SQLite] Журнал очищен (valve_id=%d, all=%d)\n", valveId, all);
+    server.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    Serial.printf("[SQLite] Ошибка очистки: %s\n", errMsg);
+    sqlite3_free(errMsg);
+    server.send(500, "application/json", "{\"ok\":false}");
+  }
 }
 
 void handleValve() {
@@ -1305,7 +1230,6 @@ void handleStates() {
   server.send(200, "application/json", json);
 }
 
-// === ИЗМЕНЕНО: округление до сотых ===
 void handleFlowmeter() {
   noInterrupts();
   uint32_t pulses = flowmetr;
@@ -1347,8 +1271,10 @@ void setup() {
     }
   }
 
-  pinMode(0,INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(0),ISR_Flow,RISING);
+  initDatabase();
+
+  pinMode(0, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(0), ISR_Flow, RISING);
 
   Serial.printf("\nТочка доступа Wifi:\n");
   WiFi.AP.begin();
@@ -1360,10 +1286,15 @@ void setup() {
   }
   Serial.println(WiFi.AP);
 
-  server.on("/",         HTTP_GET, handleRoot);
-  server.on("/valve",    HTTP_GET, handleValve);
-  server.on("/all",      HTTP_GET, handleAll);
-  server.on("/states",   HTTP_GET, handleStates);
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/valves", HTTP_GET, handleApiValvesGet);
+  server.on("/api/valves", HTTP_POST, handleApiValvesPost);
+  server.on("/api/journal", HTTP_GET, handleApiJournalGet);
+  server.on("/api/journal", HTTP_POST, handleApiJournalPost);
+  server.on("/api/journal", HTTP_DELETE, handleApiJournalDelete);
+  server.on("/valve", HTTP_GET, handleValve);
+  server.on("/all", HTTP_GET, handleAll);
+  server.on("/states", HTTP_GET, handleStates);
   server.on("/flowmeter", HTTP_GET, handleFlowmeter);
   server.begin();
   Serial.println("HTTP-сервер запущен: http://192.168.5.1");
