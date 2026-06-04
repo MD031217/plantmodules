@@ -13,7 +13,7 @@
 #define PIN_CS_SD    7
 #define NUM_VALVES   8
 
-#define FLOW_RATE_ML 2.23  // мл на один импульс расходометра
+#define FLOW_RATE_ML 2.23
 
 FET mosfet(PIN_CS_FET);
 WebServer server(80);
@@ -24,7 +24,7 @@ char ap_ssid[]     = "RoboLab";
 char ap_password[] = "Qwe123!!";
 const char* espName = "mWatering";
 
-volatile uint32_t flowmetr = 0;  // volatile для корректной работы в прерывании
+volatile uint32_t flowmetr = 0;
 
 IPAddress ap_ip(192, 168, 5, 1);
 IPAddress ap_subnet(255, 255, 255, 0);
@@ -304,13 +304,14 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         .esp-status.online  .esp-dot { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
         .esp-status.offline .esp-dot { background: #dc2626; }
 
+        /* === ИЗМЕНЕНО: панель фильтра в одну строку === */
         .journal-filter-bar {
             display: flex;
-            gap: 15px;
+            gap: 12px;
             align-items: center;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
             margin-bottom: 15px;
-            padding: 12px 16px;
+            padding: 10px 14px;
             background: rgba(33, 200, 95, 0.04);
             border: 1px solid rgba(33, 200, 95, 0.15);
             border-radius: 14px;
@@ -319,21 +320,23 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
             font-size: 14px;
             color: #374151;
             font-weight: 600;
+            flex-shrink: 0;
         }
         .journal-filter-bar .form-select {
             width: auto;
-            min-width: 170px;
-            padding: 8px 14px;
+            min-width: 150px;
+            padding: 7px 12px;
             margin: 0;
+            flex-shrink: 0;
         }
         .journal-total-box {
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
+            gap: 6px;
+            padding: 6px 14px;
             background: rgba(33, 200, 95, 0.12);
             border-radius: 12px;
-            margin-left: auto;
+            flex-shrink: 0;
         }
         .journal-total-box .label {
             font-size: 13px;
@@ -343,19 +346,54 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         .journal-total-box .value {
             font-weight: 700;
             color: var(--accent-green);
-            font-size: 16px;
+            font-size: 15px;
+            white-space: nowrap;
         }
         .journal-count-box {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
+            gap: 5px;
+            padding: 6px 10px;
             background: rgba(0, 0, 0, 0.04);
             border-radius: 10px;
             font-size: 13px;
             color: #374151;
+            flex-shrink: 0;
+            white-space: nowrap;
         }
         .journal-count-box b { color: var(--accent-green); }
+
+        /* === ИЗМЕНЕНО: кнопка очистки — только иконка === */
+        .btn-clear-journal {
+            background: rgba(244, 67, 54, 0.12);
+            color: #dc2626;
+            border: 1px solid rgba(244, 67, 54, 0.3);
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            padding: 0;
+            line-height: 1;
+        }
+        .btn-clear-journal:hover {
+            background: rgba(244, 67, 54, 0.22);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(244, 67, 54, 0.25);
+        }
+        .btn-clear-journal:active {
+            transform: translateY(0);
+        }
+        .btn-clear-journal:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
     </style>
 </head>
 <body class="theme-dark">
@@ -511,6 +549,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                 <div id="journalPanel">
                     <h3 class="section-title">История полива</h3>
 
+                    <!-- === ИЗМЕНЕНО: всё в одну строку, кнопка справа от "всего вылилось" === -->
                     <div class="journal-filter-bar">
                         <label for="journal-valve-filter">Показать:</label>
                         <select id="journal-valve-filter" class="form-select">
@@ -529,8 +568,11 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                         </div>
                         <div class="journal-total-box">
                             <span class="label">Всего вылилось:</span>
-                            <span class="value" id="journal-total-volume">0 мл</span>
+                            <span class="value" id="journal-total-volume">0.00 мл</span>
                         </div>
+                        <button class="btn-clear-journal" id="btn-clear-journal" onclick="clearValveJournal()" title="Очистить записи">
+                            🗑
+                        </button>
                     </div>
 
                     <div id="journal-content">
@@ -758,6 +800,15 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         }
     }
 
+    window.renderSidebar = renderSidebar;
+    window.saveData = saveData;
+    window.getDb = function() { return db; };
+    window.setDbValveActive = function(valveId, active) {
+        if (db[valveId]) {
+            db[valveId].active = active ? 1 : 0;
+        }
+    };
+
     window.switchValve = function(id) {
         collectUI(currentValve);
         currentValve = id;
@@ -881,6 +932,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         }
     };
 
+    // === ИЗМЕНЕНО: округление до сотых ===
     function renderJournal() {
         const filterSelect = document.getElementById('journal-valve-filter');
         const filterValve = filterSelect ? parseInt(filterSelect.value) : 0;
@@ -895,9 +947,8 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
 
         const filtered = filterValve ? logs.filter(l => l.valve === filterValve) : logs;
         const totalVolume = filtered.reduce((sum, log) => sum + (Number(log.volume) || 0), 0);
-        const totalDuration = filtered.reduce((sum, log) => sum + (Number(log.duration) || 0), 0);
 
-        if (totalEl) totalEl.textContent = totalVolume + ' мл';
+        if (totalEl) totalEl.textContent = totalVolume.toFixed(2) + ' мл';
         if (countEl) countEl.textContent = filtered.length;
 
         tbody.innerHTML = '';
@@ -911,9 +962,12 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
             const statusClass = log.status === 'completed' ? 'status-success' : (log.status === 'failed' ? 'status-fail' : 'status-pending');
             const typeText = { schedule: 'Расписание', sensor: 'Датчик', manual: 'Вручную' }[log.type] || log.type;
             const statusText = { completed: 'Успешно', failed: 'Провалено', pending: 'В ожидании' }[log.status] || '?';
-            tbody.innerHTML += '<tr><td>' + new Date(log.ts).toLocaleString('ru-RU') + '</td><td><b>Клапан ' + log.valve + '</b></td><td>' + typeText + '</td><td>' + log.duration + ' сек</td><td>' + log.volume + ' мл</td><td><span class="status-badge ' + statusClass + '">' + statusText + '</span></td></tr>';
+            const volDisplay = Number(log.volume).toFixed(2);
+            tbody.innerHTML += '<tr><td>' + new Date(log.ts).toLocaleString('ru-RU') + '</td><td><b>Клапан ' + log.valve + '</b></td><td>' + typeText + '</td><td>' + log.duration + ' сек</td><td>' + volDisplay + ' мл</td><td><span class="status-badge ' + statusClass + '">' + statusText + '</span></td></tr>';
         });
     }
+
+    window.renderJournal = renderJournal;
 
     function addLogEntry(data) {
         if (!data || !data.valve) return;
@@ -922,6 +976,39 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         localStorage.setItem(LOG_KEY, JSON.stringify(logs));
         renderJournal();
     }
+
+    window.clearValveJournal = function() {
+        const filterSelect = document.getElementById('journal-valve-filter');
+        const filterValve = filterSelect ? parseInt(filterSelect.value) : 0;
+        const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+
+        let filteredLogs;
+        let msg;
+
+        if (filterValve === 0) {
+            if (logs.length === 0) {
+                showNotification('Журнал уже пуст');
+                return;
+            }
+            if (!confirm('Удалить ВСЕ записи журнала?\nЗаписей: ' + logs.length)) return;
+            filteredLogs = [];
+            msg = 'Журнал полностью очищен (записей: ' + logs.length + ')';
+        } else {
+            const countBefore = logs.length;
+            filteredLogs = logs.filter(l => l.valve !== filterValve);
+            const removed = countBefore - filteredLogs.length;
+            if (removed === 0) {
+                showNotification('Записей по Клапану ' + filterValve + ' нет');
+                return;
+            }
+            if (!confirm('Удалить записи по Клапану ' + filterValve + '?\nБудет удалено записей: ' + removed)) return;
+            msg = 'Удалено записей по Клапану ' + filterValve + ': ' + removed;
+        }
+
+        localStorage.setItem(LOG_KEY, JSON.stringify(filteredLogs));
+        renderJournal();
+        showNotification(msg);
+    };
 
     window.switchTab = function(tabName) {
         document.getElementById('configPanel').style.display = 'none';
@@ -1033,7 +1120,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         if (manualState.isActive) {
             const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
             tm.textContent = fmt(elapsed);
-            // Во время работы показываем "Измерение..." пока не получим данные с расходометра
             if (!manualState.realVolume) {
                 vl.textContent = 'Измерение...';
             }
@@ -1054,7 +1140,7 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         if (!sel) return;
 
         manualState.valveId = parseInt(sel.value);
-        manualState.realVolume = null;  // Сбрасываем реальный объём
+        manualState.realVolume = null;
 
         try {
             const response = await fetch('/valve?id=' + (manualState.valveId - 1) + '&state=1');
@@ -1071,9 +1157,10 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         manualState.startTime = Date.now();
         manualState.isActive = true;
 
-        if (db[manualState.valveId]) { db[manualState.valveId].active = 1; saveData(); }
+        if (window.setDbValveActive) window.setDbValveActive(manualState.valveId, true);
+        if (window.saveData) window.saveData();
+        if (window.renderSidebar) window.renderSidebar();
 
-        // Таймер обновляет только время, объём получаем с расходометра при остановке
         manualState.timerId = setInterval(() => {
             const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
             const tm = document.getElementById('manual-timer');
@@ -1084,20 +1171,19 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         if (window.showNotification) window.showNotification('Клапан ' + manualState.valveId + ' открыт');
     };
 
+    // === ИЗМЕНЕНО: округление до сотых ===
     window.stopWatering = async function() {
         if (!manualState.isActive) return;
 
         let realVolumeMl = 0;
         let pulses = 0;
 
-        // Сначала выключаем клапан
         try {
             await fetch('/valve?id=' + (manualState.valveId - 1) + '&state=0');
         } catch (e) {
             console.log('Ошибка связи при выключении');
         }
 
-        // Получаем реальные данные с расходометра
         try {
             const flowResponse = await fetch('/flowmeter');
             const flowData = await flowResponse.json();
@@ -1105,7 +1191,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                 pulses = flowData.pulses || 0;
                 realVolumeMl = flowData.volume_ml || 0;
                 manualState.realVolume = realVolumeMl;
-                console.log('Расходометр: ' + pulses + ' импульсов, ' + realVolumeMl + ' мл');
             }
         } catch (e) {
             console.log('Не удалось получить данные с расходометра');
@@ -1117,16 +1202,17 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         manualState.isActive = false;
         manualState.timerId = null;
 
-        if (db[manualState.valveId]) { db[manualState.valveId].active = 0; saveData(); }
+        if (window.setDbValveActive) window.setDbValveActive(manualState.valveId, false);
+        if (window.saveData) window.saveData();
+        if (window.renderSidebar) window.renderSidebar();
 
-        // Запись в журнал с реальным объёмом
         const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
         logs.push({
             ts: new Date().toISOString(),
             valve: manualState.valveId,
             type: 'manual',
             duration: duration,
-            volume: realVolumeMl,
+            volume: Number(realVolumeMl.toFixed(2)),
             status: 'completed'
         });
         localStorage.setItem(LOG_KEY, JSON.stringify(logs));
@@ -1135,16 +1221,16 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
         const empty = document.getElementById('journal-empty');
         if (tbody) {
             if (empty) empty.style.display = 'none';
-            const row = '<tr><td>' + new Date().toLocaleString('ru-RU') + '</td><td>Клапан ' + manualState.valveId + '</td><td>Вручную</td><td>' + fmt(duration) + '</td><td>' + realVolumeMl + ' мл</td><td><span class="status-badge status-success">Успешно</span></td></tr>';
+            const volStr = realVolumeMl.toFixed(2);
+            const row = '<tr><td>' + new Date().toLocaleString('ru-RU') + '</td><td>Клапан ' + manualState.valveId + '</td><td>Вручную</td><td>' + fmt(duration) + '</td><td>' + volStr + ' мл</td><td><span class="status-badge status-success">Успешно</span></td></tr>';
             tbody.insertAdjacentHTML('afterbegin', row);
         }
 
-        // Обновляем отображение объёма на панели
         const vl = document.getElementById('manual-volume');
-        if (vl) vl.textContent = realVolumeMl + ' мл';
+        if (vl) vl.textContent = realVolumeMl.toFixed(2) + ' мл';
 
         updatePanel();
-        if (window.showNotification) window.showNotification('Клапан ' + manualState.valveId + ': ' + fmt(duration) + ', ' + realVolumeMl + ' мл (' + pulses + ' имп.)');
+        if (window.showNotification) window.showNotification('Клапан ' + manualState.valveId + ': ' + fmt(duration) + ', ' + realVolumeMl.toFixed(2) + ' мл (' + pulses + ' имп.)');
     };
 
     document.addEventListener('DOMContentLoaded', function() {
@@ -1159,6 +1245,10 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+// ==========================================================
+
+
+// ===================== HTTP-ОБРАБОТЧИКИ =====================
 
 void handleRoot() {
   server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
@@ -1215,17 +1305,18 @@ void handleStates() {
   server.send(200, "application/json", json);
 }
 
+// === ИЗМЕНЕНО: округление до сотых ===
 void handleFlowmeter() {
   noInterrupts();
   uint32_t pulses = flowmetr;
   interrupts();
-  
+
   float volumeMl = pulses * FLOW_RATE_ML;
-  
-  String json = "{\"ok\":true,\"pulses\":" + String(pulses) + 
-                ",\"volume_ml\":" + String(volumeMl, 1) + "}";
-  
-  Serial.printf("[Flowmeter] Отправлено: %u импульсов, %.1f мл\n", pulses, volumeMl);
+
+  String json = "{\"ok\":true,\"pulses\":" + String(pulses) +
+                ",\"volume_ml\":" + String(volumeMl, 2) + "}";
+
+  Serial.printf("[Flowmeter] Отправлено: %u импульсов, %.2f мл\n", pulses, volumeMl);
   server.send(200, "application/json", json);
 }
 
@@ -1273,7 +1364,7 @@ void setup() {
   server.on("/valve",    HTTP_GET, handleValve);
   server.on("/all",      HTTP_GET, handleAll);
   server.on("/states",   HTTP_GET, handleStates);
-  server.on("/flowmeter", HTTP_GET, handleFlowmeter); 
+  server.on("/flowmeter", HTTP_GET, handleFlowmeter);
   server.begin();
   Serial.println("HTTP-сервер запущен: http://192.168.5.1");
 }
