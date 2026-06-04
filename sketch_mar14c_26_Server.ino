@@ -24,8 +24,8 @@
 #define ENABLE_DEBUG_ENDPOINT 1
 
 // ==================== Wi-Fi НАСТРОЙКИ ====================
-#define STA_SSID "lin"
-#define STA_PASS ""
+#define STA_SSID "Galaxy M56 5G A166"
+#define STA_PASS "gdre3uqbhwts6t8"
 #define AP_SSID  "netSensorModule-01"
 #define AP_PASS  "12345678"
 #define MDNS_NAME "SensorModule-C3"
@@ -66,6 +66,41 @@ unsigned long lastLogTime = 0;
 int currentSoil = 0, currentHum = 0, currentTemp = 0, currentPres = 0;
 time_t bootTime = 0;
 bool timeSynced = false;
+int tzOffsetSec = 5 * 3600;  // Часовой пояс по умолчанию UTC+5, обновляется из профиля
+
+// Парсит строку вида "(UTC+05:00) ..." или "(UTC-03:30) ..." → смещение в секундах
+int parseTimezoneOffset(const String& tz) {
+  int signIdx = tz.indexOf("UTC");
+  if (signIdx < 0) return 5 * 3600; // default UTC+5
+  int sign = 1;
+  int pos = signIdx + 3;
+  if (tz[pos] == '-') { sign = -1; pos++; }
+  else if (tz[pos] == '+') { sign = 1; pos++; }
+  int colon = tz.indexOf(':', pos);
+  if (colon < 0) return 5 * 3600;
+  int hours = tz.substring(pos, colon).toInt();
+  int mins  = tz.substring(colon + 1, colon + 3).toInt();
+  return sign * (hours * 3600 + mins * 60);
+}
+
+// Обновить tzOffsetSec из БД по первому найденному пользователю (или конкретному userId)
+void reloadTimezoneFromDB(int userId = 0) {
+  if (!db) return;
+  sqlite3_stmt* stmt = nullptr;
+  const char* sql = userId ? "SELECT timezone FROM Users WHERE id=? LIMIT 1;" 
+                           : "SELECT timezone FROM Users LIMIT 1;";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+    if (userId) sqlite3_bind_int(stmt, 1, userId);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      const char* tz = (const char*)sqlite3_column_text(stmt, 0);
+      if (tz) {
+        tzOffsetSec = parseTimezoneOffset(String(tz));
+        Serial.printf("[TZ] Часовой пояс обновлён: %s → %d сек\n", tz, tzOffsetSec);
+      }
+    }
+    sqlite3_finalize(stmt);
+  }
+}
 
 // === НОВОЕ: Глобальные переменные для загрузки файлов ===
 int pendingUserId = 0;
@@ -960,9 +995,16 @@ font-size: 14px; font-weight: 500; transition: all 0.2s;
 .metric-card {
 background: var(--card); padding: 16px 14px; border-radius: 16px;
 text-align: center; box-shadow: var(--shadow); border: 1px solid var(--border);
-transition: transform 0.2s, box-shadow 0.2s, background 0.3s ease;
+transition: transform 0.2s, box-shadow 0.2s, background 0.3s ease, border-color 0.3s ease;
 }
 .metric-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+.metric-card.alert-danger {
+border-color: var(--danger) !important;
+box-shadow: 0 0 0 2px rgba(239,68,68,0.25), var(--shadow);
+background: rgba(239,68,68,0.07) !important;
+}
+.metric-card.alert-danger .metric-value { color: var(--danger) !important; }
+.metric-card.alert-danger .metric-label { color: var(--danger); opacity: 0.85; }
 .metric-label { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
 .metric-value { font-size: 28px; font-weight: 700; color: var(--primary); margin: 6px 0 2px; }
 .metric-unit { font-size: 13px; color: var(--text2); font-weight: 500; }
@@ -1204,7 +1246,7 @@ initChartCustomRange();
 initChart();
 syncTimeWithServer();
 startAutoUpdate();
-loadData();
+loadActivePlantParams().then(() => loadData());
 });
 
 async function syncTimeWithServer() {
@@ -1407,11 +1449,54 @@ syncTimeWithServer();
 } catch (e) { console.log('Ошибка загрузки показателей'); }
 }
 
+// Параметры активного растения для сравнения (загружаются один раз при старте)
+let activePlantParams = null;
+
+async function loadActivePlantParams() {
+const token = localStorage.getItem('auth_token');
+if (!token) return;
+try {
+    const res = await fetch('/api/plants', { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!res.ok) return;
+    const plants = await res.json();
+    if (plants && plants.length > 0) {
+        // Берём первое растение как «активное» (можно расширить на выбор)
+        activePlantParams = plants[0];
+    }
+} catch (e) { console.log('Не удалось загрузить параметры растений'); }
+}
+
+function checkMetricAlert(cardEl, value, threshold) {
+if (threshold == null || threshold === 0 || value == null) {
+    cardEl.classList.remove('alert-danger');
+    return;
+}
+if (value < threshold) {
+    cardEl.classList.add('alert-danger');
+} else {
+    cardEl.classList.remove('alert-danger');
+}
+}
+
 function updateMetrics(d) {
-document.getElementById('temp').textContent = d.temp ?? '--';
-document.getElementById('hum').textContent = d.humidity ?? '--';
-document.getElementById('soil').textContent = d.soil ?? '--';
-document.getElementById('pressure').textContent = d.pressure ?? '--';
+const tempEl   = document.getElementById('temp');
+const humEl    = document.getElementById('hum');
+const soilEl   = document.getElementById('soil');
+const pressEl  = document.getElementById('pressure');
+
+tempEl.textContent  = d.temp     ?? '--';
+humEl.textContent   = d.humidity ?? '--';
+soilEl.textContent  = d.soil     ?? '--';
+pressEl.textContent = d.pressure ?? '--';
+
+// Подсветка блоков красным если текущее значение хуже параметра растения
+if (activePlantParams) {
+    const p = activePlantParams;
+    checkMetricAlert(tempEl.closest('.metric-card'),  d.temp,     p.temp     || null);
+    checkMetricAlert(humEl.closest('.metric-card'),   d.humidity, p.humidity || null);
+    checkMetricAlert(soilEl.closest('.metric-card'),  d.soil,     p.soil     || null);
+    checkMetricAlert(pressEl.closest('.metric-card'), d.pressure, p.pressure || null);
+}
 }
 
 async function loadHistory() {
@@ -2467,7 +2552,7 @@ const char REGISTER_HTML[] PROGMEM = R"rawliteral(
             .then(data => {
                 if (data.success) {
                     localStorage.setItem('auth_token', data.token);
-                    window.location.href = '/profile';
+                    window.location.href = '/settings';
                 }
             })
             .catch(err => {
@@ -3054,7 +3139,7 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
             return '/api/avatar/file?file=' + encodeURIComponent(path);
         };
 
-        const loadProfileFromServer = () => {
+        const loadProfileFromServer = (retryCount = 0) => {
             const token = localStorage.getItem('auth_token');
             if (!token) {
                 window.location.href = '/login';
@@ -3064,6 +3149,12 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
                 headers: {'Authorization': 'Bearer ' + token}
             })
             .then(res => {
+                if (res.status === 503 && retryCount < 6) {
+                    // БД ещё не готова (SD-карта стартует) — повторить через 3 сек
+                    return new Promise(resolve =>
+                        setTimeout(() => resolve(loadProfileFromServer(retryCount + 1)), 3000)
+                    );
+                }
                 if (res.status === 401) {
                     localStorage.removeItem('auth_token');
                     window.location.href = '/login';
@@ -3099,10 +3190,9 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
         };
 
         const deleteAccount = () => {
-            if (confirm('Вы уверены, что хотите удалить аккаунт? Это действие нельзя отменить.')) {
-                localStorage.removeItem('userData');
-                window.location.href = '/register';
-            }
+            if (!confirm('Вы уверены, что хотите удалить аккаунт? Это действие нельзя отменить.')) return;
+            localStorage.removeItem('userData');
+            window.location.href = '/register';
         };
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -3918,7 +4008,7 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
         function resolveAvatarPath(path) {
             if (!path || path === '') {
                 console.log('📷 Нет пути аватара, использую дефолтный');
-                return '/image/default-avatar.jpg';
+                return '/image/dpol.png';
             }
             if (path.startsWith('http')) return path;
             // Убираем возможные дублирующиеся слеши и нормализуем путь
@@ -3927,41 +4017,35 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
         }
 
-        // === ИСПРАВЛЕННАЯ Загрузка профиля с сервера ===
-        async function loadProfileFromServer() {
+        // === Загрузка профиля с сервера (с повтором при старте) ===
+        async function loadProfileFromServer(retryCount = 0) {
             const token = localStorage.getItem('auth_token');
             if (!token) {
-                console.log('❌ Нет токена, перенаправление на логин');
                 window.location.href = '/login';
                 return null;
             }
             
             try {
-                console.log('🔄 Загружаю профиль...');
                 const res = await fetch('/api/profile', {
                     headers: {'Authorization': 'Bearer ' + token}
                 });
                 
+                if (res.status === 503 && retryCount < 6) {
+                    // БД ещё не готова — повторить через 3 сек
+                    await new Promise(r => setTimeout(r, 3000));
+                    return loadProfileFromServer(retryCount + 1);
+                }
+                
                 if (res.status === 401) {
-                    console.log('❌ Токен недействителен');
                     localStorage.removeItem('auth_token');
                     window.location.href = '/login';
                     return null;
                 }
                 
                 const profile = await res.json();
-                console.log('✅ Профиль загружен:', profile);
-                
-                // Проверяем аватар
-                if (profile.avatar) {
-                    console.log('📷 Аватар в БД:', profile.avatar);
-                } else {
-                    console.log('📷 Аватар не указан в БД');
-                }
-                
                 return profile;
             } catch (e) {
-                console.error('❌ Profile load error:', e);
+                console.error('Profile load error:', e);
                 return null;
             }
         }
@@ -4041,7 +4125,7 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
                     // Добавляем обработчик ошибки загрузки
                     el.onerror = function() {
                         console.log('⚠️ Не удалось загрузить аватар:', this.src);
-                        this.src = '/image/default-avatar.jpg';
+                        this.src = '/image/dpol.png';
                     };
                     // Добавляем обработчик успешной загрузки
                     el.onload = function() {
@@ -4778,32 +4862,34 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
 
     <script>
         // ===== ЗАГРУЗКА ПРОФИЛЯ С СЕРВЕРА =====
-        async function loadProfileFromServer() {
+        async function loadProfileFromServer(retryCount = 0) {
             const token = localStorage.getItem('auth_token');
             if (!token) {
-                console.log('❌ Нет токена');
                 return null;
             }
             try {
                 const res = await fetch('/api/profile', {
                     headers: {'Authorization': 'Bearer ' + token}
                 });
+                if (res.status === 503 && retryCount < 6) {
+                    await new Promise(r => setTimeout(r, 3000));
+                    return loadProfileFromServer(retryCount + 1);
+                }
                 if (res.status === 401) {
                     localStorage.removeItem('auth_token');
                     window.location.href = '/login';
                     return null;
                 }
                 const profile = await res.json();
-                console.log('✅ Профиль загружен:', profile.username);
                 return profile;
             } catch (e) {
-                console.error('❌ Profile load error:', e);
+                console.error('Profile load error:', e);
                 return null;
             }
         }
 
         function resolveAvatarPath(path) {
-            if (!path || path === '') return '/image/default-avatar.jpg';
+            if (!path || path === '') return '/image/dpol.png';
             if (path.startsWith('http')) return path;
             let cleanPath = path.replace(/^\/+/, '');
             return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
@@ -4817,8 +4903,8 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             const avatarSrc = resolveAvatarPath(profile.avatar);
             const avDark = document.querySelector('.user-pill .avatar-dark');
             const avLight = document.querySelector('.user-pill .avatar-light');
-            if (avDark) { avDark.src = avatarSrc; avDark.onerror = () => { avDark.src = '/image/default-avatar.jpg'; }; }
-            if (avLight) { avLight.src = avatarSrc; avLight.onerror = () => { avLight.src = '/image/default-avatar.jpg'; }; }
+            if (avDark) { avDark.src = avatarSrc; avDark.onerror = () => { avDark.src = '/image/dpol.png'; }; }
+            if (avLight) { avLight.src = avatarSrc; avLight.onerror = () => { avLight.src = '/image/dpol.png'; }; }
         }
 
         // ===== ТЕМА =====
@@ -5968,10 +6054,10 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
                 <h3 class="modal-title">Задайте начальные параметры<br>модуля сбора данных:</h3>
                 
                 <div class="modal-params-list">
-                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр влажности воздуха (%)">
-                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр влажность почвы (%)">
-                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр температуры (°C)">
-                    <input type="number" class="modal-input param-input" placeholder="Начальный параметр атм. давление (мм рт.ст.)">
+                    <input type="number" id="param-humidity" class="modal-input param-input" placeholder="Начальный параметр влажности воздуха (%)" min="0" max="100" step="0.1">
+                    <input type="number" id="param-soil" class="modal-input param-input" placeholder="Начальный параметр влажность почвы (%)" min="0" max="100" step="0.1">
+                    <input type="number" id="param-temp" class="modal-input param-input" placeholder="Начальный параметр температуры (°C)" min="-40" max="80" step="0.1">
+                    <input type="number" id="param-pressure" class="modal-input param-input" placeholder="Начальный параметр атм. давление (мм рт.ст.)" min="500" max="800" step="0.1">
                 </div>
 
                 <button class="modal-btn active" onclick="finalAddPlant()">Добавить</button>
@@ -6074,7 +6160,7 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
     }
 
     function resolveAvatarPath(path) {
-        if (!path || path === '') return '/image/default-avatar.jpg';
+        if (!path || path === '') return '/image/dpol.png';
         if (path.startsWith('http')) return path;
         let cleanPath = path.replace(/^\/+/, '');
         return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
@@ -6308,13 +6394,30 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
         }
     });
 
-    // Функция сброса фото
+    // Функция сброса фото — пересоздаём file input чтобы гарантированно сбросить
     function resetPhoto(e) {
-        e.preventDefault();
+        if (e) e.preventDefault();
         plantPreviewImg.src = '';
         plantPreviewImg.style.display = 'none';
-        fileInput.value = '';
         currentTempPhotoFile = null;
+        // Пересоздаём file input (надёжнее чем .value = '')
+        const oldInput = document.getElementById('file-input');
+        const newInput = oldInput.cloneNode(false);
+        newInput.addEventListener('change', function(ev) {
+            const file = ev.target.files[0];
+            if (file) {
+                if (!file.type.startsWith('image/')) { alert('Пожалуйста, выберите изображение'); return; }
+                if (file.size > 2 * 1024 * 1024) { alert('Размер файла не должен превышать 2MB'); return; }
+                currentTempPhotoFile = file;
+                const reader = new FileReader();
+                reader.onload = function(ev2) {
+                    plantPreviewImg.src = ev2.target.result;
+                    plantPreviewImg.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+        oldInput.parentNode.replaceChild(newInput, oldInput);
     }
 
     // Переход к параметрам
@@ -6331,12 +6434,31 @@ const char PLANT_HTML[] PROGMEM = R"rawliteral(
             return;
         }
         
-        // Собираем параметры
+        // Собираем параметры по именованным ID
+        const humVal  = parseFloat(document.getElementById('param-humidity')?.value);
+        const soilVal = parseFloat(document.getElementById('param-soil')?.value);
+        const tempVal = parseFloat(document.getElementById('param-temp')?.value);
+        const presVal = parseFloat(document.getElementById('param-pressure')?.value);
+
+        // Валидация: хотя бы один параметр должен быть задан и находиться в допустимом диапазоне
+        if (!isNaN(humVal) && (humVal < 0 || humVal > 100)) {
+            alert('Влажность воздуха должна быть от 0 до 100%'); return;
+        }
+        if (!isNaN(soilVal) && (soilVal < 0 || soilVal > 100)) {
+            alert('Влажность почвы должна быть от 0 до 100%'); return;
+        }
+        if (!isNaN(tempVal) && (tempVal < -40 || tempVal > 80)) {
+            alert('Температура должна быть от -40 до 80°C'); return;
+        }
+        if (!isNaN(presVal) && (presVal < 500 || presVal > 800)) {
+            alert('Давление должно быть от 500 до 800 мм рт.ст.'); return;
+        }
+
         tempPlantData.params = {
-            temp: parseFloat(paramInputs[2]?.value) || 0,      // температура
-            humidity: parseFloat(paramInputs[0]?.value) || 0, // влажность воздуха
-            soil: parseFloat(paramInputs[1]?.value) || 0,     // влажность почвы
-            pressure: parseFloat(paramInputs[3]?.value) || 0  // давление
+            humidity: isNaN(humVal)  ? 0 : humVal,
+            soil:     isNaN(soilVal) ? 0 : soilVal,
+            temp:     isNaN(tempVal) ? 0 : tempVal,
+            pressure: isNaN(presVal) ? 0 : presVal
         };
         
         // Загружаем фото если есть
@@ -7746,7 +7868,7 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
         }
 
         function resolveAvatarPath(path) {
-            if (!path || path === '') return '/image/default-avatar.jpg';
+            if (!path || path === '') return '/image/dpol.png';
             if (path.startsWith('http')) return path;
             let cleanPath = path.replace(/^\/+/, '');
             return '/api/avatar/file?file=' + encodeURIComponent(cleanPath);
@@ -7974,6 +8096,13 @@ void handleApiRegister() {
 
 // === НОВОЕ: Получение профиля ===
 void handleGetProfile() {
+    // Если БД ещё не инициализирована (SD медленно стартует) — вернуть 503,
+    // а не 401, чтобы фронтенд не делал редирект на /login
+    if (!db) {
+        server.sendHeader("Retry-After", "5");
+        server.send(503, "application/json", "{\"error\":\"DB not ready\",\"retry\":true}");
+        return;
+    }
     String auth = server.header("Authorization");
     if (!auth.startsWith("Bearer ")) {
         server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
@@ -8026,6 +8155,15 @@ void handleUpdateProfile() {
     bool success = updateProfileByToken(token, username, email, gender, timezone, avatar);
     
     if (success) {
+        // Обновляем часовой пояс в памяти, если пользователь его сменил
+        if (timezone.length() > 0) {
+            int newOffset = parseTimezoneOffset(timezone);
+            if (newOffset != tzOffsetSec) {
+                tzOffsetSec = newOffset;
+                configTime(tzOffsetSec, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+                Serial.printf("[TZ] Часовой пояс обновлён пользователем: %d сек\n", tzOffsetSec);
+            }
+        }
         server.send(200, "application/json", "{\"success\":true}");
     } else {
         server.send(500, "application/json", "{\"error\":\"Update failed\"}");
@@ -8191,8 +8329,8 @@ void handleGetAvatar() {
         Serial.printf("❌ Файл не найден: %s\n", fullPath.c_str());
         
         // Пытаемся отдать дефолтный аватар
-        if (SD.exists("/image/default-avatar.jpg")) {
-            File defaultFile = SD.open("/image/default-avatar.jpg", FILE_READ);
+        if (SD.exists("/image/dpol.png")) {
+            File defaultFile = SD.open("/image/dpol.png", FILE_READ);
             server.streamFile(defaultFile, "image/jpeg");
             defaultFile.close();
             return;
@@ -8321,8 +8459,10 @@ void handleAddPlant() {
     bool success = addPlant(userId, name, comment, photo, temp, humidity, soil, pressure);
     
     if (success) {
+        server.sendHeader("Connection", "close");
         server.send(200, "application/json", "{\"success\":true}");
     } else {
+        server.sendHeader("Connection", "close");
         server.send(500, "application/json", "{\"error\":\"Failed to add plant\"}");
     }
 }
@@ -8372,8 +8512,10 @@ void handleUpdatePlant() {
     bool success = updatePlant(plantId, userId, name, comment, photo, temp, humidity, soil, pressure);
     
     if (success) {
+        server.sendHeader("Connection", "close");
         server.send(200, "application/json", "{\"success\":true}");
     } else {
+        server.sendHeader("Connection", "close");
         server.send(500, "application/json", "{\"error\":\"Failed to update plant\"}");
     }
 }
@@ -8996,7 +9138,18 @@ void setup() {
     Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
   }
   
-  configTime(5 * 3600, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+  // Инициализация SD-карты и БД — делается ДО NTP чтобы загрузить часовой пояс
+  initDB();
+  createSDDirectories();
+
+  if (!db) {
+    Serial.println("Внимание: БД не инициализирована! Сервер запустится, но API будет возвращать 503 до готовности.");
+  } else {
+    reloadTimezoneFromDB();
+  }
+
+  // NTP — после DB, чтобы использовать сохранённый часовой пояс
+  configTime(tzOffsetSec, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
   Serial.print("Syncing time");
   for (int i = 0; i < 40; i++) {
     time_t now = time(nullptr);
@@ -9011,18 +9164,6 @@ void setup() {
   if (!timeSynced) {
     Serial.println("\nTime sync timeout, using uptime");
     bootTime = millis() / 1000;
-  }
-  
-  // Инициализация SD-карты и БД
-  initDB();
-  createSDDirectories();
-
-  if (!db) {
-    Serial.println("Критическая ошибка: БД не инициализирована!");
-    while (1) {
-      delay(1000);
-      Serial.println("Требуется SD-карта для работы!");
-    }
   }
 
   // Инициализация SPI для BME280 и e-paper
