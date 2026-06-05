@@ -432,7 +432,37 @@ void initDB() {
 //   } else {
 //     Serial.println("Таблица создана/проверена");
 //   }
-  
+
+    const char* createJournalSQL = 
+    "CREATE TABLE IF NOT EXISTS journal ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "user_id INTEGER NOT NULL, "
+    "valve_id INTEGER NOT NULL, "
+    "ts TEXT NOT NULL, "
+    "type TEXT NOT NULL, "
+    "duration_sec INTEGER DEFAULT 0, "
+    "volume_ml REAL DEFAULT 0, "
+    "status TEXT DEFAULT 'completed', "
+    "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE);";
+
+    sqlite3_stmt* checkStmt = nullptr;
+    bool hasUserId = false;
+    if (sqlite3_prepare_v2(db, "PRAGMA table_info(journal);", -1, &checkStmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(checkStmt) == SQLITE_ROW) {
+            const char* colName = (const char*)sqlite3_column_text(checkStmt, 1);
+            if (strcmp(colName, "user_id") == 0) {
+                hasUserId = true;
+                break;
+            }
+        }
+        sqlite3_finalize(checkStmt);
+    }
+
+    if (!hasUserId) {
+        Serial.println("Добавляю колонку user_id в таблицу journal...");
+        sqlite3_exec(db, "ALTER TABLE journal ADD COLUMN user_id INTEGER DEFAULT 1;", NULL, NULL, NULL);
+    }
+
     const char* createUsers = 
     "CREATE TABLE IF NOT EXISTS Users ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -515,17 +545,17 @@ void initDB() {
 
     // Таблица Plants (растения пользователя)
     const char* sqlPlants =
-  "CREATE TABLE IF NOT EXISTS Plants ("
-  "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-  "user_id INTEGER NOT NULL, "
-  "name TEXT NOT NULL, "
-  "comment TEXT, "
-  "photo_path TEXT, "
-  "min_humidity REAL DEFAULT 0, "
-  "max_humidity REAL DEFAULT 0, "
-  "valve_id INTEGER DEFAULT 0, "
-  "created_at INTEGER NOT NULL, "
-  "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE);";
+    "CREATE TABLE IF NOT EXISTS Plants ("
+    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "user_id INTEGER NOT NULL, "
+    "name TEXT NOT NULL, "
+    "comment TEXT, "
+    "photo_path TEXT, "
+    "min_humidity REAL DEFAULT 0, "
+    "max_humidity REAL DEFAULT 0, "
+    "valve_id INTEGER DEFAULT 0, "
+    "created_at INTEGER NOT NULL, "
+    "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE);";
 
     rc = sqlite3_exec(db, sqlPlants, NULL, NULL, &zErrMsg);
     if (rc != SQLITE_OK) {
@@ -871,46 +901,57 @@ String getUserPlants(int userId) {
 // Добавить растение
 bool addPlant(int userId, const String& name, const String& comment, const String& photoPath, 
               float minHumidity, float maxHumidity, int valveId) {
-  if (!db || userId == 0) {
-    Serial.println("[addPlant] Ошибка: БД не инициализирована или userId=0");
-    return false;
-  }
-  
-  if (name.length() == 0) {
-    Serial.println("[addPlant] Ошибка: имя растения пустое");
-    return false;
-  }
-  
-  const char* sql = "INSERT INTO Plants (user_id, name, comment, photo_path, min_humidity, max_humidity, valve_id, created_at) VALUES (?,?,?,?,?,?,?,?);";
-  sqlite3_stmt* stmt = nullptr;
-  
-  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-    Serial.printf("[addPlant] Prepare error: %s\n", sqlite3_errmsg(db));
-    return false;
-  }
-  
-  sqlite3_bind_int(stmt, 1, userId);
-  sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, comment.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 4, photoPath.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_double(stmt, 5, minHumidity);
-  sqlite3_bind_double(stmt, 6, maxHumidity);
-  sqlite3_bind_int(stmt, 7, valveId);
-  sqlite3_bind_int(stmt, 8, time(nullptr));
-  
-  int rc = sqlite3_step(stmt);
-  if (rc != SQLITE_DONE) {
-    Serial.printf("[addPlant] Step error: %s\n", sqlite3_errmsg(db));
+    if (!db || userId == 0) {
+        Serial.println("[addPlant] Ошибка: БД не инициализирована или userId=0");
+        return false;
+    }
+    
+    if (name.length() == 0) {
+        Serial.println("[addPlant] Ошибка: имя растения пустое");
+        return false;
+    }
+    
+    const char* sql = "INSERT INTO Plants (user_id, name, comment, photo_path, min_humidity, max_humidity, valve_id, created_at) VALUES (?,?,?,?,?,?,?,?);";
+    sqlite3_stmt* stmt = nullptr;
+    
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Serial.printf("[addPlant] Prepare error: %s\n", sqlite3_errmsg(db));
+        return false;
+    }
+    
+    sqlite3_bind_int(stmt, 1, userId);
+    sqlite3_bind_text(stmt, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, comment.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, photoPath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 5, minHumidity);
+    sqlite3_bind_double(stmt, 6, maxHumidity);
+    sqlite3_bind_int(stmt, 7, valveId);
+    sqlite3_bind_int(stmt, 8, time(nullptr));
+    
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        Serial.printf("[addPlant] Step error: %s\n", sqlite3_errmsg(db));
+        sqlite3_finalize(stmt);
+        return false;
+    }
+    
+    int plantId = sqlite3_last_insert_rowid(db);
     sqlite3_finalize(stmt);
-    return false;
-  }
-  
-  int plantId = sqlite3_last_insert_rowid(db);
-  sqlite3_finalize(stmt);
-  
-  Serial.printf("[addPlant] Растение добавлено: ID=%d, UserID=%d, Name=%s, Valve=%d\n", 
+    
+    Serial.printf("[addPlant] Растение добавлено: ID=%d, UserID=%d, Name=%s, Valve=%d\n", 
+                    plantId, userId, name.c_str(), valveId);
+    if (valveId > 0 && valveId <= NUM_VALVES) {
+        char updateValveSql[256];
+        snprintf(updateValveSql, sizeof(updateValveSql),
+                "UPDATE valves SET plant_name='%s' WHERE id=%d;",
+                name.c_str(), valveId);
+        sqlite3_exec(db, updateValveSql, NULL, NULL, NULL);
+        Serial.printf("[Plant] Клапан %d назначен растению: %s\n", valveId, name.c_str());
+    }
+
+    Serial.printf("[addPlant] Растение добавлено: ID=%d, UserID=%d, Name=%s, Valve=%d\n",
                 plantId, userId, name.c_str(), valveId);
-  return true;
+    return true;
 }
 
 // Обновить растение
@@ -932,6 +973,23 @@ bool updatePlant(int plantId, int userId, const String& name, const String& comm
     sqlite3_bind_int(stmt, 8, userId);
     bool success = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
+    if (success && valveId > 0 && valveId <= NUM_VALVES) {
+        // Сначала очищаем все клапаны от этого растения
+        char clearSql[128];
+        snprintf(clearSql, sizeof(clearSql),
+                "UPDATE valves SET plant_name='—' WHERE plant_name='%s';",
+                name.c_str());
+        sqlite3_exec(db, clearSql, NULL, NULL, NULL);
+        
+        // Затем назначаем новый клапан
+        char updateValveSql[256];
+        snprintf(updateValveSql, sizeof(updateValveSql),
+                "UPDATE valves SET plant_name='%s' WHERE id=%d;",
+                name.c_str(), valveId);
+        sqlite3_exec(db, updateValveSql, NULL, NULL, NULL);
+        Serial.printf("[Plant] Клапан %d обновлён для растения: %s\n", valveId, name.c_str());
+    }
+
     return success;
 }
 
@@ -977,7 +1035,14 @@ bool deletePlant(int plantId, int userId) {
             Serial.printf("Удален файл фото: %s\n", fullPath.c_str());
         }
     }
-    
+
+    char clearSql[128];
+    snprintf(clearSql, sizeof(clearSql),
+            "UPDATE valves SET plant_name='—' WHERE id IN (SELECT valve_id FROM Plants WHERE id=%d);",
+            plantId);
+    sqlite3_exec(db, clearSql, NULL, NULL, NULL);
+    Serial.printf("[Plant] Клапан освобождён при удалении растения ID=%d\n", plantId);
+
     return success;
 }
 
