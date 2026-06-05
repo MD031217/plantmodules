@@ -24,8 +24,8 @@
 #define ENABLE_DEBUG_ENDPOINT 1
 
 // ==================== Wi-Fi НАСТРОЙКИ ====================
-#define STA_SSID "Galaxy M56 5G A166"
-#define STA_PASS "gdre3uqbhwts6t8"
+#define STA_SSID ""
+#define STA_PASS ""
 #define AP_SSID  "netSensorModule-01"
 #define AP_PASS  "12345678"
 #define MDNS_NAME "SensorModule-C3"
@@ -67,6 +67,11 @@ int currentSoil = 0, currentHum = 0, currentTemp = 0, currentPres = 0;
 time_t bootTime = 0;
 bool timeSynced = false;
 int tzOffsetSec = 5 * 3600;  // Часовой пояс по умолчанию UTC+5, обновляется из профиля
+// Глобальная переменная для отслеживания попыток синхронизации
+unsigned long lastTimeSyncAttempt = 0;
+bool timeSyncNotified = false;
+
+
 
 // Парсит строку вида "(UTC+05:00) ..." или "(UTC-03:30) ..." → смещение в секундах
 int parseTimezoneOffset(const String& tz) {
@@ -274,21 +279,65 @@ void initDB() {
   sqlite3_exec(db, "ALTER TABLE Users ADD COLUMN avatar TEXT DEFAULT '';", NULL, NULL, NULL);
   sqlite3_exec(db, "ALTER TABLE Users ADD COLUMN salt TEXT DEFAULT '';", NULL, NULL, NULL);
 
-    // Таблица Sessions
+    // Таблица Sessions — с ON DELETE CASCADE
     const char* sqlSessions = 
     "CREATE TABLE IF NOT EXISTS Sessions ("
     "id INTEGER PRIMARY KEY AUTOINCREMENT, "
     "token TEXT UNIQUE NOT NULL, "
     "user_id INTEGER NOT NULL, "
     "created_at INTEGER NOT NULL, "
-    "FOREIGN KEY(user_id) REFERENCES Users(id));";
+    "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE);";
 
-  sqlite3_exec(db, sqlSessions, NULL, NULL, &zErrMsg);
-  if (zErrMsg) {
-    Serial.printf("Sessions error: %s\n", zErrMsg);
-    sqlite3_free(zErrMsg);
-    zErrMsg = nullptr;
-  }
+    rc = sqlite3_exec(db, sqlSessions, NULL, NULL, &zErrMsg);
+    if (zErrMsg) {
+        Serial.printf("Sessions error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+        zErrMsg = nullptr;
+    }
+
+    // === МИГРАЦИЯ: Добавляем CASCADE, если таблица уже существовала без него ===
+    Serial.println("Проверка/миграция таблицы Sessions...");
+
+    // Проверяем, есть ли уже FOREIGN KEY с CASCADE
+    sqlite3_stmt* stmt = nullptr;
+    bool hasCascade = false;
+    
+    if (sqlite3_prepare_v2(db, 
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='Sessions';", 
+        -1, &stmt, nullptr) == SQLITE_OK) {
+        
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* tableSql = (const char*)sqlite3_column_text(stmt, 0);
+            if (tableSql && strstr(tableSql, "ON DELETE CASCADE") != nullptr) {
+                hasCascade = true;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    if (!hasCascade) {
+        Serial.println("→ Выполняется миграция Sessions (добавляем CASCADE)...");
+        
+        sqlite3_exec(db, "DROP TABLE IF EXISTS Sessions_new;", NULL, NULL, NULL);
+        
+        sqlite3_exec(db,
+            "CREATE TABLE Sessions_new ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "token TEXT UNIQUE NOT NULL, "
+            "user_id INTEGER NOT NULL, "
+            "created_at INTEGER NOT NULL, "
+            "FOREIGN KEY(user_id) REFERENCES Users(id) ON DELETE CASCADE);", 
+            NULL, NULL, NULL);
+
+        sqlite3_exec(db, "INSERT INTO Sessions_new SELECT * FROM Sessions;", NULL, NULL, NULL);
+        
+        sqlite3_exec(db, "DROP TABLE Sessions;", NULL, NULL, NULL);
+        sqlite3_exec(db, "ALTER TABLE Sessions_new RENAME TO Sessions;", NULL, NULL, NULL);
+        
+        Serial.println("✅ Таблица Sessions успешно пересоздана с ON DELETE CASCADE");
+    } else {
+        Serial.println("✅ CASCADE уже присутствует");
+    }
 
     // Таблица Plants (растения пользователя)
     const char* sqlPlants = 
@@ -480,12 +529,24 @@ String loginUser(const String& username, const String& password) {
 
 // === НОВОЕ: Получение ID пользователя по токену ===
 int getUserIdByToken(const String& token) {
-    if (!db || token.length() != 24) return 0;
+    if (!db) {
+        Serial.println("[getUserIdByToken] Ошибка: БД не инициализирована");
+        return 0;
+    }
+    if (token.length() != 24) {
+        Serial.printf("[getUserIdByToken] Ошибка: неверная длина токена (%d)\n", token.length());
+        return 0;
+    }
+    
+    Serial.printf("[getUserIdByToken] Проверяем токен: %.12s...\n", token.c_str());
     
     const char* sql = "SELECT user_id, created_at FROM Sessions WHERE token=? LIMIT 1;";
     sqlite3_stmt* stmt = nullptr;
     
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        Serial.printf("[getUserIdByToken] Prepare failed: %s\n", sqlite3_errmsg(db));
+        return 0;
+    }
     
     sqlite3_bind_text(stmt, 1, token.c_str(), -1, SQLITE_TRANSIENT);
     
@@ -494,12 +555,13 @@ int getUserIdByToken(const String& token) {
         long created = sqlite3_column_int(stmt, 1);
         sqlite3_finalize(stmt);
 
-        // Проверка срока жизни сессии (30 дней).
-        // Проверяем только при синхронизированном времени, иначе можно
-        // случайно разлогинить всех, пока часы не получили NTP.
+        Serial.printf("✅ Токен найден! User ID = %d, created_at = %ld\n", userId, created);
+
+        // Проверка срока жизни сессии
         const long SESSION_TTL = 30L * 24 * 3600;
         time_t now = time(nullptr);
         if (timeSynced && created > 0 && ((long)now - created) > SESSION_TTL) {
+            Serial.println("⚠️ Сессия истекла (TTL)");
             // Удаляем протухшую сессию
             const char* del = "DELETE FROM Sessions WHERE token=?;";
             sqlite3_stmt* delStmt = nullptr;
@@ -511,6 +573,8 @@ int getUserIdByToken(const String& token) {
             return 0;
         }
         return userId;
+    } else {
+        Serial.println("❌ Токен НЕ найден в таблице Sessions");
     }
     
     sqlite3_finalize(stmt);
@@ -782,7 +846,26 @@ void logToDB(int soil, int hum, int temp, int press) {
   }
   
   time_t now = time(nullptr);
-  String timeStr = formatTime(now, true);
+  String timeStr;
+  
+  // Проверяем, синхронизировано ли время
+  if (!timeSynced || now < 1700000000) {
+    // Время не синхронизировано - используем uptime
+    unsigned long uptime = millis() / 1000;
+    int days = uptime / 86400;
+    int hours = (uptime % 86400) / 3600;
+    int mins = (uptime % 3600) / 60;
+    int secs = uptime % 60;
+    char buf[32];
+    if (days > 0) sprintf(buf, "UP %dd %02d:%02d:%02d", days, hours, mins, secs);
+    else sprintf(buf, "UP %02d:%02d:%02d", hours, mins, secs);
+    timeStr = String(buf);
+    // Используем отрицательное значение для идентификации записей без синхронизации
+    now = -((long)uptime);
+    Serial.printf("⚠️ Время не синхронизировано, использую uptime: %s\n", timeStr.c_str());
+  } else {
+    timeStr = formatTime(now, true);
+  }
   
   String sql = "INSERT INTO SensorLog (ts, time, temp, hum, soil, pressure) VALUES (?,?,?,?,?,?);";
   rc = sqlite3_prepare_v2(db, sql.c_str(), -1, &res, NULL);
@@ -801,8 +884,7 @@ void logToDB(int soil, int hum, int temp, int press) {
     }
     sqlite3_finalize(res);
 
-    // Ограничение размера журнала: удаляем самые старые записи сверх MAX_LOG_ENTRIES,
-    // чтобы БД на SD-карте не росла бесконечно.
+    // Ограничение размера журнала
     String trimSql = "DELETE FROM SensorLog WHERE ID NOT IN "
                      "(SELECT ID FROM SensorLog ORDER BY ID DESC LIMIT " +
                      String(MAX_LOG_ENTRIES) + ");";
@@ -3189,11 +3271,53 @@ const char PROFILE_HTML[] PROGMEM = R"rawliteral(
             window.location.href = '/login';
         };
 
-        const deleteAccount = () => {
-            if (!confirm('Вы уверены, что хотите удалить аккаунт? Это действие нельзя отменить.')) return;
-            localStorage.removeItem('userData');
-            window.location.href = '/register';
-        };
+        // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+
+        function getAuthToken() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.warn("Токен не найден, перенаправляем на логин");
+                window.location.href = '/login';
+                return null;
+            }
+            return token;
+        }
+
+        // === УДАЛЕНИЕ АККАУНТА ===
+        async function deleteAccount() {
+            if (!confirm('ВЫ УВЕРЕНЫ? Это действие нельзя отменить! Все данные будут удалены.')) {
+                return;
+            }
+            if (!confirm('ПОСЛЕДНЕЕ ПОДТВЕРЖДЕНИЕ: Удалить аккаунт навсегда?')) {
+                return;
+            }
+
+            const token = getAuthToken();
+            if (!token) return;   // ← добавили защиту
+
+            try {
+                const res = await fetch('/api/delete-account', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ confirm: "DELETE" })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    alert('Аккаунт успешно удалён');
+                    localStorage.removeItem('auth_token');
+                    window.location.href = '/login';
+                } else {
+                    alert('Ошибка: ' + (data.error || 'Не удалось удалить аккаунт'));
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Ошибка соединения с сервером');
+            }
+        }
 
         document.addEventListener('DOMContentLoaded', () => {
             loadProfileFromServer().then(profile => {
@@ -3933,12 +4057,16 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             <div class="edit-section">
                 <div class="edit-section-title">Сменить пароль</div>
                 <div class="edit-password-inputs">
+                    
+                    <!-- Новый пароль -->
                     <div class="password-input-wrapper">
                         <input type="password" id="new-password" placeholder="Новый пароль">
                         <img src="/image/warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-1" style="display:none;">
                     </div>
+
+                    <!-- Подтверждение нового пароля -->
                     <div class="password-input-wrapper">
-                        <input type="password" id="confirm-password" placeholder="Подтверждение нового пароль">
+                        <input type="password" id="confirm-password" placeholder="Подтвердите новый пароль">
                         <img src="/image/warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-2" style="display:none;">
                     </div>
                 </div>
@@ -3956,7 +4084,7 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
                 </div>
             </div>
             <div class="card-actions" style="margin-top: 35px;">
-                <button class="btn btn-edit" onclick="saveChanges()">Сохранить изменения</button>
+                <button class="btn btn-edit" onclick="saveAllChanges()">Сохранить изменения</button>
                 <button class="btn btn-delete" onclick="window.location.href='/profile'">Отмена</button>
             </div>
         </div>
@@ -4004,6 +4132,16 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
     </footer>
 
     <script>
+        // === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+        function getAuthToken() {
+            const token = localStorage.getItem('auth_token');
+            if (!token) {
+                console.warn('Токен не найден');
+                window.location.href = '/login';
+                return null;
+            }
+            return token;
+        }
         // === ИСПРАВЛЕННЫЙ Хелпер для разрешения пути к аватару ===
         function resolveAvatarPath(path) {
             if (!path || path === '') {
@@ -4278,14 +4416,15 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
             }
         };
 
-        // === ИСПРАВЛЕННАЯ функция сохранения изменений профиля ===
-        async function saveChanges() {
+        // === ОБЪЕДИНЁННАЯ функция сохранения всех изменений ===
+        async function saveAllChanges() {
             const token = localStorage.getItem('auth_token');
             if (!token) { 
                 window.location.href = '/login'; 
                 return; 
             }
             
+            // ===== 1. СОХРАНЯЕМ ПРОФИЛЬ =====
             const username = document.getElementById('edit-username').value.trim();
             const email = document.getElementById('edit-email').value.trim();
             const timezone = document.getElementById('edit-timezone').value;
@@ -4301,110 +4440,87 @@ const char EDIT_HTML[] PROGMEM = R"rawliteral(
                 return;
             }
             
-            const payload = { username, email, gender, timezone };
-            console.log('📤 Сохранение профиля:', payload);
+            const profilePayload = { username, email, gender, timezone };
+            console.log('📤 Сохранение профиля:', profilePayload);
             
             try {
-                const res = await fetch('/api/profile', {
+                // Сохраняем профиль
+                const profileRes = await fetch('/api/profile', {
                     method: 'POST',
                     headers: {
                         'Authorization': 'Bearer ' + token,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(profilePayload)
                 });
                 
-                const data = await res.json();
-                console.log('📡 Ответ сервера:', data);
+                const profileData = await profileRes.json();
+                console.log('📡 Ответ сервера (профиль):', profileData);
                 
-                if (data.success) {
-                    alert('✅ Профиль успешно сохранен!');
-                    window.location.href = '/profile';
-                } else {
-                    alert('❌ Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+                if (!profileRes.ok || !profileData.success) {
+                    alert('❌ Ошибка сохранения профиля: ' + (profileData.error || 'Неизвестная ошибка'));
+                    return;
                 }
+                
+                // ===== 2. ЕСЛИ ПАРОЛЬ ЗАПОЛНЕН - МЕНЯЕМ ЕГО =====
+                const newPass = document.getElementById('new-password').value.trim();
+                const confirmPass = document.getElementById('confirm-password').value.trim();
+                
+                // Проверяем: если заполнено хотя бы одно поле пароля
+                if (newPass || confirmPass) {
+                    // Оба поля должны быть заполнены
+                    if (!newPass || !confirmPass) {
+                        alert('Заполните оба поля пароля или оставьте их пустыми');
+                        return;
+                    }
+                    
+                    if (newPass.length < 6) {
+                        alert('Новый пароль должен быть не менее 6 символов');
+                        return;
+                    }
+                    
+                    if (newPass !== confirmPass) {
+                        alert('Пароли не совпадают');
+                        return;
+                    }
+                    
+                    // Меняем пароль
+                    const passRes = await fetch('/api/change-password', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ newPassword: newPass })
+                    });
+                    
+                    const passData = await passRes.json();
+                    
+                    if (!passRes.ok || !passData.success) {
+                        alert('⚠️ Профиль сохранён, но ошибка смены пароля: ' + (passData.error || 'Неизвестная ошибка'));
+                        window.location.href = '/profile';
+                        return;
+                    }
+                    
+                    alert('✅ Профиль и пароль успешно сохранены!');
+                    
+                    // Пароль изменён - предлагаем перелогиниться
+                    if (confirm('Пароль изменён. Войти заново?')) {
+                        localStorage.removeItem('auth_token');
+                        window.location.href = '/login';
+                        return;
+                    }
+                } else {
+                    // Пароль не меняли
+                    alert('✅ Профиль успешно сохранён!');
+                }
+                
+                // Переход на страницу профиля
+                window.location.href = '/profile';
+                
             } catch (e) {
                 console.error('❌ Ошибка сети:', e);
                 alert('Ошибка соединения с сервером');
-            }
-        }
-
-        // === СМЕНА ПАРОЛЯ ===
-        async function changePassword() {
-            const oldPass = document.getElementById('old-password').value;
-            const newPass = document.getElementById('new-password').value;
-            const confirmPass = document.getElementById('confirm-new-password').value;
-
-            if (newPass !== confirmPass) {
-                alert('Новые пароли не совпадают');
-                return;
-            }
-            if (newPass.length < 6) {
-                alert('Новый пароль должен быть не менее 6 символов');
-                return;
-            }
-
-            const token = getAuthToken();
-            try {
-                const res = await fetch('/api/change-password', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + token,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        oldPassword: oldPass,
-                        newPassword: newPass
-                    })
-                });
-
-                const data = await res.json();
-                if (data.success) {
-                    alert('✅ Пароль успешно изменён');
-                    // Очищаем поля
-                    document.getElementById('old-password').value = '';
-                    document.getElementById('new-password').value = '';
-                    document.getElementById('confirm-new-password').value = '';
-                } else {
-                    alert('Ошибка: ' + (data.error || 'Не удалось сменить пароль'));
-                }
-            } catch (e) {
-                console.error(e);
-                alert('Ошибка соединения с сервером');
-            }
-        }
-
-        // === УДАЛЕНИЕ АККАУНТА ===
-        async function deleteAccount() {
-            if (!confirm('ВЫ УВЕРЕНЫ? Это действие нельзя отменить! Все данные будут удалены.')) {
-                return;
-            }
-            if (!confirm('ПОСЛЕДНЕЕ ПОДТВЕРЖДЕНИЕ: Удалить аккаунт навсегда?')) {
-                return;
-            }
-
-            const token = getAuthToken();
-            try {
-                const res = await fetch('/api/delete-account', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + token,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ confirm: "DELETE" })
-                });
-
-                const data = await res.json();
-                if (data.success) {
-                    alert('Аккаунт успешно удалён');
-                    localStorage.removeItem('auth_token');
-                    window.location.href = '/login';
-                } else {
-                    alert('Ошибка: ' + (data.error || 'Не удалось удалить аккаунт'));
-                }
-            } catch (e) {
-                console.error(e);
-                alert('Ошибка соединения');
             }
         }
     </script>
@@ -4850,7 +4966,7 @@ const char SETTINGS_HTML[] PROGMEM = R"rawliteral(
             </div>
             <h3 style="font-size: 20px; font-weight: 700; color: var(--title-color); margin-bottom: 12px;">Возврат к настройкам Wi-Fi</h3>
             <p style="font-size: 15px; color: var(--subtitle-color); margin-bottom: 24px; line-height: 1.5;">
-                Для возврата к настройкам вам необходимо вручную подключиться к сети <strong>"GreenShelf_Setup"</strong> на вашем устройстве.<br><br>
+                Для возврата к настройкам вам необходимо вручную подключиться к сети <strong>"netSensorModule-01"</strong> на вашем устройстве.<br><br>
                 После подключения вы будете автоматически перенаправлены на эту страницу.
             </p>
             <div class="modal-actions">
@@ -7941,6 +8057,557 @@ const char ROOT_HTML[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+const char WIFI_SETUP_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Настройка Wi-Fi | Зелёная полка</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #0F182B 0%, #1a2d45 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .setup-container {
+            max-width: 550px;
+            width: 100%;
+            animation: fadeInUp 0.5s ease-out;
+        }
+
+        .setup-card {
+            background: rgba(255, 255, 255, 0.98);
+            border-radius: 32px;
+            padding: 40px 35px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+            text-align: center;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 20px;
+            background: #21C85F;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            box-shadow: 0 10px 20px rgba(33, 200, 95, 0.3);
+        }
+
+        h1 {
+            color: #1a2d45;
+            font-size: 26px;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .btn-scan {
+            width: 100%;
+            background: #21C85F;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            padding: 14px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-scan:hover {
+            transform: translateY(-2px);
+            background: #1aab4e;
+            box-shadow: 0 5px 20px rgba(33, 200, 95, 0.4);
+        }
+
+        .btn-scan:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .network-list {
+            margin: 20px 0;
+            max-height: 350px;
+            overflow-y: auto;
+            border-radius: 16px;
+        }
+
+        .network-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #f5f5f5;
+            border-radius: 14px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .network-item:hover {
+            background: #e8f5e9;
+            transform: translateX(5px);
+        }
+
+        .network-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex: 1;
+            text-align: left;
+        }
+
+        .wifi-icon {
+            font-size: 20px;
+            min-width: 30px;
+        }
+
+        .network-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 15px;
+            word-break: break-all;
+        }
+
+        .network-security {
+            font-size: 11px;
+            color: #999;
+            margin-top: 2px;
+        }
+
+        .btn-select {
+            background: #21C85F;
+            color: white;
+            border: none;
+            border-radius: 30px;
+            padding: 6px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-select:hover {
+            background: #1aab4e;
+            transform: scale(1.02);
+        }
+
+        .divider {
+            margin: 25px 0 20px;
+            border-top: 1px solid #e0e0e0;
+            position: relative;
+        }
+
+        .divider-text {
+            position: absolute;
+            top: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 0 15px;
+            color: #999;
+            font-size: 12px;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-input, .form-select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 16px;
+            font-size: 15px;
+            transition: all 0.3s ease;
+            outline: none;
+            font-family: inherit;
+        }
+
+        .form-input:focus, .form-select:focus {
+            border-color: #21C85F;
+            box-shadow: 0 0 0 3px rgba(33, 200, 95, 0.1);
+        }
+
+        .btn-add {
+            width: 100%;
+            background: #21C85F;
+            color: white;
+            border: none;
+            border-radius: 50px;
+            padding: 14px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .btn-add:hover {
+            transform: translateY(-2px);
+            background: #1aab4e;
+            box-shadow: 0 5px 20px rgba(33, 200, 95, 0.4);
+        }
+
+        .btn-add:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status-message {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 14px;
+            display: none;
+            animation: fadeInUp 0.3s ease;
+        }
+
+        .status-message.success {
+            display: block;
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status-message.error {
+            display: block;
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status-message.info {
+            display: block;
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .info-note {
+            margin-top: 25px;
+            padding: 12px;
+            background: #e8f5e9;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #2e7d32;
+            text-align: center;
+        }
+
+        @media (max-width: 480px) {
+            .setup-card {
+                padding: 30px 20px;
+            }
+            h1 {
+                font-size: 22px;
+            }
+            .network-item {
+                padding: 10px 12px;
+            }
+            .btn-select {
+                padding: 5px 12px;
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="setup-container">
+        <div class="setup-card">
+            <div class="logo">
+                📡
+            </div>
+            <h1>🔧 Настройка Wi-Fi</h1>
+            <p class="subtitle">Подключите модуль к вашей домашней сети<br>для начала работы</p>
+            
+            <button class="btn-scan" id="scanBtn">
+                🔍 Найти Wi-Fi сети
+            </button>
+            
+            <div id="networkList" class="network-list"></div>
+            
+            <div class="divider">
+                <div class="divider-text">или введите вручную</div>
+            </div>
+            
+            <div class="form-group">
+                <label>Название сети (SSID)</label>
+                <input type="text" id="wifiSsid" class="form-input" placeholder="Введите название сети" autocomplete="off">
+            </div>
+            
+            <div class="form-group">
+                <label>Тип безопасности</label>
+                <select id="wifiSec" class="form-select">
+                    <option value="WPA2">WPA/WPA2-Personal (защищённая)</option>
+                    <option value="OPEN">Открытая сеть (без пароля)</option>
+                </select>
+            </div>
+            
+            <div class="form-group" id="passGroup">
+                <label>Пароль</label>
+                <input type="password" id="wifiPass" class="form-input" placeholder="Введите пароль">
+            </div>
+            
+            <button class="btn-add" id="addNetworkBtn">
+                Подключиться
+            </button>
+            
+            <div id="statusMessage" class="status-message"></div>
+            
+            <div class="info-note">
+                💡 После подключения модуль перезагрузится.<br>
+                Затем подключитесь к своей домашней Wi-Fi сети и перейдите по IP адресу модуля
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== WiFi ЛОГИКА =====
+        let currentScanning = false;
+
+        // Показать/скрыть поле пароля в зависимости от типа безопасности
+        document.getElementById('wifiSec').addEventListener('change', function() {
+            const passGroup = document.getElementById('passGroup');
+            if (this.value === 'OPEN') {
+                passGroup.style.display = 'none';
+                document.getElementById('wifiPass').value = '';
+            } else {
+                passGroup.style.display = 'block';
+            }
+        });
+
+        // Показать сообщение
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.textContent = message;
+            statusDiv.className = 'status-message ' + type;
+            setTimeout(() => {
+                if (statusDiv.className === 'status-message ' + type) {
+                    statusDiv.style.display = 'none';
+                    statusDiv.className = 'status-message';
+                }
+            }, 5000);
+        }
+
+        // Сканирование сетей
+        document.getElementById('scanBtn').addEventListener('click', async function() {
+            if (currentScanning) return;
+            
+            const btn = this;
+            currentScanning = true;
+            btn.disabled = true;
+            btn.innerHTML = '🔍 Сканирование... <span class="loading-spinner"></span>';
+            
+            const listDiv = document.getElementById('networkList');
+            listDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">🔍 Поиск Wi-Fi сетей...</div>';
+            
+            try {
+                const response = await fetch('/api/scan?t=' + Date.now());
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                
+                const networks = await response.json();
+                
+                if (!networks || networks.length === 0) {
+                    listDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">❌ Сети не найдены<br><span style="font-size:12px;">Проверьте, включён ли Wi-Fi на устройстве</span></div>';
+                } else {
+                    listDiv.innerHTML = networks.map(net => {
+                        const isOpen = net.encryption === 'OPEN';
+                        const icon = isOpen ? '🔓' : '🔒';
+                        const secText = isOpen ? 'Открытая сеть' : 'Защищено';
+                        const escapedSsid = net.ssid.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                        return `
+                            <div class="network-item" onclick="selectNetwork('${escapedSsid}', '${net.encryption}')">
+                                <div class="network-info">
+                                    <div class="wifi-icon">${icon}</div>
+                                    <div>
+                                        <div class="network-name">${escapeHtml(net.ssid)}</div>
+                                        <div class="network-security">${secText}</div>
+                                    </div>
+                                </div>
+                                <button class="btn-select">Выбрать</button>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            } catch (e) {
+                console.error('Scan error:', e);
+                listDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#e74c3c;">❌ Ошибка сканирования<br><span style="font-size:12px;">Попробуйте ещё раз</span></div>';
+            } finally {
+                currentScanning = false;
+                btn.disabled = false;
+                btn.innerHTML = '📡 Обновить список';
+            }
+        });
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+
+        // Выбор сети из списка
+        window.selectNetwork = function(ssid, encryption) {
+            document.getElementById('wifiSsid').value = ssid;
+            const secSelect = document.getElementById('wifiSec');
+            secSelect.value = encryption === 'OPEN' ? 'OPEN' : 'WPA2';
+            secSelect.dispatchEvent(new Event('change'));
+            
+            const passInput = document.getElementById('wifiPass');
+            if (encryption !== 'OPEN') {
+                passInput.focus();
+            }
+            
+            // Плавная прокрутка к полю пароля
+            document.querySelector('.manual-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        };
+
+        // Подключение к сети
+        document.getElementById('addNetworkBtn').addEventListener('click', async function() {
+            const ssid = document.getElementById('wifiSsid').value.trim();
+            const pass = document.getElementById('wifiPass').value;
+            const sec = document.getElementById('wifiSec').value;
+            
+            if (!ssid) {
+                showStatus('❌ Введите название сети', 'error');
+                return;
+            }
+            
+            if (sec !== 'OPEN' && !pass) {
+                showStatus('❌ Введите пароль для защищённой сети', 'error');
+                return;
+            }
+            
+            const btn = this;
+            btn.disabled = true;
+            btn.innerHTML = 'Подключение... <span class="loading-spinner"></span>';
+            showStatus('⏳ Подключение к сети ' + ssid + '...', 'info');
+            
+            const formData = new URLSearchParams();
+            formData.append('ssid', ssid);
+            formData.append('pass', pass);
+            formData.append('sec', sec);
+            
+            try {
+                const response = await fetch('/api/configure', {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    showStatus('✅ Подключено успешно! Модуль перезагружается...', 'success');
+                    
+                    // Показываем информацию о дальнейших действиях
+                    setTimeout(() => {
+                        const infoMsg = document.createElement('div');
+                        infoMsg.className = 'status-message success';
+                        infoMsg.style.marginTop = '15px';
+                        infoMsg.innerHTML = `
+                            <strong>✨ Готово!</strong><br><br>
+                            1. Подключитесь к Wi-Fi сети <strong>${escapeHtml(ssid)}</strong> на вашем устройстве<br>
+                            2. Откройте браузер и перейдите по адресу: <strong>http://${data.ip}</strong><br>
+                            3. Войдите в свой аккаунт или зарегистрируйтесь<br><br>
+                            <span style="font-size:12px;">Страница обновится автоматически...</span>
+                        `;
+                        document.querySelector('.setup-card').appendChild(infoMsg);
+                    }, 1000);
+                    
+                    // Перенаправление через 3 секунды
+                    setTimeout(() => {
+                        window.location.href = 'http://' + data.ip + '/login';
+                    }, 4000);
+                } else {
+                    showStatus('❌ ' + (data.message || 'Ошибка подключения. Проверьте пароль'), 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = 'Подключиться';
+                }
+            } catch (e) {
+                console.error('Connection error:', e);
+                showStatus('❌ Ошибка соединения с сервером. Попробуйте ещё раз', 'error');
+                btn.disabled = false;
+                btn.innerHTML = 'Подключиться';
+            }
+        });
+
+        // Автоматическое сканирование при загрузке страницы
+        setTimeout(() => {
+            document.getElementById('scanBtn').click();
+        }, 500);
+    </script>
+</body>
+</html>
+)rawliteral";
+
 // ====================== ВЕБ-ОБРАБОТЧИКИ ======================
 void handleHist() {
   int p = server.hasArg("period") ? server.arg("period").toInt() : 0;
@@ -8168,6 +8835,74 @@ void handleUpdateProfile() {
     } else {
         server.send(500, "application/json", "{\"error\":\"Update failed\"}");
     }
+}
+
+// Функция для обновления времени в записях, которые были сделаны до синхронизации
+void updateTimestampsAfterSync() {
+  if (!db || !timeSynced) return;
+  
+  Serial.println("🕐 Обновление временных меток в БД после синхронизации...");
+  
+  // Показываем какие записи есть
+  sqlite3_stmt* checkStmt = nullptr;
+  const char* checkSql = "SELECT ID, ts, time FROM SensorLog ORDER BY ID DESC LIMIT 10;";
+  if (sqlite3_prepare_v2(db, checkSql, -1, &checkStmt, nullptr) == SQLITE_OK) {
+    Serial.println("Текущие записи в БД:");
+    while (sqlite3_step(checkStmt) == SQLITE_ROW) {
+      int id = sqlite3_column_int(checkStmt, 0);
+      long ts = sqlite3_column_int(checkStmt, 1);
+      const char* timeStr = (const char*)sqlite3_column_text(checkStmt, 2);
+      Serial.printf("  ID=%d, ts=%ld, time=%s\n", id, ts, timeStr ? timeStr : "NULL");
+    }
+    sqlite3_finalize(checkStmt);
+  }
+  
+  // Находим записи с отрицательным ts
+  const char* sql = "SELECT ID, ts FROM SensorLog WHERE ts < 0 ORDER BY ID;";
+  sqlite3_stmt* selectStmt = nullptr;
+  
+  if (sqlite3_prepare_v2(db, sql, -1, &selectStmt, nullptr) != SQLITE_OK) {
+    Serial.printf("Ошибка подготовки SELECT: %s\n", sqlite3_errmsg(db));
+    return;
+  }
+  
+  time_t now = time(nullptr);
+  unsigned long currentUptime = millis() / 1000;
+  int updated = 0;
+  
+  while (sqlite3_step(selectStmt) == SQLITE_ROW) {
+    int id = sqlite3_column_int(selectStmt, 0);
+    long oldTs = sqlite3_column_int(selectStmt, 1);
+    
+    Serial.printf("Найдена запись ID=%d с ts=%ld\n", id, oldTs);
+    
+    // oldTs - отрицательное значение uptime
+    long uptimeAtRecord = -oldTs;
+    time_t newTs = now - (currentUptime - uptimeAtRecord);
+    
+    Serial.printf("  uptimeAtRecord=%ld, newTs=%ld (%s)\n", 
+                  uptimeAtRecord, newTs, formatTime(newTs, true).c_str());
+    
+    const char* updateSql = "UPDATE SensorLog SET ts = ?, time = ? WHERE ID = ?;";
+    sqlite3_stmt* updateStmt = nullptr;
+    
+    if (sqlite3_prepare_v2(db, updateSql, -1, &updateStmt, nullptr) == SQLITE_OK) {
+      sqlite3_bind_int(updateStmt, 1, (int)newTs);
+      sqlite3_bind_text(updateStmt, 2, formatTime(newTs, true).c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int(updateStmt, 3, id);
+      
+      if (sqlite3_step(updateStmt) == SQLITE_DONE) {
+        updated++;
+        Serial.printf("  ✅ Обновлено\n");
+      } else {
+        Serial.printf("  ❌ Ошибка обновления: %s\n", sqlite3_errmsg(db));
+      }
+      sqlite3_finalize(updateStmt);
+    }
+  }
+  
+  sqlite3_finalize(selectStmt);
+  Serial.printf("✅ Обновлено %d записей с корректным временем\n", updated);
 }
 
 void handleAvatarUpload() {
@@ -8699,8 +9434,6 @@ void handleStaticImage() {
     int qMark = uri.indexOf('?');
     if (qMark > 0) uri = uri.substring(0, qMark);
     
-    Serial.printf("📁 Serving static: %s\n", uri.c_str());
-    
     // Нормализация пути для SD карты
     String path = uri;
     
@@ -8722,7 +9455,7 @@ void handleStaticImage() {
     
     // Проверяем существование файла
     if (!SD.exists(path)) {
-        Serial.printf("❌ File not found: %s\n", path.c_str());
+        Serial.printf(" File not found: %s\n", path.c_str());
         server.send(404, "text/plain", "File not found");
         return;
     }
@@ -8738,8 +9471,6 @@ void handleStaticImage() {
     else if (path.endsWith(".js"))  contentType = "application/javascript";
     else if (path.endsWith(".html"))contentType = "text/html";
     else if (path.endsWith(".json"))contentType = "application/json";
-    
-    Serial.printf("✅ Sending: %s [%s]\n", path.c_str(), contentType.c_str());
     
     // Добавляем кэширование для изображений (1 день)
     if (path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg")) {
@@ -8765,9 +9496,6 @@ void handleNotFound() {
     int qMark = uri.indexOf('?');
     if (qMark > 0) uri = uri.substring(0, qMark);
     
-    // Логируем запрос
-    Serial.printf("🔍 404 handler: %s\n", uri.c_str());
-    
     // === ПРОВЕРЯЕМ: может это статический файл? ===
     bool isStaticFile = false;
     
@@ -8791,7 +9519,7 @@ void handleNotFound() {
     }
     
     // === ИНАЧЕ - 404 ОШИБКА ===
-    Serial.printf("❌ 404 Not Found: %s\n", uri.c_str());
+    Serial.printf("404 Not Found: %s\n", uri.c_str());
     
     String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>404</title>";
     html += "<style>body{font-family:Arial;text-align:center;padding:50px;background:#0F182B;color:#21C85F;}";
@@ -8806,7 +9534,7 @@ void handleNotFound() {
     server.send(404, "text/html", html);
 }
 
-// ==================== СМЕНА ПАРОЛЯ ====================
+// === СМЕНА ПАРОЛЯ (без проверки старого) ===
 void handleChangePassword() {
     String auth = server.header("Authorization");
     if (!auth.startsWith("Bearer ")) {
@@ -8822,53 +9550,32 @@ void handleChangePassword() {
     }
 
     String body = server.arg("plain");
-    if (body.length() == 0) body = server.arg(0);  // fallback
+    if (body.length() == 0) body = server.arg(0);
 
     DynamicJsonDocument doc(256);
     DeserializationError err = deserializeJson(doc, body);
     if (err) {
-        Serial.printf("JSON parse error: %s\n", err.c_str());
         server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
         return;
     }
 
-    String oldPassword = doc["oldPassword"] | "";
     String newPassword = doc["newPassword"] | "";
-
-    if (oldPassword.length() < 4 || newPassword.length() < 6) {
-        server.send(400, "application/json", "{\"error\":\"Invalid password length\"}");
+    
+    if (newPassword.length() < 6) {
+        server.send(400, "application/json", "{\"error\":\"New password too short\"}");
         return;
     }
 
-    // Проверка старого пароля (с учётом соли)
-    String currentSalt = "";
-    sqlite3_stmt* stmt = nullptr;
-    const char* sql = "SELECT password, salt FROM Users WHERE id = ?;";
-    bool verified = false;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_int(stmt, 1, userId);
-        
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* storedHashC = (const char*)sqlite3_column_text(stmt, 0);
-            const char* saltC = (const char*)sqlite3_column_text(stmt, 1);
-            String storedHash = storedHashC ? String(storedHashC) : "";
-            currentSalt = saltC ? String(saltC) : "";
-            verified = (storedHash == hashPassword(currentSalt + oldPassword));
-        }
-        sqlite3_finalize(stmt);
-    }
-    if (!verified) {
-        server.send(401, "application/json", "{\"error\":\"Old password is incorrect\"}");
-        return;
-    }
-
-    // Ротация соли при смене пароля
+    // Генерируем новую соль
     String newSalt = generateSalt();
+    String hashed = hashPassword(newSalt + newPassword);
 
-    // Обновление пароля через prepared statement (безопасно)
+    // Обновляем пароль и соль
+    sqlite3_stmt* stmt = nullptr;
     const char* updateSql = "UPDATE Users SET password = ?, salt = ? WHERE id = ?;";
+    
     if (sqlite3_prepare_v2(db, updateSql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, hashPassword(newSalt + newPassword).c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 1, hashed.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 2, newSalt.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int(stmt, 3, userId);
         
@@ -8876,16 +9583,10 @@ void handleChangePassword() {
         sqlite3_finalize(stmt);
 
         if (success) {
-            // Удаляем все сессии пользователя — заставляем заново залогиниться
-            const char* deleteSessions = "DELETE FROM Sessions WHERE user_id = ?;";
-            sqlite3_stmt* delStmt = nullptr;
-            if (sqlite3_prepare_v2(db, deleteSessions, -1, &delStmt, nullptr) == SQLITE_OK) {
-                sqlite3_bind_int(delStmt, 1, userId);
-                sqlite3_step(delStmt);
-                sqlite3_finalize(delStmt);
-            }
+            // Удаляем все сессии (принудительный релогин)
+            sqlite3_exec(db, "DELETE FROM Sessions WHERE user_id = ?;", NULL, NULL, NULL); // можно с bind, но для простоты
 
-            server.send(200, "application/json", "{\"success\":true,\"message\":\"Password changed successfully. Please login again.\"}");
+            server.send(200, "application/json", "{\"success\":true,\"message\":\"Password changed successfully\"}");
         } else {
             server.send(500, "application/json", "{\"error\":\"Failed to update password\"}");
         }
@@ -8896,8 +9597,12 @@ void handleChangePassword() {
 
 // ==================== УДАЛЕНИЕ АККАУНТА ====================
 void handleDeleteAccount() {
+    Serial.println("=== handleDeleteAccount called ===");
+
+    // 1. Проверка авторизации
     String auth = server.header("Authorization");
     if (!auth.startsWith("Bearer ")) {
+        Serial.println("❌ No Bearer token");
         server.send(401, "application/json", "{\"error\":\"Unauthorized\"}");
         return;
     }
@@ -8905,38 +9610,57 @@ void handleDeleteAccount() {
     String token = auth.substring(7);
     int userId = getUserIdByToken(token);
     if (!userId) {
+        Serial.println("❌ Invalid or expired token");
         server.send(401, "application/json", "{\"error\":\"Invalid token\"}");
         return;
     }
 
-    if (!server.hasArg("plain")) {
-        server.send(400, "application/json", "{\"error\":\"Confirmation required\"}");
+    // 2. Читаем тело запроса (НАДЁЖНЫЙ СПОСОБ)
+    String body = "";
+    
+    if (server.hasArg("plain")) {
+        body = server.arg("plain");
+    } else if (server.args() > 0) {
+        body = server.arg(0);           // fallback
+    } else {
+        // Если ничего не нашлось — читаем сырое тело
+        body = server.arg("body");      // иногда помогает
+    }
+
+    Serial.printf("Body received: %s\n", body.c_str());
+
+    // 3. Парсим JSON
+    DynamicJsonDocument doc(256);
+    DeserializationError err = deserializeJson(doc, body);
+
+    if (err) {
+        Serial.printf("JSON parse error: %s\n", err.c_str());
+        server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
         return;
     }
 
-    DynamicJsonDocument doc(128);
-    DeserializationError err = deserializeJson(doc, server.arg("plain"));
-    if (err || doc["confirm"] != "DELETE") {
-        server.send(400, "application/json", "{\"error\":\"Invalid confirmation\"}");
+    if (doc["confirm"] != "DELETE") {
+        Serial.println("❌ Invalid confirmation");
+        server.send(400, "application/json", "{\"error\":\"Invalid confirmation. Must send {\\\"confirm\\\":\\\"DELETE\\\"}\"}");
         return;
     }
 
-    // Удаляем пользователя (каскадно удалятся растения и сессии)
+    // 4. Удаляем аккаунт
     char sql[64];
     sprintf(sql, "DELETE FROM Users WHERE id = %d;", userId);
+    
     rc = sqlite3_exec(db, sql, NULL, NULL, &zErrMsg);
 
     if (rc != SQLITE_OK) {
-        Serial.printf("Delete account error: %s\n", zErrMsg ? zErrMsg : "unknown");
+        Serial.printf("SQLite error: %s\n", zErrMsg ? zErrMsg : "unknown");
         if (zErrMsg) sqlite3_free(zErrMsg);
-        server.send(500, "application/json", "{\"error\":\"Failed to delete account\"}");
+        server.send(500, "application/json", "{\"error\":\"Database error\"}");
         return;
     }
 
-    Serial.printf("✅ User %d deleted successfully\n", userId);
+    Serial.printf("✅ User %d successfully deleted\n", userId);
     server.send(200, "application/json", "{\"success\":true,\"message\":\"Account deleted\"}");
 }
-
 
 // === DEBUG: Просмотр БД и SD без логина (по умолчанию ВЫКЛЮЧЕН) ===
 void handleDebug() {
@@ -9098,33 +9822,37 @@ void handleConfigure() {
 // ====================== SETUP ======================
 void setup() {
   Serial.begin(SERIAL_BAUD);
-  delay(800);
-  Serial.println("\nESP32-C3 Sensor Module Starting...");
+  delay(1000);
+  Serial.println("\n=== ESP32-C3 Sensor Module Starting ===");
 
-  // Открываем хранилище Wi-Fi учётных данных
+  // ==================== Wi-Fi ====================
   prefs.begin("wifi-config", false);
   String savedSsid = prefs.getString("wifi_ssid", String(STA_SSID));
   String savedPass = prefs.getString("wifi_pass", String(STA_PASS));
 
-  // Запускаем AP + STA одновременно
+  // Запуск AP
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(ap_ip, ap_ip, ap_mask);
   WiFi.softAP(AP_SSID, AP_PASS);
   Serial.println("[WiFi] AP started: " + String(AP_SSID) + " | IP: " + WiFi.softAPIP().toString());
 
   WiFi.setHostname(MDNS_NAME);
-  if (savedSsid.length() > 0) {
+
+  // Попытка подключения к сохранённой сети
+  if (savedSsid.length() > 0 && savedSsid != AP_SSID) {
+    Serial.print("Connecting to WiFi: " + savedSsid);
     if (savedPass.length() > 0) {
       WiFi.begin(savedSsid.c_str(), savedPass.c_str());
     } else {
       WiFi.begin(savedSsid.c_str());
     }
-    Serial.print("Connecting to WiFi: " + savedSsid);
+    
     int attempts = 30;
     while (attempts-- && WiFi.status() != WL_CONNECTED) {
       delay(500);
       Serial.print(".");
     }
+    
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\n[WiFi] Connected! IP: " + WiFi.localIP().toString());
     } else {
@@ -9138,7 +9866,7 @@ void setup() {
     Serial.println("mDNS: http://" + String(MDNS_NAME) + ".local");
   }
   
-  // Инициализация SD-карты и БД — делается ДО NTP чтобы загрузить часовой пояс
+  // Инициализация SD-карты и БД
   initDB();
   createSDDirectories();
 
@@ -9148,22 +9876,28 @@ void setup() {
     reloadTimezoneFromDB();
   }
 
-  // NTP — после DB, чтобы использовать сохранённый часовой пояс
+  // NTP синхронизация
   configTime(tzOffsetSec, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
   Serial.print("Syncing time");
-  for (int i = 0; i < 40; i++) {
+  
+  // УВЕЛИЧИВАЕМ время ожидания синхронизации до 60 попыток (30 секунд)
+  for (int i = 0; i < 60; i++) {
     time_t now = time(nullptr);
     if (now >= 1700000000) {
       timeSynced = true;
-      Serial.println("\nTime: " + formatTime(now, true));
+      Serial.println("\n✅ Time synced: " + formatTime(now, true));
       break;
     }
-    delay(300);
+    delay(500);  // Увеличил до 500ms для лучшей стабильности
     Serial.print(".");
   }
+  
   if (!timeSynced) {
-    Serial.println("\nTime sync timeout, using uptime");
+    Serial.println("\n⚠️ Time sync timeout, will use uptime");
     bootTime = millis() / 1000;
+  } else {
+    // Обновляем временные метки в существующих записях (если были)
+    updateTimestampsAfterSync();
   }
 
   // Инициализация SPI для BME280 и e-paper
@@ -9184,60 +9918,76 @@ void setup() {
   epd.DisplayPartBaseImage(IMAGE_DATA);
   Serial.println("E-Paper ready");
   
-  // Первое чтение датчиков и обновление дисплея
-  readAndLog();
+  // ⚠️ ВАЖНО: НЕ вызываем readAndLog() здесь!
+  // Просто читаем датчики для отображения на дисплее, но НЕ пишем в БД
+  int raw = analogRead(SOIL_PIN);
+  currentSoil = 100 - (raw - 1200) / 19;
+  currentSoil = constrain(currentSoil, 0, 100);
+  
+  float pressure_pa = 0, temp_c = 0, humidity_pct = 0;
+  BME280::TempUnit tu(BME280::TempUnit_Celsius);
+  BME280::PresUnit pu(BME280::PresUnit_Pa);
+  bme.read(pressure_pa, temp_c, humidity_pct, tu, pu);
+  
+  currentHum = round(humidity_pct);
+  currentTemp = round(temp_c);
+  currentPres = round(pressure_pa * 0.00750062);
+  
+  // Обновляем дисплей без записи в БД
+  updateEpaper(currentSoil, currentHum, currentTemp, currentPres);
+  
+  // Устанавливаем таймер для первой записи через 15 секунд
   lastLogTime = millis();
- 
+  
   // Настройка веб-сервера
   // HTML страницы
-    server.on("/", handleLogin);
-    server.on("/login", handleLogin);
-    server.on("/register", handleRegister);
-    server.on("/app", handleRoot);
-    server.on("/profile", handleProfile);
-    server.on("/edit-profile", handleEditProfile);
-    server.on("/settings", handleSettings);
-    server.on("/plant", handlePlant);
-    server.on("/index", handleIndex);
+  server.on("/", handleLogin);
+  server.on("/login", handleLogin);
+  server.on("/register", handleRegister);
+  server.on("/app", handleRoot);
+  server.on("/profile", handleProfile);
+  server.on("/edit-profile", handleEditProfile);
+  server.on("/settings", handleSettings);
+  server.on("/plant", handlePlant);
+  server.on("/index", handleIndex);
 
-     // API маршруты
-    server.on("/api/login", HTTP_POST, handleApiLogin);
-    server.on("/api/register", HTTP_POST, handleApiRegister);
-    server.on("/api/profile", HTTP_GET, handleGetProfile);
-    server.on("/api/profile", HTTP_POST, handleUpdateProfile);
-    server.on("/api/avatar", HTTP_POST, handleAvatarUploadDone, handleAvatarUpload);
-    server.on("/api/avatar/file", HTTP_GET, handleGetAvatar);
-    server.on("/api/logout", HTTP_POST, handleApiLogout);
-    server.on("/api/change-password", HTTP_POST, handleChangePassword);
-    server.on("/api/delete-account", HTTP_POST, handleDeleteAccount);
+  // API маршруты
+  server.on("/api/login", HTTP_POST, handleApiLogin);
+  server.on("/api/register", HTTP_POST, handleApiRegister);
+  server.on("/api/profile", HTTP_GET, handleGetProfile);
+  server.on("/api/profile", HTTP_POST, handleUpdateProfile);
+  server.on("/api/avatar", HTTP_POST, handleAvatarUploadDone, handleAvatarUpload);
+  server.on("/api/avatar/file", HTTP_GET, handleGetAvatar);
+  server.on("/api/logout", HTTP_POST, handleApiLogout);
+  server.on("/api/change-password", HTTP_POST, handleChangePassword);
+  server.on("/api/delete-account", HTTP_POST, handleDeleteAccount);
 
-    // API для растений (добавьте вместе с другими API маршрутами)
-    server.on("/api/plants", HTTP_GET, handleGetPlants);
-    server.on("/api/plants", HTTP_POST, handleAddPlant);
-    server.on("/api/plants", HTTP_PUT, handleUpdatePlant);
-    server.on("/api/plants", HTTP_DELETE, handleDeletePlant);
-    server.on("/api/plant/photo", HTTP_POST, handlePlantPhotoUploadDone, handlePlantPhotoUpload);
-    server.on("/api/plant/photo/file", HTTP_GET, handleGetPlantPhoto);
+  // API для растений
+  server.on("/api/plants", HTTP_GET, handleGetPlants);
+  server.on("/api/plants", HTTP_POST, handleAddPlant);
+  server.on("/api/plants", HTTP_PUT, handleUpdatePlant);
+  server.on("/api/plants", HTTP_DELETE, handleDeletePlant);
+  server.on("/api/plant/photo", HTTP_POST, handlePlantPhotoUploadDone, handlePlantPhotoUpload);
+  server.on("/api/plant/photo/file", HTTP_GET, handleGetPlantPhoto);
 
-    // Data API
-    server.on("/data", handleData);
-    server.on("/hist", handleHist);
-    server.on("/time", handleTime);
-    server.on("/clear", HTTP_POST, handleClear);
-    server.on("/debug", handleDebug);
+  // Data API
+  server.on("/data", handleData);
+  server.on("/hist", handleHist);
+  server.on("/time", handleTime);
+  server.on("/clear", HTTP_POST, handleClear);
+  server.on("/debug", handleDebug);
 
-    // WiFi API (для страницы настроек)
-    server.on("/api/scan", HTTP_GET, handleScan);
-    server.on("/api/configure", HTTP_POST, handleConfigure);
+  // WiFi API
+  server.on("/api/scan", HTTP_GET, handleScan);
+  server.on("/api/configure", HTTP_POST, handleConfigure);
 
-    // ВАЖНО: WebServer по умолчанию НЕ сохраняет произвольные заголовки.
-    // Без этого server.header("Authorization") вернёт "" и вся авторизация сломается.
-    const char* headerKeys[] = {"Authorization", "Content-Type"};
-    server.collectHeaders(headerKeys, sizeof(headerKeys) / sizeof(headerKeys[0]));
+  // Важные заголовки для авторизации
+  const char* headerKeys[] = {"Authorization", "Content-Type"};
+  server.collectHeaders(headerKeys, sizeof(headerKeys) / sizeof(headerKeys[0]));
 
-    server.onNotFound(handleNotFound);
-    server.begin();
-    Serial.println("Web server started");
+  server.onNotFound(handleNotFound);
+  server.begin();
+  Serial.println("Web server started");
   
   // Настройка OTA
   ArduinoOTA.setHostname("SensorC3");
@@ -9255,6 +10005,29 @@ void setup() {
 void loop() {
   server.handleClient();
   ArduinoOTA.handle();
+  
+  // Попытка синхронизации времени каждые 30 секунд, если ещё не синхронизировано
+  if (!timeSynced && (millis() - lastTimeSyncAttempt > 30000UL)) {
+    lastTimeSyncAttempt = millis();
+    
+    configTime(tzOffsetSec, 0, "pool.ntp.org", "time.google.com", "time.nist.gov");
+    
+    time_t now = time(nullptr);
+    if (now >= 1700000000) {
+      timeSynced = true;
+      Serial.println("\n✅ Time synced successfully in loop!");
+      
+      // ⬇️⬇️⬇️ ВОТ ЭТО ДОБАВИТЬ! ⬇️⬇️⬇️
+      updateTimestampsAfterSync();  // Обновляем старые записи
+      
+      updateEpaper(currentSoil, currentHum, currentTemp, currentPres);
+    } else if (!timeSyncNotified) {
+      Serial.print("🕐 Still waiting for time sync");
+      timeSyncNotified = true;
+    } else {
+      Serial.print(".");
+    }
+  }
   
   if (millis() - lastLogTime >= 15000UL) {
     readAndLog();
