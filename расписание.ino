@@ -64,7 +64,6 @@ bool initDatabase() {
     "  status TEXT DEFAULT 'completed'"
     ");";
 
-  // === НОВАЯ ТАБЛИЦА: расписания ===
   const char* createSchedulesSQL = 
     "CREATE TABLE IF NOT EXISTS schedules ("
     "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -77,7 +76,6 @@ bool initDatabase() {
     "  status TEXT DEFAULT 'pending',"
     "  created_at TEXT DEFAULT CURRENT_TIMESTAMP"
     ");";
-  // =================================
 
   char* errMsg = NULL;
   if (sqlite3_exec(db, createValvesSQL, NULL, NULL, &errMsg) != SQLITE_OK) {
@@ -477,7 +475,6 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
             font-weight: 500;
         }
 
-        /* === Стили для карточек задач расписания === */
         .schedule-card {
             background: linear-gradient(135deg, rgba(33, 200, 95, 0.1) 0%, rgba(33, 200, 95, 0.05) 100%);
             border: 1px solid rgba(33, 200, 95, 0.25);
@@ -661,13 +658,11 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                                 <label class="form-label">Время полива</label>
                                 <input type="time" class="form-input" id="input-time" value="08:00">
                             </div>
-                            <!-- === НОВОЕ: поле даты для режима "once" === -->
                             <div class="form-group" id="group-datetime" style="display:none;">
                                 <label class="form-label">Дата и время выполнения</label>
                                 <input type="datetime-local" class="form-input" id="input-datetime">
                                 <div class="form-hint">Полив выполнится один раз в указанное время</div>
                             </div>
-                            <!-- ======================================== -->
                             <div class="form-group" id="group-days" style="display:none;">
                                 <label class="form-label">Дни недели</label>
                                 <input type="text" class="form-input" id="input-days" placeholder="1,3,5"
@@ -691,12 +686,14 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                                 <div class="form-hint">На сколько секунд открывать клапан</div>
                             </div>
                         </div>
-                        <div class="form-row-2">
+                        <!-- === ИЗМЕНЕНО: добавлен id="group-cycles" === -->
+                        <div class="form-row-2" id="group-cycles">
                             <div class="form-group">
                                 <label class="form-label">Повторений цикла</label>
                                 <input type="number" class="form-input" id="input-cycles" value="1" min="1" max="10">
                             </div>
                         </div>
+                        <!-- ========================================= -->
                         <div id="weekly-details-container" style="margin-top:15px; display:none;"></div>
                         <button class="btn-add-task" onclick="addTaskOperation()" style="width:100%; margin-top:10px; padding:14px; font-size:15px;">
                             + Добавить задачу с этими параметрами
@@ -828,7 +825,6 @@ async function init() {
     startClock();
     syncWithESP();
     startScheduleChecker();
-    // Установим значение по умолчанию для datetime-local
     const dtInput = document.getElementById('input-datetime');
     if (dtInput) {
         const now = new Date();
@@ -888,7 +884,6 @@ async function loadFromDB() {
     }
 }
 
-// === НОВОЕ: загрузка расписания из БД ===
 async function loadSchedules() {
     try {
         const res = await fetch('/api/schedules');
@@ -927,7 +922,6 @@ async function deleteScheduleFromDB(id) {
         console.error('Ошибка удаления расписания', e);
     }
 }
-// =========================================
 
 async function saveValveToDB(valveId, data) {
     try {
@@ -1010,29 +1004,18 @@ function renderJournal() {
     });
 }
 
-// === НОВОЕ: отрисовка задач расписания ===
 function renderSchedules() {
     const container = document.getElementById('operations-list');
     if (!container) return;
     container.innerHTML = '';
-    
     if (!appState.schedules || appState.schedules.length === 0) {
         container.innerHTML = '<div style="text-align:center;padding:30px;color:#64748b;font-style:italic;">Задач пока нет.</div>';
         return;
     }
-    
     appState.schedules.forEach(s => {
-        const typeLabels = {
-            'daily': 'Ежедневно',
-            'weekly': 'Еженедельно',
-            'interval': 'Интервал',
-            'once': 'Однократно',
-            'sunrise': 'Рассвет',
-            'sunset': 'Закат'
-        };
+        const typeLabels = { 'daily': 'Ежедневно', 'weekly': 'Еженедельно', 'interval': 'Интервал', 'once': 'Однократно', 'sunrise': 'Рассвет', 'sunset': 'Закат' };
         const typeLabel = typeLabels[s.type] || s.type;
         const isExecuting = appState.scheduleExecution.active && appState.scheduleExecution.scheduleId === s.id;
-        
         let scheduleInfo = '';
         if (s.type === 'once') {
             const dt = new Date(s.schedule_time);
@@ -1040,7 +1023,6 @@ function renderSchedules() {
         } else {
             scheduleInfo = `<b>Время:</b> ${s.schedule_time}`;
         }
-        
         container.innerHTML += `
             <div class="schedule-card ${isExecuting ? 'schedule-executing' : ''}">
                 <button class="schedule-delete-btn" onclick="deleteScheduleFromDB(${s.id})" title="Удалить задачу">×</button>
@@ -1060,7 +1042,6 @@ function renderSchedules() {
             </div>`;
     });
 }
-// ========================================
 
 function switchValve(id) {
     appState.currentValve = id;
@@ -1072,7 +1053,6 @@ async function startWatering() {
     if (appState.manualState.isActive) return;
     const sel = document.getElementById('manual-valve-select');
     appState.manualState.valveId = parseInt(sel.value);
-
     try {
         const res = await fetch(`/valve?id=${appState.manualState.valveId - 1}&state=1`);
         if (!(await res.json()).ok) throw new Error('Ошибка');
@@ -1080,12 +1060,10 @@ async function startWatering() {
         showNotification('Контроллер недоступен');
         return;
     }
-
     appState.manualState.startTime = Date.now();
     appState.manualState.isActive = true;
     await saveValveToDB(appState.manualState.valveId, { active: 1 });
     renderSidebar();
-
     appState.manualState.timerId = setInterval(() => {
         const elapsed = Math.floor((Date.now() - appState.manualState.startTime) / 1000);
         const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
@@ -1101,7 +1079,6 @@ async function startWatering() {
             })
             .catch(() => {});
     }, 1000);
-
     document.getElementById('manual-status').textContent = 'Работает';
     document.getElementById('manual-status').style.color = '#22c55e';
     document.getElementById('manual-volume').textContent = '0.00 мл';
@@ -1169,7 +1146,7 @@ function showNotification(msg) {
     setTimeout(() => { n.style.opacity = '0'; setTimeout(() => n.remove(), 300); }, 2500);
 }
 
-// === ИЗМЕНЕНО: updateFormLogic теперь показывает поле даты для "once" ===
+// === ИЗМЕНЕНО: для "once" скрываются "Время полива" и "Повторений цикла" ===
 function updateFormLogic() {
     const type = document.getElementById('input-schedule-type')?.value;
     if (!type) return;
@@ -1177,6 +1154,7 @@ function updateFormLogic() {
     const datetimeGroup = document.getElementById('group-datetime');
     const daysGroup = document.getElementById('group-days');
     const intervalGroup = document.getElementById('group-interval');
+    const cyclesGroup = document.getElementById('group-cycles');
     const weeklyContainer = document.getElementById('weekly-details-container');
     const toggle = (el, show) => { if (!el) return; el.style.display = show ? 'block' : 'none'; };
     
@@ -1184,12 +1162,18 @@ function updateFormLogic() {
     toggle(datetimeGroup, false);
     toggle(daysGroup, false);
     toggle(intervalGroup, false);
+    toggle(cyclesGroup, true);  // По умолчанию показываем
     if (weeklyContainer) { weeklyContainer.style.display = 'none'; weeklyContainer.innerHTML = ''; }
     
     switch (type) {
-        case 'daily': case 'once':
+        case 'daily':
             toggle(timeGroup, true);
-            if (type === 'once') toggle(datetimeGroup, true);
+            break;
+        case 'once':
+            // Для однократного: показываем только дату/время, скрываем время полива и циклы
+            toggle(datetimeGroup, true);
+            toggle(timeGroup, false);
+            toggle(cyclesGroup, false);
             break;
         case 'weekly':
             toggle(timeGroup, true);
@@ -1200,19 +1184,16 @@ function updateFormLogic() {
             break;
     }
 }
-// ================================================================
+// ============================================================================
 
-// === ИЗМЕНЕНО: addTaskOperation теперь сохраняет в БД ===
 async function addTaskOperation() {
     const getVal = (id) => document.getElementById(id)?.value || '';
     const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
-    
     const valve = parseInt(getVal('input-valve-select')) || 1;
     const scheduleType = getVal('input-schedule-type') || 'daily';
     const priority = getNum('input-priority', 5);
     const waterVolume = getNum('input-water-volume', 200);
     const waterDuration = getNum('input-water-duration', 30);
-    
     let scheduleTime = '';
     if (scheduleType === 'once') {
         const dtVal = getVal('input-datetime');
@@ -1224,7 +1205,6 @@ async function addTaskOperation() {
     } else {
         scheduleTime = getVal('input-time') || '08:00';
     }
-    
     const schedule = {
         valve_id: valve,
         type: scheduleType,
@@ -1234,10 +1214,8 @@ async function addTaskOperation() {
         priority: priority,
         status: 'pending'
     };
-    
     await saveScheduleToDB(schedule);
 }
-// ========================================================
 
 function setupListeners() {
     document.querySelectorAll('.tab').forEach(tab => tab.onclick = function() {
@@ -1249,12 +1227,9 @@ function setupListeners() {
         if (this.dataset.tab === 'journal') renderJournal();
     });
     document.getElementById('journal-valve-filter').onchange = renderJournal;
-    
-    // === НОВОЕ: обработчик смены типа расписания ===
     const schedType = document.getElementById('input-schedule-type');
     if (schedType) schedType.onchange = () => updateFormLogic();
     updateFormLogic();
-    // ================================================
 }
 
 async function syncWithESP() {
@@ -1275,20 +1250,16 @@ async function syncWithESP() {
     }, 3000);
 }
 
-// === НОВОЕ: проверка расписания каждую секунду ===
 function startScheduleChecker() {
     setInterval(async () => {
-        if (appState.scheduleExecution.active) return; // Уже выполняется задача
-        
+        if (appState.scheduleExecution.active) return;
         const now = new Date();
         const pendingOnce = appState.schedules.filter(s => s.type === 'once' && s.status === 'pending');
-        
         for (const schedule of pendingOnce) {
             const targetTime = new Date(schedule.schedule_time);
-            // Проверяем, наступило ли время (с точностью до минуты)
             if (now >= targetTime) {
                 await executeOnceSchedule(schedule);
-                break; // Выполняем только одну задачу за раз
+                break;
             }
         }
     }, 1000);
@@ -1297,7 +1268,6 @@ function startScheduleChecker() {
 async function executeOnceSchedule(schedule) {
     console.log('[Schedule] Запуск задачи:', schedule);
     showNotification(`⏰ Автополив: Клапан ${schedule.valve_id}`);
-    
     appState.scheduleExecution = {
         active: true,
         scheduleId: schedule.id,
@@ -1306,10 +1276,7 @@ async function executeOnceSchedule(schedule) {
         targetVolume: Number(schedule.volume_ml) || 0,
         maxDuration: Number(schedule.duration_sec) || 60
     };
-    
     renderSchedules();
-    
-    // Включаем клапан
     try {
         const res = await fetch(`/valve?id=${schedule.valve_id - 1}&state=1`);
         const data = await res.json();
@@ -1319,63 +1286,45 @@ async function executeOnceSchedule(schedule) {
         await finishScheduleExecution(false, 'Ошибка включения');
         return;
     }
-    
     await saveValveToDB(schedule.valve_id, { active: 1 });
     renderSidebar();
-    
-    // Каждую секунду проверяем объём
     const checkInterval = setInterval(async () => {
         const elapsed = Math.floor((Date.now() - appState.scheduleExecution.startTime) / 1000);
         let currentVolume = 0;
-        
         try {
             const flowRes = await fetch('/flowmeter');
             const flowData = await flowRes.json();
             if (flowData.ok) currentVolume = flowData.volume_ml || 0;
         } catch(e) {}
-        
-        // ПРИОРИТЕТ ПО МЛ: если набрали нужный объём — выключаем
         if (appState.scheduleExecution.targetVolume > 0 && currentVolume >= appState.scheduleExecution.targetVolume) {
             clearInterval(checkInterval);
             await finishScheduleExecution(true, 'Объём достигнут');
             return;
         }
-        
-        // FALLBACK ПО ВРЕМЕНИ: если время вышло — выключаем
         if (elapsed >= appState.scheduleExecution.maxDuration) {
             clearInterval(checkInterval);
             await finishScheduleExecution(true, 'Время вышло');
             return;
         }
     }, 1000);
-    
-    // Сохраняем interval для возможности отмены
     appState.scheduleExecution.checkInterval = checkInterval;
 }
 
 async function finishScheduleExecution(success, reason) {
     const exec = appState.scheduleExecution;
     if (!exec.active) return;
-    
-    // Получаем финальный объём
     let finalVolume = 0;
     try {
         const flowRes = await fetch('/flowmeter');
         const flowData = await flowRes.json();
         if (flowData.ok) finalVolume = flowData.volume_ml || 0;
     } catch(e) {}
-    
-    // Выключаем клапан
     try {
         await fetch(`/valve?id=${exec.valveId - 1}&state=0`);
     } catch(e) {}
-    
     const duration = Math.floor((Date.now() - exec.startTime) / 1000);
-    
     await saveValveToDB(exec.valveId, { active: 0 });
     renderSidebar();
-    
-    // Записываем в журнал
     const entry = {
         ts: new Date().toISOString(),
         valve_id: exec.valveId,
@@ -1385,21 +1334,15 @@ async function finishScheduleExecution(success, reason) {
         status: success ? 'completed' : 'failed'
     };
     await addJournalEntryToDB(entry);
-    
-    // Удаляем задачу из расписания (однократная — выполнилась)
     try {
         await fetch(`/api/schedules?id=${exec.scheduleId}`, { method: 'DELETE' });
         await loadSchedules();
     } catch(e) {}
-    
     console.log(`[Schedule] Задача завершена: ${reason}, объём ${finalVolume.toFixed(2)} мл`);
     showNotification(`✓ Клапан ${exec.valveId}: ${finalVolume.toFixed(2)} мл (${reason})`);
-    
-    // Сбрасываем состояние
     appState.scheduleExecution = { active: false, scheduleId: null, valveId: null, startTime: null, targetVolume: 0, maxDuration: 0 };
     renderSchedules();
 }
-// =====================================================
 
 document.addEventListener('DOMContentLoaded', init);
 </script>
@@ -1513,7 +1456,6 @@ void handleApiJournalDelete() {
   }
 }
 
-// === НОВОЕ: API для работы с расписанием ===
 void handleApiSchedulesGet() {
   JsonDocument doc;
   JsonArray arr = doc.to<JsonArray>();
@@ -1542,7 +1484,6 @@ void handleApiSchedulesPost() {
   if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
   JsonDocument doc;
   deserializeJson(doc, server.arg("plain"));
-  
   const char* sql = "INSERT INTO schedules (valve_id, type, schedule_time, volume_ml, duration_sec, priority, status) VALUES (?, ?, ?, ?, ?, ?, 'pending');";
   sqlite3_stmt* stmt;
   sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
@@ -1552,21 +1493,20 @@ void handleApiSchedulesPost() {
   sqlite3_bind_double(stmt, 4, doc["volume_ml"] | 0.0);
   sqlite3_bind_int(stmt, 5, doc["duration_sec"] | 30);
   sqlite3_bind_int(stmt, 6, doc["priority"] | 5);
-  
   if (sqlite3_step(stmt) == SQLITE_DONE) {
     long long newId = sqlite3_last_insert_rowid(db);
     Serial.println();
-    Serial.println("╔══════════════════════════════════════════════════╗");
-    Serial.println("║     НОВАЯ ЗАДАЧА ДОБАВЛЕНА В РАСПИСАНИЕ          ║");
-    Serial.println("╠══════════════════════════════════════════════════╣");
-    Serial.printf("║ ID задачи : %-42lld ║\n", newId);
-    Serial.printf("║ Клапан    : %-42d ║\n", doc["valve_id"] | 0);
-    Serial.printf("║ Тип       : %-42s ║\n", (const char*)(doc["type"] | "N/A"));
-    Serial.printf("║ Время     : %-42s ║\n", (const char*)(doc["schedule_time"] | "N/A"));
-    Serial.printf("║ Объём     : %-39.2f мл ║\n", (double)(doc["volume_ml"] | 0.0));
-    Serial.printf("║ Длит.     : %-39d сек ║\n", doc["duration_sec"] | 0);
-    Serial.printf("║ Приоритет : %-42d ║\n", doc["priority"] | 5);
-    Serial.println("╚══════════════════════════════════════════════════╝");
+    Serial.println("======================================================");
+    Serial.println("     НОВАЯ ЗАДАЧА ДОБАВЛЕНА В РАСПИСАНИЕ");
+    Serial.println("======================================================");
+    Serial.printf(" ID задачи : %-42lld \n", newId);
+    Serial.printf(" Клапан    : %-42d \n", doc["valve_id"] | 0);
+    Serial.printf(" Тип       : %-42s \n", (const char*)(doc["type"] | "N/A"));
+    Serial.printf(" Время     : %-42s \n", (const char*)(doc["schedule_time"] | "N/A"));
+    Serial.printf(" Объём     : %-39.2f мл \n", (double)(doc["volume_ml"] | 0.0));
+    Serial.printf(" Длит.     : %-39d сек \n", doc["duration_sec"] | 0);
+    Serial.printf(" Приоритет : %-42d \n", doc["priority"] | 5);
+    Serial.println("======================================================");
     Serial.println();
     server.send(200, "application/json", "{\"ok\":true}");
   } else {
@@ -1578,10 +1518,8 @@ void handleApiSchedulesPost() {
 void handleApiSchedulesDelete() {
   int id = server.arg("id").toInt();
   if (id <= 0) { server.send(400, "application/json", "{\"ok\":false}"); return; }
-  
   char sql[128];
   snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id = %d;", id);
-  
   char* errMsg = NULL;
   if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) == SQLITE_OK) {
     int changes = sqlite3_changes(db);
@@ -1593,7 +1531,6 @@ void handleApiSchedulesDelete() {
     server.send(500, "application/json", "{\"ok\":false}");
   }
 }
-// ================================================
 
 void handleValve() {
   if (!server.hasArg("id") || !server.hasArg("state")) {
@@ -1683,18 +1620,15 @@ void setup() {
     return;
   }
   Serial.println(WiFi.AP);
-  
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/valves", HTTP_GET, handleApiValvesGet);
   server.on("/api/valves", HTTP_POST, handleApiValvesPost);
   server.on("/api/journal", HTTP_GET, handleApiJournalGet);
   server.on("/api/journal", HTTP_POST, handleApiJournalPost);
   server.on("/api/journal", HTTP_DELETE, handleApiJournalDelete);
-  // === НОВОЕ: маршруты для расписания ===
   server.on("/api/schedules", HTTP_GET, handleApiSchedulesGet);
   server.on("/api/schedules", HTTP_POST, handleApiSchedulesPost);
   server.on("/api/schedules", HTTP_DELETE, handleApiSchedulesDelete);
-  // ======================================
   server.on("/valve", HTTP_GET, handleValve);
   server.on("/all", HTTP_GET, handleAll);
   server.on("/states", HTTP_GET, handleStates);
