@@ -9,8 +9,8 @@
 
 #include "AmperkaFET.h"
 
-#define AP_SSID "CollectorModuleNet"
-#define AP_PASS "Qwe123!!"
+#define WIFI_SSID "RoboLab"
+#define WIFI_PASS "Qwe123!!"
 
 #define PIN_CS_FET   1
 #define PIN_CS_SD    7
@@ -21,6 +21,14 @@
 
 FET mosfet(PIN_CS_FET);
 WebServer server(80);
+
+bool valveStates[NUM_VALVES] = {false};
+volatile uint32_t flowmetr = 0;
+sqlite3 *db = NULL;
+
+IPAddress localIP;
+
+// Глобальные переменные для отслеживания выполнения расписания
 bool scheduleExecuting = false;
 uint32_t scheduleStartTime = 0;
 int currentScheduleId = 0;
@@ -28,20 +36,21 @@ int currentScheduleValve = 0;
 float targetVolume = 0;
 int maxDuration = 0;
 uint32_t lastScheduleCheck = 0;
-const uint32_t SCHEDULE_CHECK_INTERVAL = 1000; // Проверка каждую секунду
-bool valveStates[NUM_VALVES] = {false};
-volatile uint32_t flowmetr = 0;
-sqlite3 *db = NULL;
+const uint32_t SCHEDULE_CHECK_INTERVAL = 1000;
 
-char ap_ssid[]     = "RoboLab";
-char ap_password[] = "Qwe123!!";
-const char* espName = "mWatering";
+// Структура для хранения состояния (упрощенная)
+struct Schedule {
+    int id;
+    int valve_id;
+    String type;
+    String schedule_time;
+    float volume_ml;
+    int duration_sec;
+    int priority;
+    String status;
+};
 
-IPAddress ap_ip(192, 168, 5, 1);
-IPAddress ap_subnet(255, 255, 255, 0);
-IPAddress ap_leaseStart(192, 168, 5, 2);
-IPAddress ap_dns(192, 168, 5, 1);
-
+std::vector<Schedule> schedules;
 
 bool initDatabase() {
   if (!SD.exists("/sd")) {
@@ -119,7 +128,7 @@ bool initDatabase() {
   return true;
 }
 
-const char PAGE_HTML[] PROGMEM = R"rawliteral(
+/const char PAGE_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1357,7 +1366,185 @@ document.addEventListener('DOMContentLoaded', init);
 </body>
 </html>
 )rawliteral";
+// Функция подключения к WiFi
+bool connectToWiFi() {
+    Serial.printf("\nПодключение к WiFi сети: %s\n", WIFI_SSID);
+    
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(1000);
+        Serial.print(".");
+        attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        localIP = WiFi.localIP();
+        Serial.println("\n✓ WiFi подключен!");
+        Serial.printf("IP адрес: %s\n", localIP.toString().c_str());
+        return true;
+    } else {
+        Serial.println("\n✗ Ошибка подключения к WiFi!");
+        return false;
+    }
+}
 
+// Функция инициализации времени
+void initTime() {
+    Serial.print("Ожидание синхронизации времени");
+    configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov", "ru.pool.ntp.org");
+    
+    time_t now = time(nullptr);
+    int retry = 0;
+    while (now < 24 * 3600 && retry < 30) {
+        delay(1000);
+        now = time(nullptr);
+        Serial.print(".");
+        retry++;
+    }
+    
+    if (now >= 24 * 3600) {
+        Serial.println("\n✓ Время синхронизировано!");
+        struct tm* timeinfo = localtime(&now);
+        Serial.printf("Текущее время: %02d:%02d:%02d\n", 
+            timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+    } else {
+        Serial.println("\n✗ Ошибка синхронизации времени!");
+    }
+}
+
+// Функция проверки и выполнения расписания
+void checkAndExecuteSchedules() {
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    
+    if (scheduleExecuting) {
+        uint32_t elapsed = (millis() - scheduleStartTime) / 1000;
+        
+        noInterrupts();
+        uint32_t pulses = flowmetr;
+        interrupts();
+        float currentVolume = pulses * FLOW_RATE_ML;
+        
+        bool shouldStop = false;
+        
+        if (targetVolume > 0 && currentVolume >= targetVolume) {
+            shouldStop = true;
+            Serial.printf("[Schedule] Достигнут целевой объём: %.2f мл\n", currentVolume);
+        } else if (elapsed >= maxDuration) {
+            shouldStop = true;
+            Serial.printf("[Schedule] Истекло максимальное время: %d сек\n", maxDuration);
+        }
+        
+        if (shouldStop) {
+            mosfet.digitalWrite(currentScheduleValve, LOW);
+            valveStates[currentScheduleValve] = false;
+            
+            char sql[512];
+            snprintf(sql, sizeof(sql),
+                "INSERT INTO journal (ts, valve_id, type, duration_sec, volume_ml, status) "
+                "VALUES (datetime('now', 'localtime'), %d, 'schedule', %lu, %.2f, 'completed');",
+                currentScheduleValve + 1, elapsed, currentVolume);
+            
+            char* errMsg = NULL;
+            if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) != SQLITE_OK) {
+                Serial.printf("[SQLite] Ошибка записи в журнал: %s\n", errMsg);
+                sqlite3_free(errMsg);
+            }
+            
+            snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id = %d;", currentScheduleId);
+            sqlite3_exec(db, sql, NULL, NULL, &errMsg);
+            
+            Serial.printf("[Schedule] Задача #%d завершена: %.2f мл за %lu сек\n", 
+                currentScheduleId, currentVolume, elapsed);
+            
+            scheduleExecuting = false;
+        }
+        return;
+    }
+    
+    uint32_t now = millis();
+    if (now - lastScheduleCheck < SCHEDULE_CHECK_INTERVAL) return;
+    lastScheduleCheck = now;
+    
+    time_t nowSec = time(nullptr);
+    if (nowSec < 24 * 3600) return;
+    
+    struct tm* timeinfo = localtime(&nowSec);
+    
+    const char* sql = 
+        "SELECT id, valve_id, type, schedule_time, volume_ml, duration_sec, priority "
+        "FROM schedules WHERE status='pending' ORDER BY priority DESC, schedule_time ASC;";
+    
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+    
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int id = sqlite3_column_int(stmt, 0);
+        int valveId = sqlite3_column_int(stmt, 1);
+        const char* type = (const char*)sqlite3_column_text(stmt, 2);
+        const char* scheduleTime = (const char*)sqlite3_column_text(stmt, 3);
+        float volume = sqlite3_column_double(stmt, 4);
+        int duration = sqlite3_column_int(stmt, 5);
+        
+        bool shouldExecute = false;
+        
+        if (strcmp(type, "once") == 0) {
+            struct tm tm = {0};
+            if (sscanf(scheduleTime, "%d-%d-%dT%d:%d", 
+                &tm.tm_year, &tm.tm_mon, &tm.tm_mday, 
+                &tm.tm_hour, &tm.tm_min) == 5) {
+                tm.tm_year -= 1900;
+                tm.tm_mon -= 1;
+                time_t scheduleTime_t = mktime(&tm);
+                if (nowSec >= scheduleTime_t) {
+                    shouldExecute = true;
+                }
+            }
+        } 
+        else if (strcmp(type, "daily") == 0) {
+            int schedHour, schedMin;
+            if (sscanf(scheduleTime, "%d:%d", &schedHour, &schedMin) == 2) {
+                if (timeinfo->tm_hour == schedHour && timeinfo->tm_min == schedMin) {
+                    static int lastExecutedMinute = -1;
+                    int currentMinute = timeinfo->tm_hour * 60 + timeinfo->tm_min;
+                    if (lastExecutedMinute != currentMinute) {
+                        lastExecutedMinute = currentMinute;
+                        shouldExecute = true;
+                    }
+                }
+            }
+        }
+        
+        if (shouldExecute) {
+            Serial.printf("[Schedule] Запуск задачи #%d, клапан %d\n", id, valveId);
+            
+            noInterrupts();
+            flowmetr = 0;
+            interrupts();
+            
+            mosfet.digitalWrite(valveId - 1, HIGH);
+            valveStates[valveId - 1] = true;
+            
+            scheduleExecuting = true;
+            currentScheduleId = id;
+            currentScheduleValve = valveId - 1;
+            scheduleStartTime = millis();
+            targetVolume = volume;
+            maxDuration = duration;
+            
+            sqlite3_finalize(stmt);
+            return;
+        }
+    }
+    
+    sqlite3_finalize(stmt);
+}
+
+// Обработчики API
 void handleRoot() {
   server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
 }
@@ -1431,18 +1618,7 @@ void handleApiJournalPost() {
   sqlite3_bind_int(stmt, 4, doc["duration_sec"] | 0);
   sqlite3_bind_double(stmt, 5, doc["volume_ml"] | 0.0);
   sqlite3_bind_text(stmt, 6, doc["status"] | "completed", -1, SQLITE_TRANSIENT);
-  if (sqlite3_step(stmt) == SQLITE_DONE) {
-    long long newId = sqlite3_last_insert_rowid(db);
-    Serial.println();
-    Serial.printf("ID записи : %-42lld \n", newId);
-    Serial.printf("Время : %-42s \n", (const char*)(doc["ts"] | "N/A"));
-    Serial.printf("Клапан : %-42d \n", doc["valve_id"] | 0);
-    Serial.printf("Тип : %-42s \n", (const char*)(doc["type"] | "N/A"));
-    Serial.printf("Длительность : %-39d \n", doc["duration_sec"] | 0);
-    Serial.printf("Объём : %-39.2f\n", (double)(doc["volume_ml"] | 0.0));
-    Serial.printf("Статус : %-42s\n", (const char*)(doc["status"] | "N/A"));
-    Serial.println();
-  }
+  sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   server.send(200, "application/json", "{\"ok\":true}");
 }
@@ -1455,10 +1631,8 @@ void handleApiJournalDelete() {
   else snprintf(sql, sizeof(sql), "DELETE FROM journal WHERE valve_id = %d;", valveId);
   char* errMsg = NULL;
   if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) == SQLITE_OK) {
-    Serial.printf("[SQLite] Журнал очищен (valve_id=%d, all=%d)\n", valveId, all);
     server.send(200, "application/json", "{\"ok\":true}");
   } else {
-    Serial.printf("[SQLite] Ошибка очистки: %s\n", errMsg);
     sqlite3_free(errMsg);
     server.send(500, "application/json", "{\"ok\":false}");
   }
@@ -1501,26 +1675,9 @@ void handleApiSchedulesPost() {
   sqlite3_bind_double(stmt, 4, doc["volume_ml"] | 0.0);
   sqlite3_bind_int(stmt, 5, doc["duration_sec"] | 30);
   sqlite3_bind_int(stmt, 6, doc["priority"] | 5);
-  if (sqlite3_step(stmt) == SQLITE_DONE) {
-    long long newId = sqlite3_last_insert_rowid(db);
-    Serial.println();
-    Serial.println("======================================================");
-    Serial.println("     НОВАЯ ЗАДАЧА ДОБАВЛЕНА В РАСПИСАНИЕ");
-    Serial.println("======================================================");
-    Serial.printf(" ID задачи : %-42lld \n", newId);
-    Serial.printf(" Клапан    : %-42d \n", doc["valve_id"] | 0);
-    Serial.printf(" Тип       : %-42s \n", (const char*)(doc["type"] | "N/A"));
-    Serial.printf(" Время     : %-42s \n", (const char*)(doc["schedule_time"] | "N/A"));
-    Serial.printf(" Объём     : %-39.2f мл \n", (double)(doc["volume_ml"] | 0.0));
-    Serial.printf(" Длит.     : %-39d сек \n", doc["duration_sec"] | 0);
-    Serial.printf(" Приоритет : %-42d \n", doc["priority"] | 5);
-    Serial.println("======================================================");
-    Serial.println();
-    server.send(200, "application/json", "{\"ok\":true}");
-  } else {
-    server.send(500, "application/json", "{\"ok\":false}");
-  }
+  sqlite3_step(stmt);
   sqlite3_finalize(stmt);
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 void handleApiSchedulesDelete() {
@@ -1530,11 +1687,8 @@ void handleApiSchedulesDelete() {
   snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id = %d;", id);
   char* errMsg = NULL;
   if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) == SQLITE_OK) {
-    int changes = sqlite3_changes(db);
-    Serial.printf("[SQLite] Задача расписания #%d удалена (изменено строк: %d)\n", id, changes);
     server.send(200, "application/json", "{\"ok\":true}");
   } else {
-    Serial.printf("[SQLite] Ошибка удаления задачи: %s\n", errMsg);
     sqlite3_free(errMsg);
     server.send(500, "application/json", "{\"ok\":false}");
   }
@@ -1555,7 +1709,7 @@ void handleValve() {
     flowmetr = 0;
     mosfet.digitalWrite(id, HIGH);
     valveStates[id] = true;
-    Serial.printf("Клапан %d -> OPEN (расходометр обнулён)\n", id);
+    Serial.printf("Клапан %d -> OPEN\n", id);
   } else {
     mosfet.digitalWrite(id, LOW);
     valveStates[id] = false;
@@ -1593,231 +1747,107 @@ void handleFlowmeter() {
   server.send(200, "application/json", json);
 }
 
-void ISR_Flow() {
+void IRAM_ATTR ISR_Flow() {
   flowmetr++;
 }
-void initTime() {
-    configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov");  // Moscow time UTC+3
-    Serial.print("Ожидание синхронизации времени");
-    time_t now = time(nullptr);
-    while (now < 24 * 3600) {
-        delay(100);
-        now = time(nullptr);
-        Serial.print(".");
-    }
-    Serial.println(" OK");
-    struct tm* timeinfo = localtime(&now);
-    Serial.printf("Текущее время: %02d:%02d:%02d\n", 
-        timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-}
-void setup() {
-    Serial.begin(115200);
-    delay(2000);
-    mosfet.begin();
-    mosfet.digitalWrite(ALL, LOW);
-    for (int i = 0; i < NUM_VALVES; i++) {
-        mosfet.digitalWrite(i, HIGH);
-        delay(300);
-        mosfet.digitalWrite(i, LOW);
-    }
-    
-    if (!SD.begin(PIN_CS_SD)) {
-        Serial.printf("\nFlash-память не обнаружена\n");
+
+void printStatus() {
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 30000) {
+    lastPrint = millis();
+    Serial.println("\n--- СТАТУС СИСТЕМЫ ---");
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("WiFi: подключен (%s)\n", localIP.toString().c_str());
+      time_t now = time(nullptr);
+      if (now >= 24 * 3600) {
+        struct tm* timeinfo = localtime(&now);
+        Serial.printf("Время: %02d:%02d:%02d\n", 
+            timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+      } else {
+        Serial.println("Время: не синхронизировано");
+      }
     } else {
-        uint8_t cardType = SD.cardType();
-        if (cardType != CARD_NONE) {
-            uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-            Serial.printf("SD: %llu MB\n", cardSize);
-        }
+      Serial.println("WiFi: не подключен");
     }
-    
-    initDatabase();
-    
-    pinMode(0, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(0), ISR_Flow, RISING);
-    
-    Serial.printf("\nТочка доступа Wifi:\n");
-    WiFi.AP.begin();
-    WiFi.AP.config(ap_ip, ap_ip, ap_subnet, ap_leaseStart, ap_dns);
-    WiFi.AP.create(AP_SSID, AP_PASS);
-    
-    if (!WiFi.AP.waitStatusBits(ESP_NETIF_STARTED_BIT, 1000)) {
-        Serial.printf("\tнедоступна\n");
-        return;
-    }
-    
-    Serial.println(WiFi.AP);
-    initTime();  
-    server.on("/", HTTP_GET, handleRoot);
-    server.on("/api/valves", HTTP_GET, handleApiValvesGet);
-    server.on("/api/valves", HTTP_POST, handleApiValvesPost);
-    server.on("/api/journal", HTTP_GET, handleApiJournalGet);
-    server.on("/api/journal", HTTP_POST, handleApiJournalPost);
-    server.on("/api/journal", HTTP_DELETE, handleApiJournalDelete);
-    server.on("/api/schedules", HTTP_GET, handleApiSchedulesGet);
-    server.on("/api/schedules", HTTP_POST, handleApiSchedulesPost);
-    server.on("/api/schedules", HTTP_DELETE, handleApiSchedulesDelete);
-    server.on("/valve", HTTP_GET, handleValve);
-    server.on("/all", HTTP_GET, handleAll);
-    server.on("/states", HTTP_GET, handleStates);
-    server.on("/flowmeter", HTTP_GET, handleFlowmeter);
-    
-    server.begin();
-    Serial.println("HTTP-сервер запущен: http://192.168.5.1");
+    Serial.println("------------------------\n");
+  }
 }
-// Функция проверки и выполнения расписания
-void checkAndExecuteSchedules() {
-    if (scheduleExecuting) {
-        // Если выполняется полив по расписанию - мониторим его завершение
-        uint32_t elapsed = (millis() - scheduleStartTime) / 1000;
-        
-        // Получаем текущий объём
-        noInterrupts();
-        uint32_t pulses = flowmetr;
-        interrupts();
-        float currentVolume = pulses * FLOW_RATE_ML;
-        
-        // Проверяем условия остановки
-        bool shouldStop = false;
-        String stopReason = "";
-        
-        if (targetVolume > 0 && currentVolume >= targetVolume) {
-            shouldStop = true;
-            stopReason = "volume";
-        } else if (elapsed >= maxDuration) {
-            shouldStop = true;
-            stopReason = "timeout";
-        }
-        
-        if (shouldStop) {
-            // Останавливаем клапан
-            mosfet.digitalWrite(currentScheduleValve, LOW);
-            valveStates[currentScheduleValve] = false;
-            
-            // Записываем в журнал
-            char sql[512];
-            snprintf(sql, sizeof(sql),
-                "INSERT INTO journal (ts, valve_id, type, duration_sec, volume_ml, status) "
-                "VALUES (datetime('now', 'localtime'), %d, 'schedule', %lu, %.2f, 'completed');",
-                currentScheduleValve + 1, elapsed, currentVolume);
-            
-            char* errMsg = NULL;
-            if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) != SQLITE_OK) {
-                Serial.printf("[SQLite] Ошибка записи в журнал: %s\n", errMsg);
-                sqlite3_free(errMsg);
-            }
-            
-            // Удаляем выполненную задачу
-            snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id = %d;", currentScheduleId);
-            sqlite3_exec(db, sql, NULL, NULL, &errMsg);
-            
-            Serial.printf("[Schedule] Задача #%d завершена: %.2f мл за %lu сек\n", 
-                currentScheduleId, currentVolume, elapsed);
-            
-            scheduleExecuting = false;
-        }
-        return;
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+  
+  Serial.println("\n=== ЗАПУСК СИСТЕМЫ ПОЛИВА ===\n");
+  
+  mosfet.begin();
+  mosfet.digitalWrite(ALL, LOW);
+  
+  Serial.println("Тестирование клапанов...");
+  for (int i = 0; i < NUM_VALVES; i++) {
+    mosfet.digitalWrite(i, HIGH);
+    delay(300);
+    mosfet.digitalWrite(i, LOW);
+    Serial.printf("Клапан %d OK\n", i + 1);
+  }
+  
+  Serial.println("\nИнициализация SD карты...");
+  if (!SD.begin(PIN_CS_SD)) {
+    Serial.printf("✗ SD карта не обнаружена!\n");
+  } else {
+    uint8_t cardType = SD.cardType();
+    if (cardType != CARD_NONE) {
+      uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+      Serial.printf("✓ SD карта: %llu MB\n", cardSize);
     }
-    
-    // Проверяем, не пора ли запустить новое расписание
-    uint32_t now = millis();
-    if (now - lastScheduleCheck < SCHEDULE_CHECK_INTERVAL) return;
-    lastScheduleCheck = now;
-    
-    // Получаем текущее время в формате ЧЧ:ММ и Unix timestamp
-    time_t nowSec = time(nullptr);
-    struct tm* timeinfo = localtime(&nowSec);
-    char currentTime[6];
-    strftime(currentTime, sizeof(currentTime), "%H:%M", timeinfo);
-    
-    // Проверяем однократные задачи и задачи по расписанию
-    const char* sql = 
-        "SELECT id, valve_id, type, schedule_time, volume_ml, duration_sec, priority "
-        "FROM schedules WHERE status='pending' ORDER BY priority DESC, schedule_time ASC;";
-    
-    sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
-    
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        int valveId = sqlite3_column_int(stmt, 1);
-        const char* type = (const char*)sqlite3_column_text(stmt, 2);
-        const char* scheduleTime = (const char*)sqlite3_column_text(stmt, 3);
-        float volume = sqlite3_column_double(stmt, 4);
-        int duration = sqlite3_column_int(stmt, 5);
-        
-        bool shouldExecute = false;
-        
-        if (strcmp(type, "once") == 0) {
-            // Для однократных задач сравниваем полную дату/время
-            // schedule_time хранится в ISO формате
-            time_t scheduleTime_t = 0;
-            struct tm tm = {0};
-            if (sscanf(scheduleTime, "%d-%d-%dT%d:%d", 
-                &tm.tm_year, &tm.tm_mon, &tm.tm_mday, 
-                &tm.tm_hour, &tm.tm_min) == 5) {
-                tm.tm_year -= 1900;
-                tm.tm_mon -= 1;
-                scheduleTime_t = mktime(&tm);
-                if (nowSec >= scheduleTime_t) {
-                    shouldExecute = true;
-                }
-            }
-        } 
-        else if (strcmp(type, "daily") == 0) {
-            // Ежедневная задача - сравниваем время
-            char scheduleHour[3], scheduleMin[3];
-            scheduleHour[0] = scheduleTime[0];
-            scheduleHour[1] = scheduleTime[1];
-            scheduleHour[2] = '\0';
-            scheduleMin[0] = scheduleTime[3];
-            scheduleMin[1] = scheduleTime[4];
-            scheduleMin[2] = '\0';
-            
-            int schedHour = atoi(scheduleHour);
-            int schedMin = atoi(scheduleMin);
-            
-            if (timeinfo->tm_hour == schedHour && timeinfo->tm_min == schedMin) {
-                // Проверяем, не выполняли ли уже в эту минуту
-                static int lastExecutedMinute = -1;
-                int currentMinute = timeinfo->tm_hour * 60 + timeinfo->tm_min;
-                if (lastExecutedMinute != currentMinute) {
-                    lastExecutedMinute = currentMinute;
-                    shouldExecute = true;
-                }
-            }
-        }
-        // Здесь можно добавить другие типы расписаний (weekly, interval и т.д.)
-        
-        if (shouldExecute) {
-            // Запускаем выполнение
-            Serial.printf("[Schedule] Запуск задачи #%d, клапан %d\n", id, valveId);
-            
-            // Обнуляем счётчик расходомера
-            noInterrupts();
-            flowmetr = 0;
-            interrupts();
-            
-            // Включаем клапан
-            mosfet.digitalWrite(valveId - 1, HIGH);
-            valveStates[valveId - 1] = true;
-            
-            scheduleExecuting = true;
-            currentScheduleId = id;
-            currentScheduleValve = valveId - 1;
-            scheduleStartTime = millis();
-            targetVolume = volume;
-            maxDuration = duration;
-            
-            sqlite3_finalize(stmt);
-            return; // Выходим, чтобы не запустить несколько задач сразу
-        }
-    }
-    
-    sqlite3_finalize(stmt);
+  }
+  
+  Serial.println("\nИнициализация базы данных...");
+  initDatabase();
+  
+  pinMode(0, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(0), ISR_Flow, RISING);
+  Serial.println("✓ Датчик расхода воды настроен");
+  
+  Serial.println("\n=== ПОДКЛЮЧЕНИЕ К WiFi ===\n");
+  if (!connectToWiFi()) {
+    Serial.println("\n⚠ ВНИМАНИЕ: Работа без WiFi!");
+    Serial.println("Расписание и синхронизация времени будут недоступны");
+  } else {
+    Serial.println("\n=== СИНХРОНИЗАЦИЯ ВРЕМЕНИ ===\n");
+    initTime();
+  }
+  
+  Serial.println("\n=== НАСТРОЙКА ВЕБ-СЕРВЕРА ===\n");
+  
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/valves", HTTP_GET, handleApiValvesGet);
+  server.on("/api/valves", HTTP_POST, handleApiValvesPost);
+  server.on("/api/journal", HTTP_GET, handleApiJournalGet);
+  server.on("/api/journal", HTTP_POST, handleApiJournalPost);
+  server.on("/api/journal", HTTP_DELETE, handleApiJournalDelete);
+  server.on("/api/schedules", HTTP_GET, handleApiSchedulesGet);
+  server.on("/api/schedules", HTTP_POST, handleApiSchedulesPost);
+  server.on("/api/schedules", HTTP_DELETE, handleApiSchedulesDelete);
+  server.on("/valve", HTTP_GET, handleValve);
+  server.on("/all", HTTP_GET, handleAll);
+  server.on("/states", HTTP_GET, handleStates);
+  server.on("/flowmeter", HTTP_GET, handleFlowmeter);
+  
+  server.begin();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("✓ Веб-сервер запущен: http://%s\n", localIP.toString().c_str());
+    Serial.println("Для доступа к управлению откройте этот адрес в браузере");
+  } else {
+    Serial.println("⚠ Веб-сервер запущен, но WiFi не подключен");
+  }
+  
+  Serial.println("\n=== СИСТЕМА ГОТОВА ===\n");
 }
+
 void loop() {
-    server.handleClient();
-    checkAndExecuteSchedules();  // Добавьте эту строку
-    delay(100);
+  server.handleClient();
+  checkAndExecuteSchedules();
+  printStatus();
+  delay(100);
 }
