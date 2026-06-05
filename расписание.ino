@@ -196,7 +196,7 @@ bool initDatabase() {
     "  duration_sec INTEGER DEFAULT 0,"
     "  priority INTEGER DEFAULT 5,"
     "  status TEXT DEFAULT 'pending',"
-    "  created_at TEXT DEFAULT CURRENT_TIMESTAMP"
+    "  created_at TEXT DEFAURENT_TIMESTAMP"
     ");";
 
   char* errMsg = NULL;
@@ -1365,101 +1365,22 @@ async function syncWithESP() {
             });
             if (changed) renderSidebar();
         } catch(e) {}
+        
+        // Обновляем список расписания каждые 3 секунды
+        try {
+            await loadSchedules();
+            renderSchedules();
+        } catch(e) {}
     }, 3000);
 }
 
 function startScheduleChecker() {
-    setInterval(async () => {
-        if (appState.scheduleExecution.active) return;
-        const now = new Date();
-        const pendingOnce = appState.schedules.filter(s => s.type === 'once' && s.status === 'pending');
-        for (const schedule of pendingOnce) {
-            const targetTime = new Date(schedule.schedule_time);
-            if (now >= targetTime) {
-                await executeOnceSchedule(schedule);
-                break;
-            }
-        }
-    }, 1000);
 }
 
 async function executeOnceSchedule(schedule) {
-    console.log('[Schedule] Запуск задачи:', schedule);
-    showNotification(`Автополив: Клапан ${schedule.valve_id}`);
-    appState.scheduleExecution = {
-        active: true,
-        scheduleId: schedule.id,
-        valveId: schedule.valve_id,
-        startTime: Date.now(),
-        targetVolume: Number(schedule.volume_ml) || 0,
-        maxDuration: Number(schedule.duration_sec) || 60
-    };
-    renderSchedules();
-    try {
-        const res = await fetch(`/valve?id=${schedule.valve_id - 1}&state=1`);
-        const data = await res.json();
-        if (!data.ok) throw new Error('Ошибка включения');
-    } catch (e) {
-        console.error('[Schedule] Не удалось включить клапан', e);
-        await finishScheduleExecution(false, 'Ошибка включения');
-        return;
-    }
-    await saveValveToDB(schedule.valve_id, { active: 1 });
-    renderSidebar();
-    const checkInterval = setInterval(async () => {
-        const elapsed = Math.floor((Date.now() - appState.scheduleExecution.startTime) / 1000);
-        let currentVolume = 0;
-        try {
-            const flowRes = await fetch('/flowmeter');
-            const flowData = await flowRes.json();
-            if (flowData.ok) currentVolume = flowData.volume_ml || 0;
-        } catch(e) {}
-        if (appState.scheduleExecution.targetVolume > 0 && currentVolume >= appState.scheduleExecution.targetVolume) {
-            clearInterval(checkInterval);
-            await finishScheduleExecution(true, 'Объём достигнут');
-            return;
-        }
-        if (elapsed >= appState.scheduleExecution.maxDuration) {
-            clearInterval(checkInterval);
-            await finishScheduleExecution(true, 'Время вышло');
-            return;
-        }
-    }, 1000);
-    appState.scheduleExecution.checkInterval = checkInterval;
 }
 
 async function finishScheduleExecution(success, reason) {
-    const exec = appState.scheduleExecution;
-    if (!exec.active) return;
-    let finalVolume = 0;
-    try {
-        const flowRes = await fetch('/flowmeter');
-        const flowData = await flowRes.json();
-        if (flowData.ok) finalVolume = flowData.volume_ml || 0;
-    } catch(e) {}
-    try {
-        await fetch(`/valve?id=${exec.valveId - 1}&state=0`);
-    } catch(e) {}
-    const duration = Math.floor((Date.now() - exec.startTime) / 1000);
-    await saveValveToDB(exec.valveId, { active: 0 });
-    renderSidebar();
-    const entry = {
-        ts: new Date().toISOString(),
-        valve_id: exec.valveId,
-        type: 'once',
-        duration_sec: duration,
-        volume_ml: Number(finalVolume.toFixed(2)),
-        status: success ? 'completed' : 'failed'
-    };
-    await addJournalEntryToDB(entry);
-    try {
-        await fetch(`/api/schedules?id=${exec.scheduleId}`, { method: 'DELETE' });
-        await loadSchedules();
-    } catch(e) {}
-    console.log(`[Schedule] Задача завершена: ${reason}, объём ${finalVolume.toFixed(2)} мл`);
-    showNotification(`✓ Клапан ${exec.valveId}: ${finalVolume.toFixed(2)} мл (${reason})`);
-    appState.scheduleExecution = { active: false, scheduleId: null, valveId: null, startTime: null, targetVolume: 0, maxDuration: 0 };
-    renderSchedules();
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -1669,16 +1590,6 @@ void handleValve() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-void handleAll() {
-  if (!server.hasArg("state")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
-  int st = server.arg("state").toInt();
-  for (int i = 0; i < NUM_VALVES; i++) {
-    mosfet.digitalWrite(i, st ? HIGH : LOW);
-    valveStates[i] = st ? true : false;
-  }
-  server.send(200, "application/json", "{\"ok\":true}");
-}
-
 void handleStates() {
   String json = "{\"states\":[";
   for (int i = 0; i < NUM_VALVES; i++) {
@@ -1707,11 +1618,6 @@ void setup() {
   delay(2000);
   mosfet.begin();
   mosfet.digitalWrite(ALL, LOW);
-  for (int i = 0; i < NUM_VALVES; i++) {
-    mosfet.digitalWrite(i, HIGH);
-    delay(300);
-    mosfet.digitalWrite(i, LOW);
-  }
   if (!SD.begin(PIN_CS_SD)) {
     Serial.printf("\nFlash-память не обнаружена\n");
   } else {
@@ -1759,7 +1665,6 @@ void setup() {
   server.on("/api/schedules", HTTP_POST, handleApiSchedulesPost);
   server.on("/api/schedules", HTTP_DELETE, handleApiSchedulesDelete);
   server.on("/valve", HTTP_GET, handleValve);
-  server.on("/all", HTTP_GET, handleAll);
   server.on("/states", HTTP_GET, handleStates);
   server.on("/flowmeter", HTTP_GET, handleFlowmeter);
   server.begin();
