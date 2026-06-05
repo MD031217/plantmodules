@@ -898,6 +898,7 @@ function switchValve(id) {
     document.getElementById('input-valve-select').value = id;
 }
 
+// === ИЗМЕНЕНО: таймер теперь запрашивает объём с расходометра каждую секунду ===
 async function startWatering() {
     if (appState.manualState.isActive) return;
     const sel = document.getElementById('manual-valve-select');
@@ -922,15 +923,28 @@ async function startWatering() {
         const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
         const s = (elapsed % 60).toString().padStart(2, '0');
         document.getElementById('manual-timer').textContent = `${m}:${s}`;
+
+        // === НОВОЕ: запрос к расходометру для отображения текущего объёма ===
+        fetch('/flowmeter')
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok && appState.manualState.isActive) {
+                    const vol = (data.volume_ml || 0).toFixed(2);
+                    document.getElementById('manual-volume').textContent = vol + ' мл';
+                }
+            })
+            .catch(() => {});
+        // ================================================================
     }, 1000);
 
     document.getElementById('manual-status').textContent = 'Работает';
     document.getElementById('manual-status').style.color = '#22c55e';
-    document.getElementById('manual-volume').textContent = 'Измерение...';
+    document.getElementById('manual-volume').textContent = '0.00 мл';
     document.getElementById('btn-manual-on').disabled = true;
     document.getElementById('btn-manual-off').disabled = false;
     showNotification(`Клапан ${appState.manualState.valveId} открыт`);
 }
+// ===========================================================================
 
 async function stopWatering() {
     if (!appState.manualState.isActive) return;
@@ -1139,17 +1153,13 @@ void handleApiJournalPost() {
     long long newId = sqlite3_last_insert_rowid(db);
     
     Serial.println();
-    Serial.println("╔══════════════════════════════════════════════════╗");
-    Serial.println("║         НОВАЯ ЗАПИСЬ ДОБАВЛЕНА В БД              ║");
-    Serial.println("╠══════════════════════════════════════════════════╣");
-    Serial.printf("║ ID записи : %-42lld ║\n", newId);
-    Serial.printf("║ Время     : %-42s ║\n", (const char*)(doc["ts"] | "N/A"));
-    Serial.printf("║ Клапан    : %-42d ║\n", doc["valve_id"] | 0);
-    Serial.printf("║ Тип       : %-42s ║\n", (const char*)(doc["type"] | "N/A"));
-    Serial.printf("║ Длительность: %-39d сек ║\n", doc["duration_sec"] | 0);
-    Serial.printf("║ Объём     : %-39.2f мл  ║\n", (double)(doc["volume_ml"] | 0.0));
-    Serial.printf("║ Статус    : %-42s ║\n", (const char*)(doc["status"] | "N/A"));
-    Serial.println("╚══════════════════════════════════════════════════╝");
+    Serial.printf("ID записи : %-42lld \n", newId);
+    Serial.printf("Время : %-42s \n", (const char*)(doc["ts"] | "N/A"));
+    Serial.printf("Клапан : %-42d \n", doc["valve_id"] | 0);
+    Serial.printf("Тип : %-42s \n", (const char*)(doc["type"] | "N/A"));
+    Serial.printf("Длительность : %-39d \n", doc["duration_sec"] | 0);
+    Serial.printf("Объём : %-39.2f\n", (double)(doc["volume_ml"] | 0.0));
+    Serial.printf("Статус : %-42s\n", (const char*)(doc["status"] | "N/A"));
     Serial.println();
   }
   
