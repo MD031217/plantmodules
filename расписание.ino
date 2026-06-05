@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <time.h> 
 #include <SPI.h>
 #include <SD.h>
 #include <FS.h>
@@ -25,8 +26,8 @@ bool valveStates[NUM_VALVES] = {false};
 volatile uint32_t flowmetr = 0;
 sqlite3 *db = NULL;
 
-char ap_ssid[]     = "RoboLab";
-char ap_password[] = "Qwe123!!";
+char ap_ssid[]     = "linksys";
+char ap_password[] = "";
 const char* espName = "mWatering";
 
 IPAddress ap_ip(192, 168, 5, 1);
@@ -34,6 +35,127 @@ IPAddress ap_subnet(255, 255, 255, 0);
 IPAddress ap_leaseStart(192, 168, 5, 2);
 IPAddress ap_dns(192, 168, 5, 1);
 
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 5 * 3600;
+const int daylightOffset_sec = 0;
+
+time_t currentUnixTime = 0;
+int currentHour = 0;
+int currentMinute = 0;
+int currentSecond = 0;
+time_t lastExecutionTime = 0;
+
+bool isExecutingSchedule = false;
+int execScheduleId = -1;
+int execValveId = -1;
+uint32_t execStartTime = 0;
+float execTargetVolume = 0;
+int execMaxDuration = 0;
+String execScheduleType = "";
+
+void updateTime() {
+    currentUnixTime = time(nullptr);
+    if (currentUnixTime < 100000) return;
+    struct tm timeinfo;
+    localtime_r(&currentUnixTime, &timeinfo);
+    currentHour = timeinfo.tm_hour;
+    currentMinute = timeinfo.tm_min;
+    currentSecond = timeinfo.tm_sec;
+}
+
+void checkSchedules() {
+    if (isExecutingSchedule) return;
+    updateTime();
+    if (currentUnixTime < 100000) return; 
+
+    const char* sql = "SELECT id, valve_id, type, schedule_time, volume_ml, duration_sec FROM schedules WHERE status='pending';";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+
+    int execId = -1;
+    int execValve = -1;
+    float execVolume = 0;
+    int execDuration = 0;
+    String execType = "";
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int id = sqlite3_column_int(stmt, 0);
+        int valve_id = sqlite3_column_int(stmt, 1);
+        const char* type = (const char*)sqlite3_column_text(stmt, 2);
+        const char* schedule_time = (const char*)sqlite3_column_text(stmt, 3);
+        float volume = sqlite3_column_double(stmt, 4);
+        int duration = sqlite3_column_int(stmt, 5);
+
+        bool shouldExecute = false;
+
+        if (strcmp(type, "once") == 0) {
+            int y, m, d, h, mi, s;
+            if (sscanf(schedule_time, "%d-%d-%dT%d:%d:%d", &y, &m, &d, &h, &mi, &s) == 6) {
+                struct tm tm = {0};
+                tm.tm_year = y - 1900;
+                tm.tm_mon = m - 1;
+                tm.tm_mday = d;
+                tm.tm_hour = h;
+                tm.tm_min = mi;
+                tm.tm_sec = s;
+                tm.tm_isdst = 0; 
+                
+                time_t target = mktime(&tm) + gmtOffset_sec;
+                
+                if (currentUnixTime >= target) {
+                    shouldExecute = true;
+                }
+            }
+        } else if (strcmp(type, "daily") == 0) {
+            int h, mi;
+            if (sscanf(schedule_time, "%d:%d", &h, &mi) == 2) {
+                if (currentHour == h && currentMinute == mi && currentSecond < 5) {
+                    struct tm lastTimeInfo;
+                    localtime_r(&lastExecutionTime, &lastTimeInfo);
+                    struct tm currentTimeInfo;
+                    localtime_r(&currentUnixTime, &currentTimeInfo);
+                    
+                    if (lastExecutionTime == 0 || 
+                        lastTimeInfo.tm_yday != currentTimeInfo.tm_yday || 
+                        lastTimeInfo.tm_year != currentTimeInfo.tm_year) {
+                        shouldExecute = true;
+                    }
+                }
+            }
+        }
+
+        if (shouldExecute) {
+            execId = id;
+            execValve = valve_id;
+            execVolume = volume;
+            execDuration = duration;
+            execType = String(type);
+            break;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (execId != -1) {
+        isExecutingSchedule = true;
+        execScheduleId = execId;
+        execValveId = execValve;
+        execStartTime = millis();
+        execTargetVolume = execVolume;
+        execMaxDuration = execDuration;
+        execScheduleType = execType;
+        lastExecutionTime = currentUnixTime;
+        
+        flowmetr = 0;
+        mosfet.digitalWrite(execValveId - 1, HIGH);
+        valveStates[execValveId - 1] = true;
+        
+        char sqlUpd[128];
+        snprintf(sqlUpd, sizeof(sqlUpd), "UPDATE schedules SET status='executing' WHERE id=%d;", execId);
+        sqlite3_exec(db, sqlUpd, NULL, NULL, NULL);
+        
+        Serial.printf("[Schedule] Запуск задачи #%d: Клапан %d, %.2f мл, %d сек\n", execId, execValveId, execVolume, execDuration);
+    }
+}
 
 bool initDatabase() {
   if (!SD.exists("/sd")) {
@@ -686,14 +808,12 @@ const char PAGE_HTML[] PROGMEM = R"rawliteral(
                                 <div class="form-hint">На сколько секунд открывать клапан</div>
                             </div>
                         </div>
-                        <!-- === ИЗМЕНЕНО: добавлен id="group-cycles" === -->
                         <div class="form-row-2" id="group-cycles">
                             <div class="form-group">
                                 <label class="form-label">Повторений цикла</label>
                                 <input type="number" class="form-input" id="input-cycles" value="1" min="1" max="10">
                             </div>
                         </div>
-                        <!-- ========================================= -->
                         <div id="weekly-details-container" style="margin-top:15px; display:none;"></div>
                         <button class="btn-add-task" onclick="addTaskOperation()" style="width:100%; margin-top:10px; padding:14px; font-size:15px;">
                             + Добавить задачу с этими параметрами
@@ -1146,7 +1266,6 @@ function showNotification(msg) {
     setTimeout(() => { n.style.opacity = '0'; setTimeout(() => n.remove(), 300); }, 2500);
 }
 
-// === ИЗМЕНЕНО: для "once" скрываются "Время полива" и "Повторений цикла" ===
 function updateFormLogic() {
     const type = document.getElementById('input-schedule-type')?.value;
     if (!type) return;
@@ -1184,7 +1303,6 @@ function updateFormLogic() {
             break;
     }
 }
-// ============================================================================
 
 async function addTaskOperation() {
     const getVal = (id) => document.getElementById(id)?.value || '';
@@ -1267,7 +1385,7 @@ function startScheduleChecker() {
 
 async function executeOnceSchedule(schedule) {
     console.log('[Schedule] Запуск задачи:', schedule);
-    showNotification(`⏰ Автополив: Клапан ${schedule.valve_id}`);
+    showNotification(`Автополив: Клапан ${schedule.valve_id}`);
     appState.scheduleExecution = {
         active: true,
         scheduleId: schedule.id,
@@ -1496,18 +1614,13 @@ void handleApiSchedulesPost() {
   if (sqlite3_step(stmt) == SQLITE_DONE) {
     long long newId = sqlite3_last_insert_rowid(db);
     Serial.println();
-    Serial.println("======================================================");
-    Serial.println("     НОВАЯ ЗАДАЧА ДОБАВЛЕНА В РАСПИСАНИЕ");
-    Serial.println("======================================================");
     Serial.printf(" ID задачи : %-42lld \n", newId);
-    Serial.printf(" Клапан    : %-42d \n", doc["valve_id"] | 0);
-    Serial.printf(" Тип       : %-42s \n", (const char*)(doc["type"] | "N/A"));
-    Serial.printf(" Время     : %-42s \n", (const char*)(doc["schedule_time"] | "N/A"));
-    Serial.printf(" Объём     : %-39.2f мл \n", (double)(doc["volume_ml"] | 0.0));
-    Serial.printf(" Длит.     : %-39d сек \n", doc["duration_sec"] | 0);
+    Serial.printf(" Клапан : %-42d \n", doc["valve_id"] | 0);
+    Serial.printf(" Тип : %-42s \n", (const char*)(doc["type"] | "N/A"));
+    Serial.printf(" Время : %-42s \n", (const char*)(doc["schedule_time"] | "N/A"));
+    Serial.printf(" Объём : %-39.2f \n", (double)(doc["volume_ml"] | 0.0));
+    Serial.printf(" Длит. : %-39d \n", doc["duration_sec"] | 0);
     Serial.printf(" Приоритет : %-42d \n", doc["priority"] | 5);
-    Serial.println("======================================================");
-    Serial.println();
     server.send(200, "application/json", "{\"ok\":true}");
   } else {
     server.send(500, "application/json", "{\"ok\":false}");
@@ -1609,17 +1722,33 @@ void setup() {
     }
   }
   initDatabase();
+  sqlite3_exec(db, "UPDATE schedules SET status='pending' WHERE status='executing';", NULL, NULL, NULL);
+  
   pinMode(0, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(0), ISR_Flow, RISING);
-  Serial.printf("\nТочка доступа Wifi:\n");
-  WiFi.AP.begin();
-  WiFi.AP.config(ap_ip, ap_ip, ap_subnet, ap_leaseStart, ap_dns);
-  WiFi.AP.create(AP_SSID, AP_PASS);
-  if (!WiFi.AP.waitStatusBits(ESP_NETIF_STARTED_BIT, 1000)) {
-    Serial.printf("\tнедоступна\n");
-    return;
+  
+  Serial.println("Attempting to connect to Wi-Fi...");
+  WiFi.begin(ap_ssid, ap_password);
+  
+  if (WiFi.waitForConnectResult(10000) == WL_CONNECTED) {
+    Serial.println("Connected to local Wi-Fi!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    Serial.println("NTP configured.");
+  } else {
+    Serial.println("Wi-Fi not found, starting AP...");
+    WiFi.mode(WIFI_AP);
+    WiFi.AP.begin();
+    WiFi.AP.config(ap_ip, ap_ip, ap_subnet, ap_leaseStart, ap_dns);
+    WiFi.AP.create(AP_SSID, AP_PASS);
+    if (!WiFi.AP.waitStatusBits(ESP_NETIF_STARTED_BIT, 1000)) {
+      Serial.printf("\tнедоступна\n");
+      return;
+    }
+    Serial.println(WiFi.AP);
   }
-  Serial.println(WiFi.AP);
+
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/valves", HTTP_GET, handleApiValvesGet);
   server.on("/api/valves", HTTP_POST, handleApiValvesPost);
@@ -1634,10 +1763,51 @@ void setup() {
   server.on("/states", HTTP_GET, handleStates);
   server.on("/flowmeter", HTTP_GET, handleFlowmeter);
   server.begin();
-  Serial.println("HTTP-сервер запущен: http://192.168.5.1");
+  Serial.println("HTTP-сервер запущен.");
 }
 
 void loop() {
   server.handleClient();
+  if (isExecutingSchedule) {
+      uint32_t elapsed = (millis() - execStartTime) / 1000;
+      noInterrupts();
+      uint32_t pulses = flowmetr;
+      interrupts();
+      float currentVolume = pulses * FLOW_RATE_ML;
+      
+      bool stopCondition = false;
+      if (execTargetVolume > 0 && currentVolume >= execTargetVolume) stopCondition = true;
+      if (execMaxDuration > 0 && elapsed >= execMaxDuration) stopCondition = true;
+      
+      if (stopCondition) {
+          mosfet.digitalWrite(execValveId - 1, LOW);
+          valveStates[execValveId - 1] = false;
+          
+          char ts[30];
+          time_t now = time(nullptr);
+          struct tm timeinfo;
+          localtime_r(&now, &timeinfo);
+          strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+          
+          char sql[512];
+          snprintf(sql, sizeof(sql), 
+              "INSERT INTO journal (ts, valve_id, type, duration_sec, volume_ml, status) VALUES ('%s', %d, 'schedule', %d, %.2f, 'completed');",
+              ts, execValveId, elapsed, currentVolume);
+          sqlite3_exec(db, sql, NULL, NULL, NULL);
+          
+          if (execScheduleType == "once") {
+              snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id=%d;", execScheduleId);
+          } else {
+              snprintf(sql, sizeof(sql), "UPDATE schedules SET status='pending' WHERE id=%d;", execScheduleId);
+          }
+          sqlite3_exec(db, sql, NULL, NULL, NULL);
+          
+          isExecutingSchedule = false;
+          Serial.printf("[Schedule] Задача #%d завершена. Объём: %.2f мл, Время: %d сек\n", execScheduleId, currentVolume, elapsed);
+      }
+  }
+  
+  checkSchedules();
+  
   delay(2);
 }
