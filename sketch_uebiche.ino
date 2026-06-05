@@ -4,1559 +4,610 @@
 #include <FS.h>
 #include <WebServer.h>
 #include <sqlite3.h>
+#include <ArduinoJson.h>
 #include "AmperkaFET.h"
-#include <time.h>
+#include <time.h> // Добавлено для работы с временем
+
+#define AP_SSID "CollectorModuleNet"
+#define AP_PASS "Qwe123!!"
 
 #define PIN_CS_FET   1
 #define PIN_CS_SD    7
 #define NUM_VALVES   8
 
+#define FLOW_RATE_ML 2.23
+#define DB_PATH "/sd/watering.db"
+
 FET mosfet(PIN_CS_FET);
 WebServer server(80);
 
-sqlite3 *db = nullptr;
+bool valveStates[NUM_VALVES] = {false};
+volatile uint32_t flowmetr = 0;
+sqlite3 *db = NULL;
 
-// ===================== Настройки =====================
+char ap_ssid[]     = "RoboLab";
+char ap_password[] = "Qwe123!!";
+const char* espName = "mWatering";
+
 IPAddress ap_ip(192, 168, 5, 1);
 IPAddress ap_subnet(255, 255, 255, 0);
 IPAddress ap_leaseStart(192, 168, 5, 2);
 IPAddress ap_dns(192, 168, 5, 1);
 
-const char* AP_SSID = "RoboLab-Watering";
-const char* AP_PASS = "Qwe123!!";
+// === ПЕРЕМЕННЫЕ ДЛЯ СИНХРОНИЗАЦИИ ВРЕМЕНИ И РАСПИСАНИЯ ===
+uint32_t lastClientTimeSec = 0;
+uint32_t lastSyncMillis = 0;
 
-// ===================== Датчики и таймеры =====================
-const int MOISTURE_PINS[NUM_VALVES] = {2, 3, 4, 5, 6, 8, 9, 10};
-const int DRY_THRESHOLD = 35;
-const unsigned long MOISTURE_INTERVAL = 300000UL;
-
-unsigned long valveStartTime[NUM_VALVES] = {0};
-unsigned long valveDuration[NUM_VALVES] = {0};
-bool valveStates[NUM_VALVES] = {false};
-
-unsigned long lastScheduleCheck = 0;
-unsigned long lastMoistureCheck = 0;
-
-// ===================== ВСТРОЕННЫЙ HTML (ваш) =====================
-const char MAIN_HTML[] PROGMEM = R"rawliteral(
-:root {
-    /* ТЁМНАЯ ТЕМА */
-    --page-bg: #0F182B;
-    --text-main: #ffffff;
-    --accent-green: #21C85F;
-    --card-bg: rgba(255, 255, 255, 0.95);
-    --glow-color: rgba(33, 200, 95, 0.6);
-    --glow-soft: rgba(33, 200, 95, 0.3);
-    --user-pill-bg: #1a2d45;
-    --user-pill-text: #a0aab5;
-    --nav-bg: #21C85F;
-    --nav-btn-bg: rgba(255, 255, 255, 0.25);
-    --label-bg: rgba(33, 200, 95, 0.15);
-    --label-text: #21C85F;
-    --footer-bg: #21C85F;
-    --switcher-bg: #1a2d45;
-    --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
+uint32_t getCurrentTimeSec() {
+    if (lastClientTimeSec == 0) return 0;
+    return lastClientTimeSec + (millis() - lastSyncMillis) / 1000;
 }
 
-.theme-light {
-    /* СВЕТЛАЯ ТЕМА */
-    --page-bg: #E8F0F2;
-    --text-main: #ffffff;
-    --accent-green: #10B981;
-    --card-bg: #ffffff;
-    --glow-color: rgba(16, 185, 129, 0.4);
-    --glow-soft: rgba(16, 185, 129, 0.2);
-    --user-pill-bg: #ffffff;
-    --user-pill-text: #8899aa;
-    --nav-bg: #10B981;
-    --nav-btn-bg: rgba(255, 255, 255, 0.3);
-    --label-bg: rgba(16, 185, 129, 0.15);
-    --label-text: #10B981;
-    --footer-bg: #10B981;
-    --switcher-bg: #ffffff;
-     --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
-}
+struct ScheduleExecution {
+    bool active = false;
+    int scheduleId = -1;
+    int valveId = -1;
+    uint32_t startTime = 0;
+    float targetVolume = 0;
+    uint32_t maxDuration = 0;
+    uint32_t lastFlowCheck = 0;
+};
 
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+ScheduleExecution currentExec;
+// =========================================================
 
-body {
-    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    background-color: var(--page-bg);
-    color: var(--text-main);
-    transition: background-color 0.4s ease;
-    min-height: 100vh;
-    overflow-x: hidden;
-    display: flex;
-    flex-direction: column;
-}
+bool initDatabase() {
+  if (!SD.exists("/sd")) {
+    SD.mkdir("/sd");
+  }
+  
+  int rc = sqlite3_open(DB_PATH, &db);
+  if (rc != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка открытия БД: %s\n", sqlite3_errmsg(db));
+    return false;
+  }
 
-.mode-toggle {
-    display: none !important;
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-}
+  const char* createValvesSQL = 
+    "CREATE TABLE IF NOT EXISTS valves ("
+    "  id INTEGER PRIMARY KEY,"
+    "  plant_name TEXT DEFAULT '—',"
+    "  active INTEGER DEFAULT 0"
+    ");";
+  
+  const char* createJournalSQL = 
+    "CREATE TABLE IF NOT EXISTS journal ("
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  ts TEXT NOT NULL,"
+    "  valve_id INTEGER NOT NULL,"
+    "  type TEXT NOT NULL,"
+    "  duration_sec INTEGER NOT NULL,"
+    "  volume_ml REAL NOT NULL,"
+    "  status TEXT DEFAULT 'completed'"
+    ");";
 
-.top-sticky-wrapper {
-    position: sticky;
-    top: 0;
-    z-index: 1000;
-    width: 100%;
-    background: transparent;
-    pointer-events: none;
-}
+  const char* createSchedulesSQL = 
+    "CREATE TABLE IF NOT EXISTS schedules ("
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  valve_id INTEGER NOT NULL,"
+    "  type TEXT NOT NULL,"
+    "  schedule_time TEXT NOT NULL,"
+    "  volume_ml REAL DEFAULT 0,"
+    "  duration_sec INTEGER DEFAULT 0,"
+    "  priority INTEGER DEFAULT 5,"
+    "  status TEXT DEFAULT 'pending',"
+    "  created_at TEXT DEFAULT CURRENT_TIMESTAMP"
+    ");";
 
-.top-sticky-wrapper > * {
-    pointer-events: auto;
-}
+  char* errMsg = NULL;
+  if (sqlite3_exec(db, createValvesSQL, NULL, NULL, &errMsg) != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка valves: %s\n", errMsg);
+    sqlite3_free(errMsg);
+  }
+  if (sqlite3_exec(db, createJournalSQL, NULL, NULL, &errMsg) != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка journal: %s\n", errMsg);
+    sqlite3_free(errMsg);
+  }
+  if (sqlite3_exec(db, createSchedulesSQL, NULL, NULL, &errMsg) != SQLITE_OK) {
+    Serial.printf("[SQLite] Ошибка schedules: %s\n", errMsg);
+    sqlite3_free(errMsg);
+  }
 
-.site-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 20px 40px;
-    background: transparent;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px); 
-    pointer-events: auto;
-    position: relative;
-    z-index: 2;
-}
-
-.user-pill {
-    display: flex;
-    align-items: center;
-    text-decoration: none;
-    background: var(--user-pill-bg);
-    border-radius: 50px;
-    padding: 8px 16px 8px 8px;
-    gap: 10px;
-    width: 145px;
-    height: 44px;
-    box-shadow: 0 0 8px var(--glow-soft);
-    animation: userPulse 3s infinite alternate;
-    flex-shrink: 0;
-}
-
-@keyframes userPulse {
-    0% { box-shadow: 0 0 6px var(--glow-soft); }
-    100% { box-shadow: 0 0 16px var(--glow-color); }
-}
-
-.user-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    object-fit: cover;
-    display: none;
-}
-
-body.theme-dark .avatar-dark {
-    display: block;
-}
-
-body.theme-light .avatar-light {
-    display: block;
-}
-
-.user-text {
-    font-size: 14px;
-    font-weight: 400;
-    color: var(--user-pill-text);
-    letter-spacing: 0.5px;
-}
-
-.logo-container {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-}
-
-.main-logo {
-    height: 100px;
-    display: none;
-    transition: height 0.3s ease;
-}
-
-body.theme-dark .logo-dark { display: block; }
-body.theme-light .logo-light { display: block; }
-
-.theme-switcher {
-    width: 48px;
-    height: 48px;
-    background: var(--switcher-bg);
-    border-radius: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 0 10px var(--glow-soft);
-    animation: switcherPulse 3s infinite alternate;
-    flex-shrink: 0;
-}
-
-@keyframes switcherPulse {
-    0% { box-shadow: 0 0 8px var(--glow-soft); }
-    100% { box-shadow: 0 0 18px var(--glow-color); }
-}
-
-.theme-icon-img {
-    width: 24px;
-    height: 24px;
-    filter: invert(1);
-}
-
-.theme-light .theme-icon-img { filter: invert(0); }
-
-.navigation {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 8px;
-    background: var(--nav-bg);
-    border-radius: 40px;
-    padding: 6px;
-    margin: 0px 30px 35px 30px;
-    height: 52px;
-    pointer-events: auto;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); 
-}
-
-.nav-btn {
-    color: #ffffff;
-    text-decoration: none;
-    font-size: 18px;
-    font-weight: 600;
-    padding: 8px 22px;
-    border-radius: 30px;
-    transition: all 0.3s ease;
-    white-space: nowrap;
-    position: relative;
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.nav-btn:hover,
-.nav-btn.active {
-    background: rgba(255, 255, 255, 0.35);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-
-.page-wrapper {
-    flex: 1;
-    padding: 0 20px;
-}
-
-.cards-area {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 40px;
-    padding: 20px 0 60px 0;
-    flex-wrap: wrap;
-}
-
-.plant-card {
-    width: 350px;
-    height: 420px;
-    background: var(--card-bg);
-    border-radius: 32px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    transition: transform 0.3s;
-    box-shadow: var(--card-internal-shadow);
-}
-
-.plant-card:hover { transform: translateY(-5px); }
-
-.glowing {
-    animation: glowPulse 3s infinite alternate;
-}
-
-@keyframes glowPulse {
-    0% { 
-        box-shadow: 0 0 12px var(--glow-color), var(--card-internal-shadow); 
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM valves;", -1, &stmt, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 0) {
+      sqlite3_finalize(stmt);
+      const char* insertSQL = "INSERT INTO valves (id, plant_name, active) VALUES (?, '—', 0);";
+      sqlite3_prepare_v2(db, insertSQL, -1, &stmt, NULL);
+      for (int i = 1; i <= NUM_VALVES; i++) {
+        sqlite3_bind_int(stmt, 1, i);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+      }
+      Serial.println("[SQLite] Таблица valves инициализирована 8 клапанами");
     }
-    100% { 
-        box-shadow: 0 0 28px var(--glow-color), var(--card-internal-shadow); 
-    }
-}
-
-.plant-img {
-    width: 300px;
-    height: 300px;
-    object-fit: contain;
-    margin-bottom: 16px;
-}
-
-.plant-label {
-    background: var(--label-bg);
-    color: var(--label-text);
-    font-size: 19px;
-    font-weight: 300;
-    padding: 8px 32px;
-    border-radius: 24px;
-    text-decoration: none;  
-    display: inline-block;    
-}
-
-.add-card { cursor: pointer; }
-
-.plus-icon {
-    display: none;
-    width: 90px;
-    height: 90px;
-    object-fit: contain;
-}
-
-body.theme-dark .icon-dark { display: block; }
-body.theme-light .icon-light { display: block; }
-
-.site-footer {
-    background: var(--footer-bg);
-    color: var(--footer-text);
-    padding: 36px 40px 0;
-    transition: background var(--transition-speed) ease;
-}
-
-.footer-columns {
-    display: grid;
-    grid-template-columns: 1.3fr 1fr 0.8fr;
-    gap: 30px;
-    max-width: 900px;
-    margin: 0 auto;
-    padding-bottom: 24px;
-    border-bottom: 1px solid rgba(255,255,255,0.2);
-}
-
-.footer-column-title {
-    font-size: 20px;
-    font-weight: 700;
-    margin-bottom: 12px;
-    color: var(--footer-column-title);
-}
-
-.footer-column-text {
-    font-size: 14px;
-    line-height: 1.7;
-    color: var(--footer-column-text);
-}
-
-.footer-column-list {
-    list-style: none;
-    padding: 0;
-}
-
-.footer-column-list li {
-    font-size: 14px;
-    line-height: 1.7;
-    color: var(--footer-column-text);
-}
-
-.footer-copyright {
-    text-align: center;
-    padding: 16px 0 12px;
-    font-size: 14px;
-    color: var(--footer-copy);
-    max-width: 900px;
-    margin: 0 auto;
-}
-
-.falling-leaf {
-    position: fixed;
-    pointer-events: none;
-    z-index: 9999;
-    animation: fallingLeaf var(--fall-duration, 3s) linear forwards;
-}
-
-.add-link {
-    display: flex; 
-    align-items: center;
-    justify-content: center;
-}
-
-/* --- Стили для модального окна --- */
-.modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(15, 24, 43, 0.6); /* Полупрозрачный фон */
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    z-index: 2000; /* Поверх всего */
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-.modal-content {
-    background: var(--card-bg);
-    padding: 30px;
-    border-radius: 32px;
-    width: 90%;
-    max-width: 450px;
-    position: relative;
-    box-shadow: 0 0 30px var(--glow-soft);
-    animation: modalFadeIn 0.3s ease;
-    text-align: center;
-    color: var(--text-main);
-}
-
-/* Цвет текста внутри модального окна */
-.modal-content h3, 
-.modal-content .modal-title,
-.modal-content .modal-title-sub {
-    color: var(--accent-green);
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 15px;
-    line-height: 1.4;
-}
-
-.modal-title-sub {
-    margin-top: 20px;
-    font-size: 16px;
-}
-
-@keyframes modalFadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.modal-close {
-    position: absolute;
-    top: 15px;
-    right: 20px;
-    background: var(--accent-green);
-    border: none;
-    color: white;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    cursor: pointer;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.modal-input {
-    width: 100%;
-    padding: 14px 20px;
-    border-radius: 24px;
-    border: 2px solid var(--accent-green);
-    background: transparent;
-    font-size: 16px;
-    color: var(--accent-green);
-    box-sizing: border-box;
-    margin-bottom: 15px;
-    outline: none;
-}
-
-.modal-input::placeholder {
-    color: var(--accent-green);
-    opacity: 0.5;
-}
-
-.modal-photo-area {
-    margin: 20px 0;
-}
-
-.modal-preview-area {
-    margin: 15px 0 20px 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.plant-preview {
-    width: 120px;
-    height: 120px;
-    object-fit: contain;
-    margin-bottom: 5px;
-}
-
-.modal-caption {
-    font-size: 12px;
-    color: var(--text-main);
-    opacity: 0.6;
-    display: block;
-    margin-bottom: 5px;
-}
-
-.modal-link {
-    color: var(--accent-green);
-    font-size: 18px;
-    font-weight: 600;
-    text-decoration: underline;
-    cursor: pointer;
-}
-
-.modal-btn {
-    width: 100%;
-    padding: 14px;
-    border-radius: 24px;
-    border: none;
-    background: rgba(16, 185, 129, 0.3); /* Полупрозрачный по умолчанию (Disabled) */
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 20px;
-    font-weight: 700;
-    cursor: not-allowed;
-    margin-top: 10px;
-    transition: all 0.3s ease;
-}
-
-/* Активная кнопка (как на картинках) */
-.modal-btn.active {
-    background: var(--accent-green);
-    color: #ffffff;
-    cursor: pointer;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-}
-
-/* Адаптив для мобильных */
-@media (max-width: 480px) {
-    .modal-content {
-        padding: 20px;
-        width: 95%;
-    }
-    .modal-input {
-        padding: 12px 16px;
-        font-size: 14px;
-    }
-}
-
-/* Контейнер для динамических растений */
-.plants-container {
-    display: contents;
-}
-
-/* Кнопка удаления растения */
-.delete-plant-btn {
-    position: absolute;
-    top: 15px;
-    right: 15px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    border: none;
-    background: rgba(255, 0, 0, 0.8);
-    color: white;
-    font-size: 22px;
-    font-weight: bold;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: all 0.3s ease;
-    z-index: 10;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-.plant-card:hover .delete-plant-btn {
-    opacity: 1;
-}
-
-.delete-plant-btn:hover {
-    background: rgba(255, 0, 0, 1);
-    transform: scale(1.1);
-    box-shadow: 0 4px 12px rgba(255, 0, 0, 0.4);
-}
-
-/* Стили для модального окна по умолчанию скрыто */
-.modal-overlay {
-    display: none; /* Переопределяем из базового CSS */
-}
-
-/* Кнопка редактирования (карандаш) */
-.edit-plant-btn {
-    position: absolute;
-    top: 15px;
-    left: 15px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    border: none;
-    background: rgba(33, 200, 95, 0.8);
-    color: white;
-    font-size: 16px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: all 0.3s ease;
-    z-index: 10;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-.plant-card:hover .edit-plant-btn {
-    opacity: 1;
-}
-
-.edit-plant-btn:hover {
-    background: var(--accent-green);
-    transform: scale(1.1);
-    box-shadow: 0 4px 12px rgba(33, 200, 95, 0.4);
-}
-
-/* Адаптив кнопки редактирования */
-@media (max-width: 768px) {
-    .edit-plant-btn {
-        opacity: 1;
-        top: 10px;
-        left: 10px;
-        width: 28px;
-        height: 28px;
-        font-size: 14px;
-    }
-}
-@media (max-width: 480px) {
-    .edit-plant-btn {
-        width: 26px;
-        height: 26px;
-        font-size: 12px;
-    }
-}
-
-/* Адаптив для кнопки удаления */
-@media (max-width: 768px) {
-    .delete-plant-btn {
-        opacity: 1;
-        top: 10px;
-        right: 10px;
-        width: 28px;
-        height: 28px;
-        font-size: 18px;
-    }
-}
+    sqlite3_finalize(stmt);
+  }
 
-@media (max-width: 480px) {
-    .delete-plant-btn {
-        width: 26px;
-        height: 26px;
-        font-size: 16px;
-    }
+  Serial.println("[SQLite] База данных успешно инициализирована");
+  return true;
 }
 
-/* Стили для параметров в модальном окне */
-.modal-params-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 20px;
-}
-
-.modal-step {
-    animation: modalFadeIn 0.3s ease;
-}
-
-@keyframes fallingLeaf {
-    0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 1; }
-    100% { transform: translateY(110vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg)); opacity: 0; }
-}
-
-@media (max-width: 768px) {
-/* Шапка */
-.site-header { 
-    padding: 12px 16px; 
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.logo-container { 
-    position: relative !important;
-    left: auto !important;
-    transform: none !important;
-    order: -1; 
-    width: 100%; 
-    justify-content: center; 
-    margin-bottom: 0;
-}
-
-.main-logo { 
-    height: 80px; 
-}
-
-.user-pill { 
-    width: auto;
-    padding: 6px 12px 6px 6px;
-    height: 38px;
-    order: 1;
-    margin-right: auto;
-    animation: none; /* Отключаем анимацию для экономии батареи */
-}
-
-.user-avatar {
-    width: 26px;
-    height: 26px;
-}
-
-.user-text {
-    font-size: 13px;
-}
-
-.theme-switcher { 
-    position: relative !important;
-    top: auto !important;
-    right: auto !important;
-    width: 42px;
-    height: 42px;
-    order: 2;
-    animation: none; /* Отключаем анимацию для экономии батареи */
-}
-
-.theme-icon-img {
-    width: 20px;
-    height: 20px;
-}
-
-/* Навигация */
-.navigation { 
-    order: 3;
-    margin: 8px 12px 20px 12px; 
-    flex-wrap: wrap; 
-    height: auto; 
-    gap: 6px; 
-    padding: 6px;
-    justify-content: center;
-}
-
-.nav-btn { 
-    padding: 8px 16px; 
-    font-size: 15px;
-    flex: 0 1 auto;
-}
-
-/* Карточки */
-.page-wrapper {
-    padding: 0 12px;
-}
-
-.cards-area { 
-    gap: 20px; 
-    padding: 10px 0 40px 0;
-}
-
-.plant-card { 
-    width: 100%;
-    max-width: 340px;
-    height: auto; 
-    min-height: 360px;
-    padding: 20px;
-}
-
-.plant-img { 
-    width: 200px; 
-    height: 200px; 
-}
-
-.plant-label {
-    font-size: 17px;
-    padding: 6px 24px;
-}
-
-.plus-icon {
-    width: 70px;
-    height: 70px;
-}
-
-/* Подвал */
-.footer-grid { 
-    flex-direction: column; 
-    text-align: center; 
-    gap: 30px; 
-    padding: 30px 20px 20px 20px; 
-}
-
-.footer-col {
-    text-align: center !important;
-}
-
-.footer-col h3 {
-    font-size: 19px;
-    margin-bottom: 10px;
-}
-
-.footer-col p {
-    font-size: 13px;
-    line-height: 1.6;
-}
-
-.copyright-bar {
-    padding: 12px;
-    font-size: 12px;
-}
-
-/* Листья */
-.falling-leaf {
-    display: none; /* Отключаем падающие листья на мобильных для производительности */
-}
-}
-
-/* Очень маленькие экраны */
-@media (max-width: 480px) {
-.site-header {
-    padding: 10px 12px;
-}
-
-.main-logo {
-    height: 80px;
-}
-
-.user-pill {
-    padding: 5px 10px 5px 5px;
-    height: 34px;
-    gap: 8px;
-}
-
-.user-avatar {
-    width: 24px;
-    height: 24px;
-}
-
-.user-text {
-    font-size: 12px;
-}
-
-.theme-switcher {
-    width: 38px;
-    height: 38px;
-}
-
-.navigation {
-    margin: 0px 8px 16px 8px;
-    padding: 5px;
-    gap: 5px;
-}
-
-.nav-btn {
-    padding: 7px 12px;
-    font-size: 14px;
-    border-radius: 24px;
-}
-
-.plant-card {
-    padding: 16px;
-    min-height: 320px;
-    border-radius: 24px;
-}
-
-.plant-img {
-    width: 160px;
-    height: 160px;
-    margin-bottom: 12px;
-}
-
-.plant-label {
-    font-size: 16px;
-    padding: 6px 20px;
-    border-radius: 20px;
-}
-
-.plus-icon {
-    width: 60px;
-    height: 60px;
-}
-
-.footer-grid {
-    padding: 25px 16px 16px 16px;
-    gap: 24px;
-}
-
-.footer-col h3 {
-    font-size: 17px;
-}
-
-.footer-col p {
-    font-size: 12px;
-}
-}
+const char PAGE_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Модуль полива</title>
-    <link rel="stylesheet" href="myplant-style.css">
     <style>
-        /* Дополнительные стили для страницы полива */
-        .irrigation-container {
-            display: flex;
-            gap: 20px;
-            padding: 20px 40px;
-            min-height: calc(100vh - 300px);
+        :root {
+            --page-bg: #0F182B;
+            --text-main: #ffffff;
+            --accent-green: #21C85F;
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --glow-color: rgba(33, 200, 95, 0.6);
+            --glow-soft: rgba(33, 200, 95, 0.3);
+            --user-pill-bg: #1a2d45;
+            --user-pill-text: #a0aab5;
+            --nav-bg: #21C85F;
+            --nav-btn-bg: rgba(255, 255, 255, 0.25);
+            --label-bg: rgba(33, 200, 95, 0.15);
+            --label-text: #21C85F;
+            --footer-bg: #21C85F;
+            --switcher-bg: #1a2d45;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
         }
-        
-        .valves-sidebar {
-            width: 300px;
+        .theme-light {
+            --page-bg: #E8F0F2;
+            --text-main: #ffffff;
+            --accent-green: #10B981;
+            --card-bg: #ffffff;
+            --glow-color: rgba(16, 185, 129, 0.4);
+            --glow-soft: rgba(16, 185, 129, 0.2);
+            --user-pill-bg: #ffffff;
+            --user-pill-text: #8899aa;
+            --nav-bg: #10B981;
+            --nav-btn-bg: rgba(255, 255, 255, 0.3);
+            --label-bg: rgba(16, 185, 129, 0.15);
+            --label-text: #10B981;
+            --footer-bg: #10B981;
+            --switcher-bg: #ffffff;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--page-bg);
+            color: var(--text-main);
+            transition: background-color 0.4s ease;
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .mode-toggle { display: none !important; position: absolute; opacity: 0; pointer-events: none; }
+        .top-sticky-wrapper { position: sticky; top: 0; z-index: 1000; width: 100%; background: transparent; pointer-events: none; }
+        .top-sticky-wrapper > * { pointer-events: auto; }
+        .site-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px; background: transparent; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); pointer-events: auto; position: relative; z-index: 2; }
+        .user-pill { display: flex; align-items: center; text-decoration: none; background: var(--user-pill-bg); border-radius: 50px; padding: 8px 16px 8px 8px; gap: 10px; width: 145px; height: 44px; box-shadow: 0 0 8px var(--glow-soft); animation: userPulse 3s infinite alternate; flex-shrink: 0; }
+        @keyframes userPulse { 0% { box-shadow: 0 0 6px var(--glow-soft); } 100% { box-shadow: 0 0 16px var(--glow-color); } }
+        .user-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; display: none; }
+        body.theme-dark .avatar-dark { display: block; }
+        body.theme-light .avatar-light { display: block; }
+        .user-text { font-size: 14px; font-weight: 400; color: var(--user-pill-text); letter-spacing: 0.5px; }
+        .logo-container { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; }
+        .main-logo { height: 100px; display: none; transition: height 0.3s ease; }
+        body.theme-dark .logo-dark { display: block; }
+        body.theme-light .logo-light { display: block; }
+        .theme-switcher { width: 48px; height: 48px; background: var(--switcher-bg); border-radius: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 0 10px var(--glow-soft); animation: switcherPulse 3s infinite alternate; flex-shrink: 0; }
+        @keyframes switcherPulse { 0% { box-shadow: 0 0 8px var(--glow-soft); } 100% { box-shadow: 0 0 18px var(--glow-color); } }
+        .theme-icon-img { width: 24px; height: 24px; filter: invert(1); }
+        .theme-light .theme-icon-img { filter: invert(0); }
+        .navigation { display: flex; justify-content: center; align-items: center; gap: 8px; background: var(--nav-bg); border-radius: 40px; padding: 6px; margin: 0px 30px 35px 30px; height: 52px; pointer-events: auto; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); }
+        .nav-btn { color: #ffffff; text-decoration: none; font-size: 18px; font-weight: 600; padding: 8px 22px; border-radius: 30px; transition: all 0.3s ease; white-space: nowrap; position: relative; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .nav-btn:hover, .nav-btn.active { background: rgba(255, 255, 255, 0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.25); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .page-wrapper { flex: 1; padding: 0 20px; }
+        .cards-area { display: flex; justify-content: center; align-items: center; gap: 40px; padding: 20px 0 60px 0; flex-wrap: wrap; }
+        .plant-card { width: 350px; height: 420px; background: var(--card-bg); border-radius: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; transition: transform 0.3s; box-shadow: var(--card-internal-shadow); }
+        .plant-card:hover { transform: translateY(-5px); }
+        .glowing { animation: glowPulse 3s infinite alternate; }
+        @keyframes glowPulse { 0% { box-shadow: 0 0 12px var(--glow-color), var(--card-internal-shadow); } 100% { box-shadow: 0 0 28px var(--glow-color), var(--card-internal-shadow); } }
+        .plant-img { width: 300px; height: 300px; object-fit: contain; margin-bottom: 16px; }
+        .plant-label { background: var(--label-bg); color: var(--label-text); font-size: 19px; font-weight: 300; padding: 8px 32px; border-radius: 24px; text-decoration: none; display: inline-block; }
+        .add-card { cursor: pointer; }
+        .plus-icon { display: none; width: 90px; height: 90px; object-fit: contain; }
+        body.theme-dark .icon-dark { display: block; }
+        body.theme-light .icon-light { display: block; }
+        .site-footer { background: var(--footer-bg); color: var(--footer-text); padding: 36px 40px 0; transition: background var(--transition-speed) ease; }
+        .footer-columns { display: grid; grid-template-columns: 1.3fr 1fr 0.8fr; gap: 30px; max-width: 900px; margin: 0 auto; padding-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.2); }
+        .footer-column-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: var(--footer-column-title); }
+        .footer-column-text { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
+        .footer-column-list { list-style: none; padding: 0; }
+        .footer-column-list li { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
+        .footer-copyright { text-align: center; padding: 16px 0 12px; font-size: 14px; color: var(--footer-copy); max-width: 900px; margin: 0 auto; }
+        .falling-leaf { position: fixed; pointer-events: none; z-index: 9999; animation: fallingLeaf var(--fall-duration, 3s) linear forwards; }
+        .add-link { display: flex; align-items: center; justify-content: center; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(15, 24, 43, 0.6); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 2000; display: flex; justify-content: center; align-items: center; }
+        .modal-content { background: var(--card-bg); padding: 30px; border-radius: 32px; width: 90%; max-width: 450px; position: relative; box-shadow: 0 0 30px var(--glow-soft); animation: modalFadeIn 0.3s ease; text-align: center; color: var(--text-main); }
+        .modal-content h3, .modal-content .modal-title, .modal-content .modal-title-sub { color: var(--accent-green); font-size: 18px; font-weight: 600; margin-bottom: 15px; line-height: 1.4; }
+        .modal-title-sub { margin-top: 20px; font-size: 16px; }
+        @keyframes modalFadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .modal-close { position: absolute; top: 15px; right: 20px; background: var(--accent-green); border: none; color: white; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; }
+        .modal-input { width: 100%; padding: 14px 20px; border-radius: 24px; border: 2px solid var(--accent-green); background: transparent; font-size: 16px; color: var(--accent-green); box-sizing: border-box; margin-bottom: 15px; outline: none; }
+        .modal-input::placeholder { color: var(--accent-green); opacity: 0.5; }
+        .modal-photo-area { margin: 20px 0; }
+        .modal-preview-area { margin: 15px 0 20px 0; display: flex; flex-direction: column; align-items: center; }
+        .plant-preview { width: 120px; height: 120px; object-fit: contain; margin-bottom: 5px; }
+        .modal-caption { font-size: 12px; color: var(--text-main); opacity: 0.6; display: block; margin-bottom: 5px; }
+        .modal-link { color: var(--accent-green); font-size: 18px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+        .modal-btn { width: 100%; padding: 14px; border-radius: 24px; border: none; background: rgba(16, 185, 129, 0.3); color: rgba(255, 255, 255, 0.5); font-size: 20px; font-weight: 700; cursor: not-allowed; margin-top: 10px; transition: all 0.3s ease; }
+        .modal-btn.active { background: var(--accent-green); color: #ffffff; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        @media (max-width: 480px) { .modal-content { padding: 20px; width: 95%; } .modal-input { padding: 12px 16px; font-size: 14px; } }
+        .plants-container { display: contents; }
+        .delete-plant-btn { position: absolute; top: 15px; right: 15px; width: 32px; height: 32px; border-radius: 50%; border: none; background: rgba(255, 0, 0, 0.8); color: white; font-size: 22px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.3s ease; z-index: 10; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+        .plant-card:hover .delete-plant-btn { opacity: 1; }
+        .delete-plant-btn:hover { background: rgba(255, 0, 0, 1); transform: scale(1.1); box-shadow: 0 4px 12px rgba(255, 0, 0, 0.4); }
+        .modal-overlay { display: none; }
+        .edit-plant-btn { position: absolute; top: 15px; left: 15px; width: 32px; height: 32px; border-radius: 50%; border: none; background: rgba(33, 200, 95, 0.8); color: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.3s ease; z-index: 10; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+        .plant-card:hover .edit-plant-btn { opacity: 1; }
+        .edit-plant-btn:hover { background: var(--accent-green); transform: scale(1.1); box-shadow: 0 4px 12px rgba(33, 200, 95, 0.4); }
+        @media (max-width: 768px) { .edit-plant-btn { opacity: 1; top: 10px; left: 10px; width: 28px; height: 28px; font-size: 14px; } }
+        @media (max-width: 480px) { .edit-plant-btn { width: 26px; height: 26px; font-size: 12px; } }
+        @media (max-width: 768px) { .delete-plant-btn { opacity: 1; top: 10px; right: 10px; width: 28px; height: 28px; font-size: 18px; } }
+        @media (max-width: 480px) { .delete-plant-btn { width: 26px; height: 26px; font-size: 16px; } }
+        .modal-params-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+        .modal-step { animation: modalFadeIn 0.3s ease; }
+        @keyframes fallingLeaf { 0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 1; } 100% { transform: translateY(110vh) translateX(var(--sway, 30px)) rotate(var(--rotation, 20deg)); opacity: 0; } }
+        @media (max-width: 768px) {
+            .site-header { padding: 12px 16px; flex-wrap: wrap; gap: 12px; }
+            .logo-container { position: relative !important; left: auto !important; transform: none !important; order: -1; width: 100%; justify-content: center; margin-bottom: 0; }
+            .main-logo { height: 80px; }
+            .user-pill { width: auto; padding: 6px 12px 6px 6px; height: 38px; order: 1; margin-right: auto; animation: none; }
+            .user-avatar { width: 26px; height: 26px; }
+            .user-text { font-size: 13px; }
+            .theme-switcher { position: relative !important; top: auto !important; right: auto !important; width: 42px; height: 42px; order: 2; animation: none; }
+            .theme-icon-img { width: 20px; height: 20px; }
+            .navigation { order: 3; margin: 8px 12px 20px 12px; flex-wrap: wrap; height: auto; gap: 6px; padding: 6px; justify-content: center; }
+            .nav-btn { padding: 8px 16px; font-size: 15px; flex: 0 1 auto; }
+            .page-wrapper { padding: 0 12px; }
+            .cards-area { gap: 20px; padding: 10px 0 40px 0; }
+            .plant-card { width: 100%; max-width: 340px; height: auto; min-height: 360px; padding: 20px; }
+            .plant-img { width: 200px; height: 200px; }
+            .plant-label { font-size: 17px; padding: 6px 24px; }
+            .plus-icon { width: 70px; height: 70px; }
+            .footer-grid { flex-direction: column; text-align: center; gap: 30px; padding: 30px 20px 20px 20px; }
+            .footer-col { text-align: center !important; }
+            .footer-col h3 { font-size: 19px; margin-bottom: 10px; }
+            .footer-col p { font-size: 13px; line-height: 1.6; }
+            .copyright-bar { padding: 12px; font-size: 12px; }
+            .falling-leaf { display: none; }
+        }
+        @media (max-width: 480px) {
+            .site-header { padding: 10px 12px; }
+            .main-logo { height: 80px; }
+            .user-pill { padding: 5px 10px 5px 5px; height: 34px; gap: 8px; }
+            .user-avatar { width: 24px; height: 24px; }
+            .user-text { font-size: 12px; }
+            .theme-switcher { width: 38px; height: 38px; }
+            .navigation { margin: 0px 8px 16px 8px; padding: 5px; gap: 5px; }
+            .nav-btn { padding: 7px 12px; font-size: 14px; border-radius: 24px; }
+            .plant-card { padding: 16px; min-height: 320px; border-radius: 24px; }
+            .plant-img { width: 160px; height: 160px; margin-bottom: 12px; }
+            .plant-label { font-size: 16px; padding: 6px 20px; border-radius: 20px; }
+            .plus-icon { width: 60px; height: 60px; }
+            .footer-grid { padding: 25px 16px 16px 16px; gap: 24px; }
+            .footer-col h3 { font-size: 17px; }
+            .footer-col p { font-size: 12px; }
+        }
+        .irrigation-container { display: flex; gap: 20px; padding: 20px 40px; min-height: calc(100vh - 300px); }
+        .valves-sidebar { width: 300px; flex-shrink: 0; }
+        .valve-item { background: var(--card-bg); border-radius: 16px; padding: 16px; margin-bottom: 12px; box-shadow: var(--card-internal-shadow); cursor: pointer; transition: all 0.3s ease; color: #1e293b; }
+        .valve-item:hover { transform: translateX(5px); box-shadow: 0 0 20px var(--glow-soft); }
+        .valve-item.active { border: 2px solid var(--accent-green); background: rgba(33, 200, 95, 0.05); }
+        .valve-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .valve-title { font-size: 16px; font-weight: 600; color: var(--accent-green); }
+        .valve-toggle { width: 40px; height: 22px; background: rgba(0,0,0,0.15); border-radius: 11px; position: relative; cursor: pointer; transition: background 0.3s; }
+        .valve-toggle.on { background: var(--accent-green); }
+        .valve-toggle::after { content: ''; position: absolute; width: 18px; height: 18px; background: white; border-radius: 50%; top: 2px; left: 2px; transition: transform 0.3s; }
+        .valve-toggle.on::after { transform: translateX(18px); }
+        .valve-info { font-size: 13px; color: #374151; margin: 4px 0; }
+        .valve-status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 8px; background: rgba(33, 200, 95, 0.15); border-radius: 8px; margin-top: 6px; color: var(--accent-green); font-weight: 600; }
+        .valve-status.inactive { background: rgba(100, 116, 139, 0.15); color: #64748b; }
+        .main-content { flex: 1; background: var(--card-bg); border-radius: 24px; padding: 30px; box-shadow: var(--card-internal-shadow); max-height: calc(100vh - 220px); overflow-y: auto; color: #1e293b; }
+        .content-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .page-title { font-size: 28px; font-weight: 700; color: var(--accent-green) !important; }
+        .btn-add-task { background: var(--accent-green); color: white; border: none; padding: 12px 24px; border-radius: 20px; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s; }
+        .btn-add-task:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4); }
+        .tabs { display: flex; gap: 10px; margin-bottom: 25px; border-bottom: 2px solid rgba(0,0,0,0.05); padding-bottom: 10px; }
+        .tab { padding: 10px 20px; border: none; border-radius: 12px; font-size: 15px; cursor: pointer; transition: all 0.3s; background: rgba(0,0,0,0.05); color: #1e293b; }
+        .tab.active { background: var(--accent-green); color: white !important; }
+        .form-group { margin-bottom: 20px; }
+        .form-label { display: block; font-size: 14px; color: #374151 !important; margin-bottom: 8px; font-weight: 600; }
+        .form-hint { font-size: 12px; color: #64748b !important; margin-top: 4px; font-style: italic; opacity: 0.9; }
+        .form-input, .form-select { width: 100%; padding: 12px 16px; background: rgba(0,0,0,0.03); border: 2px solid rgba(0,0,0,0.1); border-radius: 12px; color: #1e293b !important; font-size: 15px; font-weight: 500; outline: none; transition: border-color 0.3s; }
+        .form-input:focus, .form-select:focus { border-color: var(--accent-green); }
+        .form-input::placeholder, .form-select::placeholder { color: #64748b; }
+        .form-input:disabled, .form-select:disabled { background: rgba(0,0,0,0.01); border-color: rgba(0,0,0,0.05); color: #94a3b8 !important; cursor: not-allowed; }
+        .form-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+        .form-row-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .operations-list { margin: 25px 0; }
+        .operation-item { background: rgba(0,0,0,0.03); border-radius: 12px; padding: 15px; margin-bottom: 12px; display: flex; align-items: center; gap: 15px; }
+        .operation-type { padding: 8px 16px; border-radius: 10px; font-weight: 600; font-size: 13px; min-width: 120px; text-align: center; }
+        .operation-type.water { background: rgba(33, 200, 95, 0.2); color: var(--accent-green); }
+        .operation-type.pause { background: rgba(255, 193, 7, 0.2); color: #b45309; }
+        .operation-type.sensor { background: rgba(0, 188, 212, 0.2); color: #0e7490; }
+        .operation-inputs { flex: 1; display: flex; gap: 10px; }
+        .operation-input { flex: 1; padding: 8px 12px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; color: #1e293b !important; font-size: 14px; font-weight: 500; }
+        .btn-operation { padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.3s; }
+        .btn-edit { background: var(--accent-green); color: white; }
+        .btn-delete { background: rgba(244, 67, 54, 0.85); color: white; }
+        .btn-operation:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+        .sidebar-right { width: 340px; flex-shrink: 0; }
+        .moisture-panel { background: var(--card-bg); border-radius: 24px; padding: 25px; box-shadow: var(--card-internal-shadow); color: #1e293b; }
+        .panel-title { font-size: 20px; font-weight: 600; color: var(--accent-green) !important; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid rgba(0,0,0,0.05); }
+        .toggle-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .toggle-label { font-size: 14px; color: #374151 !important; }
+        .global-limits { margin-top: 20px; padding-top: 20px; border-top: 2px solid rgba(0,0,0,0.05); }
+        .action-buttons { display: flex; gap: 12px; margin-top: 25px; }
+        .btn-action { flex: 1; padding: 14px; border: none; border-radius: 16px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s; background: rgba(0,0,0,0.05); color: #1e293b; }
+        .btn-action.btn-save { background: var(--accent-green); color: white; }
+        .btn-action.btn-apply { background: rgba(33, 200, 95, 0.15); color: var(--accent-green); }
+        .btn-action.btn-history { background: rgba(0,0,0,0.05); color: #1e293b; }
+        .btn-action:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .valve-number { display: inline-block; width: 28px; height: 28px; background: var(--accent-green); color: white; border-radius: 8px; text-align: center; line-height: 28px; font-weight: 700; margin-right: 10px; }
+        .section-title { font-size: 18px; font-weight: 600; color: var(--accent-green) !important; margin: 25px 0 15px 0; padding-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        #journalPanel { display: none; }
+        .journal-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
+        .journal-table th, .journal-table td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(0,0,0,0.1); }
+        .journal-table th { color: var(--accent-green); font-weight: 600; }
+        .journal-table tr:hover { background: rgba(33, 200, 95, 0.05); }
+        .status-badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+        .status-success { background: rgba(33, 200, 95, 0.2); color: var(--accent-green); }
+        .status-fail { background: rgba(244, 67, 54, 0.2); color: #dc2626; }
+        .status-pending { background: rgba(255, 193, 7, 0.2); color: #b45309; }
+        .empty-journal { text-align: center; padding: 40px; color: #64748b; font-style: italic; }
+        .edit-valve-btn { position: absolute; bottom: 12px; right: 12px; width: 32px; height: 32px; border-radius: 50%; border: none; background: rgba(33, 200, 95, 0.85); color: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.25s ease; z-index: 15; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); padding: 0; line-height: 1; }
+        .edit-valve-btn:hover { background: var(--accent-green, #21C85F); transform: scale(1.1); }
+        .valve-card:hover .edit-valve-btn, [id*="valve"]:hover .edit-valve-btn, .card:hover .edit-valve-btn, .module-card:hover .edit-valve-btn, div[class*="valve"]:hover .edit-valve-btn { opacity: 1; }
+        .valve-editor-mini { position: fixed; background: var(--card-bg, #ffffff); padding: 24px 28px; border-radius: 32px; width: 90%; max-width: 320px; box-shadow: 0 0 30px var(--glow-soft, rgba(33, 200, 95, 0.3)); animation: modalFadeIn 0.3s ease; z-index: 2147483640; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--text-main, #000); }
+        .valve-editor-title { color: var(--accent-green, #21C85F); font-size: 18px; font-weight: 600; margin-bottom: 18px; text-align: center; }
+        .valve-editor-field { margin-bottom: 14px; }
+        .valve-editor-field label { display: block; font-size: 13px; color: var(--text-main, #333); opacity: 0.85; margin-bottom: 6px; }
+        .valve-editor-field input { width: 100%; padding: 12px 16px; border-radius: 24px; border: 2px solid var(--accent-green, #21C85F); background: transparent; font-size: 14px; color: var(--accent-green, #21C85F); box-sizing: border-box; outline: none; }
+        .valve-editor-actions { display: flex; gap: 10px; margin-top: 20px; }
+        .valve-editor-actions button { flex: 1; padding: 12px; border-radius: 24px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; }
+        .valve-save-btn { background: var(--accent-green, #21C85F); color: #ffffff; }
+        .valve-save-btn:hover { box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4); transform: translateY(-1px); }
+        .valve-cancel-btn { background: rgba(255, 255, 255, 0.15); color: var(--text-main, #333); border: 1px solid rgba(255, 255, 255, 0.2); }
+        .valve-cancel-btn:hover { background: rgba(255, 255, 255, 0.25); }
+        .valve-editor-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(15, 24, 43, 0.6); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 2147483639; }
+        .btn-add-task { background: var(--accent-green, #21C85F); color: white !important; border: none; padding: 10px 20px; border-radius: 20px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: inline-flex; align-items: center; gap: 6px; }
+        .btn-add-task:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4); }
+        .btn-add-task:active { transform: translateY(0); }
+
+        .esp-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 12px;
+            vertical-align: middle;
+        }
+        .esp-status.online  { background: rgba(33,200,95,0.15); color: var(--accent-green); }
+        .esp-status.offline { background: rgba(244,67,54,0.15); color: #dc2626; }
+        .esp-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            display: inline-block;
+        }
+        .esp-status.online  .esp-dot { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
+        .esp-status.offline .esp-dot { background: #dc2626; }
+
+        .journal-filter-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: nowrap;
+            margin-bottom: 15px;
+            padding: 10px 14px;
+            background: rgba(33, 200, 95, 0.04);
+            border: 1px solid rgba(33, 200, 95, 0.15);
+            border-radius: 14px;
+        }
+        .journal-filter-bar label {
+            font-size: 14px;
+            color: #374151;
+            font-weight: 600;
             flex-shrink: 0;
         }
+        .journal-filter-bar .form-select {
+            width: auto;
+            min-width: 150px;
+            padding: 7px 12px;
+            margin: 0;
+            flex-shrink: 0;
+        }
+        .journal-total-box {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            background: rgba(33, 200, 95, 0.12);
+            border-radius: 12px;
+            flex-shrink: 0;
+        }
+        .journal-total-box .label {
+            font-size: 13px;
+            color: #374151;
+            font-weight: 500;
+        }
+        .journal-total-box .value {
+            font-weight: 700;
+            color: var(--accent-green);
+            font-size: 15px;
+            white-space: nowrap;
+        }
+        .journal-count-box {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 10px;
+            background: rgba(0, 0, 0, 0.04);
+            border-radius: 10px;
+            font-size: 13px;
+            color: #374151;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+        .journal-count-box b { color: var(--accent-green); }
+
+        .btn-clear-journal {
+            background: rgba(244, 67, 54, 0.12);
+            color: #dc2626;
+            border: 1px solid rgba(244, 67, 54, 0.3);
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            padding: 0;
+            line-height: 1;
+        }
+        .btn-clear-journal:hover {
+            background: rgba(244, 67, 54, 0.22);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(244, 67, 54, 0.25);
+        }
+        .btn-clear-journal:active { transform: translateY(0); }
+        .btn-clear-journal:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
         
-        .valve-item {
-            background: var(--card-bg);
-            border-radius: 16px;
+        .ntp-clock {
+            text-align: center;
+            font-size: 14px;
+            color: var(--user-pill-text);
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .schedule-card {
+            background: linear-gradient(135deg, rgba(33, 200, 95, 0.1) 0%, rgba(33, 200, 95, 0.05) 100%);
+            border: 1px solid rgba(33, 200, 95, 0.25);
+            border-radius: 14px;
             padding: 16px;
             margin-bottom: 12px;
-            box-shadow: var(--card-internal-shadow);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            color: #1e293b; /* Темный текст для читаемости */
+            position: relative;
+            transition: all 0.3s;
         }
-        
-        .valve-item:hover {
-            transform: translateX(5px);
-            box-shadow: 0 0 20px var(--glow-soft);
+        .schedule-card:hover {
+            transform: translateX(3px);
+            box-shadow: 0 4px 12px rgba(33, 200, 95, 0.15);
         }
-        
-        .valve-item.active {
-            border: 2px solid var(--accent-green);
-            background: rgba(33, 200, 95, 0.05);
-        }
-        
-        .valve-header {
+        .schedule-card-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 10px;
         }
-        
-        .valve-title {
-            font-size: 16px;
+        .schedule-card-title {
+            font-size: 15px;
             font-weight: 600;
             color: var(--accent-green);
-        }
-        
-        .valve-toggle {
-            width: 40px;
-            height: 22px;
-            background: rgba(0,0,0,0.15);
-            border-radius: 11px;
-            position: relative;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        
-        .valve-toggle.on {
-            background: var(--accent-green);
-        }
-        
-        .valve-toggle::after {
-            content: '';
-            position: absolute;
-            width: 18px;
-            height: 18px;
-            background: white;
-            border-radius: 50%;
-            top: 2px;
-            left: 2px;
-            transition: transform 0.3s;
-        }
-        
-        .valve-toggle.on::after {
-            transform: translateX(18px);
-        }
-        
-        .valve-info {
-            font-size: 13px;
-            color: #374151;
-            margin: 4px 0;
-        }
-        
-        .valve-status {
-            display: inline-flex;
+            display: flex;
             align-items: center;
-            gap: 5px;
-            font-size: 12px;
-            padding: 3px 8px;
-            background: rgba(33, 200, 95, 0.15);
-            border-radius: 8px;
-            margin-top: 6px;
+            gap: 8px;
+        }
+        .schedule-type-badge {
+            background: rgba(33, 200, 95, 0.2);
             color: var(--accent-green);
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 11px;
             font-weight: 600;
         }
-        
-        .valve-status.inactive {
-            background: rgba(100, 116, 139, 0.15);
-            color: #64748b;
-        }
-        
-        .main-content {
-            flex: 1;
-            background: var(--card-bg);
-            border-radius: 24px;
-            padding: 30px;
-            box-shadow: var(--card-internal-shadow);
-            max-height: calc(100vh - 220px);
-            overflow-y: auto;
-            color: #1e293b;
-        }
-        
-        .content-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 30px;
-        }
-        
-        .page-title {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--accent-green) !important;
-        }
-        
-        .btn-add-task {
-            background: var(--accent-green);
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 20px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .btn-add-task:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4);
-        }
-        
-        .tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 25px;
-            border-bottom: 2px solid rgba(0,0,0,0.05);
-            padding-bottom: 10px;
-        }
-        
-        .tab {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 12px;
-            font-size: 15px;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: rgba(0,0,0,0.05);
-            color: #1e293b;
-        }
-        
-        .tab.active {
-            background: var(--accent-green);
-            color: white !important;
-        }
-        
-        .form-group {
-            margin-bottom: 20px;
-        }
-        
-        .form-label {
-            display: block;
-            font-size: 14px;
-            color: #374151 !important;
-            margin-bottom: 8px;
-            font-weight: 600;
-        }
-        
-        .form-hint {
-            font-size: 12px;
-            color: #64748b !important;
-            margin-top: 4px;
-            font-style: italic;
-            opacity: 0.9;
-        }
-        
-        .form-input, .form-select {
-            width: 100%;
-            padding: 12px 16px;
-            background: rgba(0,0,0,0.03);
-            border: 2px solid rgba(0,0,0,0.1);
-            border-radius: 12px;
-            color: #1e293b !important;
-            font-size: 15px;
-            font-weight: 500;
-            outline: none;
-            transition: border-color 0.3s;
-        }
-        
-        .form-input:focus, .form-select:focus {
-            border-color: var(--accent-green);
-        }
-        
-        .form-input::placeholder, .form-select::placeholder {
-            color: #64748b;
-        }
-        
-        .form-input:disabled, .form-select:disabled {
-            background: rgba(0,0,0,0.01);
-            border-color: rgba(0,0,0,0.05);
-            color: #94a3b8 !important;
-            cursor: not-allowed;
-        }
-        
-        .form-row {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-        }
-        
-        .form-row-2 {
+        .schedule-card-body {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-        }
-        
-        .operations-list {
-            margin: 25px 0;
-        }
-        
-        .operation-item {
-            background: rgba(0,0,0,0.03);
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .operation-type {
-            padding: 8px 16px;
-            border-radius: 10px;
-            font-weight: 600;
+            gap: 8px;
             font-size: 13px;
-            min-width: 120px;
-            text-align: center;
+            color: #374151;
         }
-        
-        .operation-type.water {
-            background: rgba(33, 200, 95, 0.2);
-            color: var(--accent-green);
-        }
-        
-        .operation-type.pause {
-            background: rgba(255, 193, 7, 0.2);
-            color: #b45309;
-        }
-        
-        .operation-type.sensor {
-            background: rgba(0, 188, 212, 0.2);
-            color: #0e7490;
-        }
-        
-        .operation-inputs {
-            flex: 1;
-            display: flex;
-            gap: 10px;
-        }
-        
-        .operation-input {
-            flex: 1;
-            padding: 8px 12px;
-            background: rgba(0,0,0,0.03);
-            border: 1px solid rgba(0,0,0,0.1);
-            border-radius: 8px;
-            color: #1e293b !important;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .btn-operation {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-        
-        .btn-edit {
-            background: var(--accent-green);
-            color: white;
-        }
-        
-        .btn-delete {
-            background: rgba(244, 67, 54, 0.85);
-            color: white;
-        }
-        
-        .btn-operation:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        }
-        
-        .sidebar-right {
-            width: 340px;
-            flex-shrink: 0;
-        }
-        
-        .moisture-panel {
-            background: var(--card-bg);
-            border-radius: 24px;
-            padding: 25px;
-            box-shadow: var(--card-internal-shadow);
-            color: #1e293b;
-        }
-        
-        .panel-title {
-            font-size: 20px;
-            font-weight: 600;
-            color: var(--accent-green) !important;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid rgba(0,0,0,0.05);
-        }
-        
-        .toggle-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        
-        .toggle-label {
-            font-size: 14px;
-            color: #374151 !important;
-        }
-        
-        .global-limits {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid rgba(0,0,0,0.05);
-        }
-        
-        .action-buttons {
-            display: flex;
-            gap: 12px;
-            margin-top: 25px;
-        }
-        
-        .btn-action {
-            flex: 1;
-            padding: 14px;
-            border: none;
-            border-radius: 16px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: rgba(0,0,0,0.05);
-            color: #1e293b;
-        }
-        
-        .btn-action.btn-save {
-            background: var(--accent-green);
-            color: white;
-        }
-        
-        .btn-action.btn-apply {
-            background: rgba(33, 200, 95, 0.15);
-            color: var(--accent-green);
-        }
-        
-        .btn-action.btn-history {
-            background: rgba(0,0,0,0.05);
-            color: #1e293b;
-        }
-        
-        .btn-action:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-        
-        .valve-number {
-            display: inline-block;
+        .schedule-card-body b { color: var(--accent-green); }
+        .schedule-delete-btn {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(244, 67, 54, 0.15);
+            color: #dc2626;
+            border: 1px solid rgba(244, 67, 54, 0.3);
             width: 28px;
             height: 28px;
-            background: var(--accent-green);
-            color: white;
-            border-radius: 8px;
-            text-align: center;
-            line-height: 28px;
-            font-weight: 700;
-            margin-right: 10px;
-        }
-        
-        .section-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: var(--accent-green) !important;
-            margin: 25px 0 15px 0;
-            padding-bottom: 8px;
-            border-bottom: 1px solid rgba(0,0,0,0.05);
-        }
-
-        /* Стили для журнала */
-        #journalPanel {
-            display: none;
-        }
-        
-        .journal-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-            font-size: 14px;
-        }
-        
-        .journal-table th, .journal-table td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid rgba(0,0,0,0.1);
-        }
-        
-        .journal-table th {
-            color: var(--accent-green);
-            font-weight: 600;
-        }
-        
-        .journal-table tr:hover {
-            background: rgba(33, 200, 95, 0.05);
-        }
-        
-        .status-badge {
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-        
-        .status-success {
-            background: rgba(33, 200, 95, 0.2);
-            color: var(--accent-green);
-        }
-        
-        .status-fail {
-            background: rgba(244, 67, 54, 0.2);
-            color: #dc2626;
-        }
-        
-        .status-pending {
-            background: rgba(255, 193, 7, 0.2);
-            color: #b45309;
-        }
-        
-        .empty-journal {
-            text-align: center;
-            padding: 40px;
-            color: #64748b;
-            font-style: italic;
-        }
-
-        .edit-valve-btn {
-            position: absolute;
-            bottom: 12px;
-            right: 12px;
-            width: 32px;
-            height: 32px;
             border-radius: 50%;
-            border: none;
-            background: rgba(33, 200, 95, 0.85);
-            color: white;
-            font-size: 16px;
             cursor: pointer;
+            font-size: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
-            opacity: 0;
-            transition: all 0.25s ease;
-            z-index: 15;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-            padding: 0;
-            line-height: 1;
+            transition: all 0.3s;
         }
-        .edit-valve-btn:hover {
-            background: var(--accent-green, #21C85F);
+        .schedule-delete-btn:hover {
+            background: rgba(244, 67, 54, 0.3);
             transform: scale(1.1);
         }
-        /* Показываем при наведении на карточку */
-        .valve-card:hover .edit-valve-btn,
-        [id*="valve"]:hover .edit-valve-btn,
-        .card:hover .edit-valve-btn,
-        .module-card:hover .edit-valve-btn,
-        div[class*="valve"]:hover .edit-valve-btn {
-            opacity: 1;
-        }
-
-        /* Мини-окошко редактирования */
-        .valve-editor-mini {
-            position: fixed;
-            background: var(--card-bg, #ffffff);
-            padding: 24px 28px;
-            border-radius: 32px;
-            width: 90%;
-            max-width: 320px;
-            box-shadow: 0 0 30px var(--glow-soft, rgba(33, 200, 95, 0.3));
-            animation: modalFadeIn 0.3s ease;
-            z-index: 2147483640;
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            color: var(--text-main, #000);
-        }
-        @keyframes modalFadeIn {
-            from { opacity: 0; transform: translateY(16px) scale(0.98); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        .valve-editor-title {
-            color: var(--accent-green, #21C85F);
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 18px;
-            text-align: center;
-        }
-        .valve-editor-field {
-            margin-bottom: 14px;
-        }
-        .valve-editor-field label {
-            display: block;
-            font-size: 13px;
-            color: var(--text-main, #333);
-            opacity: 0.85;
-            margin-bottom: 6px;
-        }
-        .valve-editor-field input {
-            width: 100%;
-            padding: 12px 16px;
-            border-radius: 24px;
-            border: 2px solid var(--accent-green, #21C85F);
-            background: transparent;
-            font-size: 14px;
-            color: var(--accent-green, #21C85F);
-            box-sizing: border-box;
-            outline: none;
-        }
-        .valve-editor-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 20px;
-        }
-        .valve-editor-actions button {
-            flex: 1;
-            padding: 12px;
-            border-radius: 24px;
-            border: none;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        .valve-save-btn {
-            background: var(--accent-green, #21C85F);
-            color: #ffffff;
-        }
-        .valve-save-btn:hover {
-            box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4);
-            transform: translateY(-1px);
-        }
-        .valve-cancel-btn {
-            background: rgba(255, 255, 255, 0.15);
-            color: var(--text-main, #333);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-        }
-        .valve-cancel-btn:hover {
-            background: rgba(255, 255, 255, 0.25);
-        }
-        .valve-editor-backdrop {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            background-color: rgba(15, 24, 43, 0.6);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            z-index: 2147483639;
-        }
-
-        .btn-add-task {
-            background: var(--accent-green, #21C85F);
-            color: white !important;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .btn-add-task:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(33, 200, 95, 0.4);
-        }
-        .btn-add-task:active {
-            transform: translateY(0);
+        .schedule-executing {
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.15) 0%, rgba(255, 152, 0, 0.1) 100%);
+            border-color: rgba(255, 152, 0, 0.4);
         }
     </style>
 </head>
 <body class="theme-dark">
-    <!-- Шапка -->
     <div class="top-sticky-wrapper">
-        
         <header class="site-header">
             <a href="profile.html" class="user-pill" aria-label="Профиль">
                 <img src="Т.пол.png" alt="" class="user-avatar avatar-dark">
                 <img src="Св.пол.png" alt="" class="user-avatar avatar-light">
                 <span class="user-text">User_login</span>
             </a>
-
             <div class="logo-container">
                 <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
                 <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
             </div>
-
             <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
                 <img src="тема.png" alt="" class="theme-icon-img">
             </label>
         </header>
         <input type="checkbox" id="themeToggle" class="mode-toggle">
-
         <nav class="navigation">
-            <a href="index.html" class="nav-btn">Главная</a> 
+            <a href="index.html" class="nav-btn">Главная</a>
             <a href="myplant.html" class="nav-btn active">Мои растения</a>
             <a href="settings.html" class="nav-btn">Настройки</a>
         </nav>
-        
     </div>
 
-    <!-- Основной контент -->
     <div class="page-wrapper">
         <div class="irrigation-container">
-            <!-- Левая панель: Клапаны -->
-            <div class="valves-sidebar" id="valvesSidebar">
-                <!-- Клапаны генерируются через JS -->
-            </div>
+            <div class="valves-sidebar" id="valvesSidebar"></div>
 
-            <!-- Центральная панель -->
             <div class="main-content">
+                <div class="ntp-clock" id="ntpClock">Загрузка времени...</div>
                 <div class="content-header">
-                    <h1 class="page-title">Конфигурация модуля полива</h1>
+                    <h1 class="page-title">Конфигурация модуля полива
+                        <span class="esp-status offline" id="espStatus"><span class="esp-dot"></span>Контроллер</span>
+                    </h1>
                 </div>
-                
+
                 <div class="tabs">
                     <button class="tab" data-tab="manual">Вручную</button>
                     <button class="tab active" data-tab="config">Расписание</button>
                     <button class="tab" data-tab="journal">Журнал</button>
                 </div>
 
-                <!-- Панель ручного управления -->
                 <div id="manualPanel" style="display: none;">
                     <div style="text-align: center; padding: 30px 20px;">
                         <select class="form-select" id="manual-valve-select" style="margin-bottom: 25px;">
@@ -1577,7 +628,6 @@ body.theme-light .icon-light { display: block; }
                                 Выключить клапан
                             </button>
                         </div>
-                        
                         <div style="background: rgba(0,0,0,0.03); border-radius: 16px; padding: 20px; max-width: 400px; margin: 0 auto;">
                             <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
                                 <span style="color: #64748b; font-size: 14px;">Статус:</span>
@@ -1588,47 +638,35 @@ body.theme-light .icon-light { display: block; }
                                 <span id="manual-timer" style="font-weight: 600; font-family: monospace; font-size: 18px;">00:00</span>
                             </div>
                             <div style="display: flex; justify-content: space-between;">
-                                <span style="color: #64748b; font-size: 14px;">Объём воды (оценка):</span>
+                                <span style="color: #64748b; font-size: 14px;">Объём воды:</span>
                                 <span id="manual-volume" style="font-weight: 600;">—</span>
                             </div>
                         </div>
-                        
                         <p style="color: #64748b; font-size: 13px; margin-top: 25px; max-width: 500px; margin-left: auto; margin-right: auto;">
                             При включении клапана в ручном режиме данные автоматически сохранятся в журнал после выключения.
                         </p>
                     </div>
                 </div>
 
-                <!-- Панель конфигурации -->
                 <div id="configPanel">
-                
                     <div style="background:rgba(33,200,95,0.06); border-radius:16px; padding:20px; margin-bottom:25px; border:1px solid rgba(33,200,95,0.2);">
                         <h4 style="margin:0 0 15px 0; color:var(--accent-green);">Настройка новой задачи</h4>
-                        
                         <div class="form-group">
                             <label class="form-label">Клапан</label>
                             <select class="form-select" id="input-valve-select">
-                                <option value="1">Клапан 1</option>
-                                <option value="2">Клапан 2</option>
-                                <option value="3">Клапан 3</option>
-                                <option value="4">Клапан 4</option>
-                                <option value="5">Клапан 5</option>
-                                <option value="6">Клапан 6</option>
-                                <option value="7">Клапан 7</option>
-                                <option value="8">Клапан 8</option>
+                                <option value="1">Клапан 1</option><option value="2">Клапан 2</option>
+                                <option value="3">Клапан 3</option><option value="4">Клапан 4</option>
+                                <option value="5">Клапан 5</option><option value="6">Клапан 6</option>
+                                <option value="7">Клапан 7</option><option value="8">Клапан 8</option>
                             </select>
                         </div>
-                        
                         <div class="form-row-2">
                             <div class="form-group">
                                 <label class="form-label">Тип расписания</label>
                                 <select class="form-select" id="input-schedule-type">
-                                    <option value="daily">Ежедневно</option>
-                                    <option value="weekly">Еженедельно</option>
-                                    <option value="interval">По интервалу</option>
-                                    <option value="once">Однократно</option>
-                                    <option value="sunrise">На рассвете</option>
-                                    <option value="sunset">На закате</option>
+                                    <option value="daily">Ежедневно</option><option value="weekly">Еженедельно</option>
+                                    <option value="interval">По интервалу</option><option value="once">Однократно</option>
+                                    <option value="sunrise">На рассвете</option><option value="sunset">На закате</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -1636,15 +674,19 @@ body.theme-light .icon-light { display: block; }
                                 <input type="number" class="form-input" id="input-priority" value="5" min="1" max="10">
                             </div>
                         </div>
-                        
                         <div class="form-row">
                             <div class="form-group" id="group-time">
                                 <label class="form-label">Время полива</label>
                                 <input type="time" class="form-input" id="input-time" value="08:00">
                             </div>
+                            <div class="form-group" id="group-datetime" style="display:none;">
+                                <label class="form-label">Дата и время выполнения</label>
+                                <input type="datetime-local" class="form-input" id="input-datetime">
+                                <div class="form-hint">Полив выполнится один раз в указанное время</div>
+                            </div>
                             <div class="form-group" id="group-days" style="display:none;">
                                 <label class="form-label">Дни недели</label>
-                                <input type="text" class="form-input" id="input-days" placeholder="1,3,5" 
+                                <input type="text" class="form-input" id="input-days" placeholder="1,3,5"
                                     oninput="this.value=this.value.replace(/[^1-7,]/g,''); if(document.getElementById('input-schedule-type').value==='weekly') generateWeeklyDayFields(this.value);">
                                 <div class="form-hint">1=Пн, 7=Вс. Пример: 1,3,5</div>
                             </div>
@@ -1653,7 +695,6 @@ body.theme-light .icon-light { display: block; }
                                 <input type="number" class="form-input" id="input-interval" value="60" min="1" max="1440">
                             </div>
                         </div>
-                        
                         <div class="form-row-2" style="margin-top:10px;">
                             <div class="form-group">
                                 <label class="form-label">Объём воды (мл)</label>
@@ -1666,51 +707,64 @@ body.theme-light .icon-light { display: block; }
                                 <div class="form-hint">На сколько секунд открывать клапан</div>
                             </div>
                         </div>
-                        
-                        <div class="form-row-2">
+                        <!-- === ИЗМЕНЕНО: добавлен id="group-cycles" === -->
+                        <div class="form-row-2" id="group-cycles">
                             <div class="form-group">
                                 <label class="form-label">Повторений цикла</label>
                                 <input type="number" class="form-input" id="input-cycles" value="1" min="1" max="10">
                             </div>
                         </div>
-                        
-                        <!-- Контейнер для деталей дней (weekly) -->
+                        <!-- ========================================= -->
                         <div id="weekly-details-container" style="margin-top:15px; display:none;"></div>
-                        
-                        <!-- Кнопка добавления задачи -->
                         <button class="btn-add-task" onclick="addTaskOperation()" style="width:100%; margin-top:10px; padding:14px; font-size:15px;">
                             + Добавить задачу с этими параметрами
                         </button>
                     </div>
-                    
                     <h3 class="section-title">Добавленные задачи</h3>
                     <div class="operations-list" id="operations-list"></div>
-                    
                 </div>
 
-                <!-- Панель журнала -->
                 <div id="journalPanel">
                     <h3 class="section-title">История полива</h3>
+
+                    <div class="journal-filter-bar">
+                        <label for="journal-valve-filter">Показать:</label>
+                        <select id="journal-valve-filter" class="form-select">
+                            <option value="0">Все клапаны</option>
+                            <option value="1">Клапан 1</option>
+                            <option value="2">Клапан 2</option>
+                            <option value="3">Клапан 3</option>
+                            <option value="4">Клапан 4</option>
+                            <option value="5">Клапан 5</option>
+                            <option value="6">Клапан 6</option>
+                            <option value="7">Клапан 7</option>
+                            <option value="8">Клапан 8</option>
+                        </select>
+                        <div class="journal-count-box">
+                            Записей: <b id="journal-count">0</b>
+                        </div>
+                        <div class="journal-total-box">
+                            <span class="label">Всего вылилось:</span>
+                            <span class="value" id="journal-total-volume">0.00 мл</span>
+                        </div>
+                        <button class="btn-clear-journal" id="btn-clear-journal" onclick="clearValveJournal()" title="Очистить записи">
+                            🗑
+                        </button>
+                    </div>
+
                     <div id="journal-content">
                         <table class="journal-table">
-                            <thead>
-                                <tr>
-                                    <th>Дата/Время</th>
-                                    <th>Клапан</th>
-                                    <th>Тип запуска</th>
-                                    <th>Длительность</th>
-                                    <th>Объём</th>
-                                    <th>Статус</th>
-                                </tr>
-                            </thead>
+                            <thead><tr>
+                                <th>Дата/Время</th><th>Клапан</th><th>Тип запуска</th>
+                                <th>Длительность</th><th>Объём</th><th>Статус</th>
+                            </tr></thead>
                             <tbody id="journal-tbody"></tbody>
                         </table>
-                        <div id="journal-empty" class="empty-journal">Журнал пока пуст. Выполните тестовый полив или дождитесь автоматического запуска.</div>
+                        <div id="journal-empty" class="empty-journal">Журнал пока пуст.</div>
                     </div>
                 </div>
             </div>
 
-            <!-- Правая панель: Датчик влажности -->
             <div class="sidebar-right">
                 <div class="moisture-panel">
                     <h2 class="panel-title">Датчик влажности</h2>
@@ -1719,36 +773,28 @@ body.theme-light .icon-light { display: block; }
                         <div class="valve-toggle" id="input-sensor-active"></div>
                     </div>
                     <div class="form-hint" style="margin-bottom: 20px;">Автоматический полив по показаниям датчика</div>
-                    
                     <div class="form-group">
                         <label class="form-label">Интервал проверки (мин)</label>
                         <select class="form-select" id="input-sensor-interval">
-                            <option value="15">15 минут</option>
-                            <option value="30">30 минут</option>
-                            <option value="60">1 час</option>
+                            <option value="15">15 минут</option><option value="30">30 минут</option><option value="60">1 час</option>
                         </select>
                     </div>
-                    
                     <div class="form-group">
                         <label class="form-label">Целевая влажность (%)</label>
                         <input type="number" class="form-input" id="input-target-moisture" min="0" max="100">
                     </div>
-                    
                     <div class="form-group">
                         <label class="form-label">Макс. длительность полива (сек)</label>
                         <input type="number" class="form-input" id="input-sensor-duration">
                     </div>
-                    
                     <div class="form-group">
                         <label class="form-label">Мин. пауза (часы)</label>
                         <input type="number" class="form-input" id="input-min-pause">
                     </div>
-                    
                     <div class="form-group">
                         <label class="form-label">Последнее измерение</label>
                         <input type="number" class="form-input" id="input-last-moisture" readonly style="opacity: 0.7;">
                     </div>
-                    
                     <div class="action-buttons">
                         <button class="btn-action btn-save" onclick="saveAllData()">Сохранить все</button>
                         <button class="btn-action btn-apply" onclick="applyToAll()">Применить ко всем</button>
@@ -1757,1553 +803,921 @@ body.theme-light .icon-light { display: block; }
             </div>
         </div>
     </div>
-    
 
-    <!-- Футер -->
     <footer class="site-footer">
         <div class="footer-columns">
             <div>
                 <h3 class="footer-column-title">Зелёная полка</h3>
-                <p class="footer-column-text">Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</p>
+                <p class="footer-column-text">Система контроля микроклимата растений.</p>
             </div>
             <div>
                 <h3 class="footer-column-title">Модули</h3>
                 <ul class="footer-column-list">
-                    <li>Освещения растений</li>
-                    <li>Сбор данных о растениях</li>
-                    <li>Полив растений</li>
+                    <li>Освещения растений</li><li>Сбор данных о растениях</li><li>Полив растений</li>
                 </ul>
             </div>
             <div>
                 <h3 class="footer-column-title">Контакты</h3>
-                <ul class="footer-column-list">
-                    <li>Почта</li>
-                    <li>Наши сети</li>
-                </ul>
+                <ul class="footer-column-list"><li>Почта</li><li>Наши сети</li></ul>
             </div>
         </div>
-        <div class="footer-copyright">
-            2026 Зелёная полка
-        </div>
+        <div class="footer-copyright">2026 Зелёная полка</div>
     </footer>
 
-    <!-- ВСТАВЬТЕ ЭТОТ СКРИПТ ВМЕСТО СТАРОГО, перед </body> -->
-    <script>
-        (function () {
-            'use strict';
+<script>
+let appState = {
+    valves: {},
+    journal: [],
+    schedules: [],
+    currentValve: 1,
+    manualState: { isActive: false, startTime: null, valveId: null, timerId: null }
+};
 
-            // ===== КОНФИГУРАЦИЯ =====
-            const DB_KEY = 'greenShelfWateringDB';
-            const LOG_KEY = 'greenShelfWateringLog';
-            const THEME_KEY = 'greenShelfTheme';
-            const PLANTS_KEY = 'myPlants';
-
-            let db = {};
-            let currentValve = 1;
-            let plantsMap = {};
-            let saveTimeout = null;
-            let simulatedScheduleInterval = null;
-
-            // ===== ИНИЦИАЛИЗАЦИЯ =====
-            function init() {
-                loadTheme();
-                loadData();
-                loadPlants();
-                renderSidebar();
-                switchValve(1);
-                setupListeners();
-                updateFormLogic();
-                renderJournal();
-                makeAllButtonsClickable();
-                startScheduleSimulation();
-            }
-
-            // ===== ТЕМА =====
-            function loadTheme() {
-                const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
-                document.body.className = `theme-${savedTheme}`;
-            }
-            function toggleTheme() {
-                const isDark = document.body.classList.contains('theme-dark');
-                const newTheme = isDark ? 'light' : 'dark';
-                document.body.className = `theme-${newTheme}`;
-                localStorage.setItem(THEME_KEY, newTheme);
-            }
-
-            // ===== ДАННЫЕ =====
-            function loadData() {
-                const saved = localStorage.getItem(DB_KEY);
-                db = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(DEFAULT_DB));
-            }
-            function saveData() {
-                localStorage.setItem(DB_KEY, JSON.stringify(db));
-            }
-            function saveAllData() {
-                collectUI(currentValve);
-                saveData();
-                showNotification('Настройки сохранены');
-            }
-            function applyToAll() {
-                collectUI(currentValve);
-                const currentSettings = JSON.parse(JSON.stringify(db[currentValve]));
-                for(let i=1; i<=8; i++) {
-                    if(i !== currentValve) {
-                        db[i].task = JSON.parse(JSON.stringify(currentSettings.task));
-                        db[i].sensor = JSON.parse(JSON.stringify(currentSettings.sensor));
-                        db[i].active = currentSettings.active;
-                    }
-                }
-                saveData();
-                renderSidebar();
-                showNotification('Настройки применены ко всем клапанам');
-            }
-            function loadPlants() {
-                const saved = localStorage.getItem(PLANTS_KEY);
-                if (saved) JSON.parse(saved).forEach(p => { if(p.valve) plantsMap[p.valve] = p.name; });
-            }
-
-            function debounceSave() {
-                clearTimeout(saveTimeout);
-                saveTimeout = setTimeout(() => {
-                    collectUI(currentValve);
-                    saveData();
-                }, 800);
-            }
-
-            // ===== СИМУЛЯЦИЯ РАСПИСАНИЯ =====
-            function startScheduleSimulation() {
-                simulatedScheduleInterval = setInterval(() => {
-                    const now = new Date();
-                    const currentDay = now.getDay() || 7;
-                    const currentTime = now.toTimeString().slice(0,5);
-                    
-                    for (let valveId = 1; valveId <= 8; valveId++) {
-                        const valve = db[valveId];
-                        if (!valve?.active || !valve?.task) continue;
-                        const t = valve.task;
-                        let shouldWater = false, triggerType = 'schedule';
-                        
-                        switch(t.schedule_type) {
-                            case 'daily': if (t.schedule_time === currentTime) shouldWater = true; break;
-                            case 'weekly': 
-                                const days = (t.schedule_days || '').split(',').map(Number);
-                                if (days.includes(currentDay) && t.schedule_time === currentTime) shouldWater = true; 
-                                break;
-                            case 'interval':
-                                if (t.schedule_interval_min > 0 && now.getMinutes() % t.schedule_interval_min === 0 && now.getSeconds() < 10) shouldWater = true;
-                                break;
-                            case 'once': if (t.schedule_time === currentTime) shouldWater = true; break;
-                        }
-                        
-                        if (valve.moisture_mode && valve.sensor?.active) {
-                            const s = valve.sensor;
-                            if (s.last_moisture_percent < s.target_moisture_percent && Math.random() > 0.7) {
-                                shouldWater = true; triggerType = 'sensor';
-                            }
-                        }
-                        
-                        if (shouldWater) {
-                            const taskOp = t.operations.find(op => op.type === 'TASK_SUMMARY');
-                            const waterOp = taskOp?._params || t.operations.find(op => op.type === 'WATER');
-                            addLogEntry({
-                                valve: valveId, type: triggerType,
-                                duration: waterOp?.duration_sec || t.max_duration_sec || 30,
-                                volume: waterOp?.volume_ml || t.max_volume_ml || 200,
-                                status: 'completed'
-                            });
-                            flashValveToggle(valveId);
-                        }
-                    }
-                }, 10000);
-            }
-            function stopScheduleSimulation() { if (simulatedScheduleInterval) clearInterval(simulatedScheduleInterval); }
-            function flashValveToggle(valveId) {
-                const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
-                if (!toggle) return;
-                toggle.style.transform = 'scale(1.2)';
-                toggle.style.transition = 'transform 0.2s';
-                setTimeout(() => toggle.style.transform = 'scale(1)', 400);
-            }
-
-            // ===== РЕНДЕРИНГ САЙДБАРА =====
-            function renderSidebar() {
-                const container = document.getElementById('valvesSidebar');
-                if (!container) return;
-                container.innerHTML = '';
-                for (let i = 1; i <= 8; i++) {
-                    const d = db[i];
-                    const plant = plantsMap[i] || '—';
-                    const statusText = d.active ? (d.moisture_mode ? 'By Moisture' : 'Active') : 'Неактивен';
-                    const statusClass = d.active ? '' : 'inactive';
-                    container.innerHTML += `
-                        <div class="valve-item ${i === currentValve ? 'active' : ''}" data-valve="${i}" onclick="switchValve(${i})">
-                            <div class="valve-header">
-                                <span class="valve-title"><span class="valve-number">${i}</span>Клапан ${i}</span>
-                            </div>
-                            <div class="valve-info">Pin: ${d.pin_number}</div>
-                            <div class="valve-info">Макс: ${d.max_duration_sec} сек</div>
-                            <div class="valve-info">Лимит: ${d.daily_limit_ml > 0 ? d.daily_limit_ml + ' мл' : '—'}</div>
-                            <div class="valve-info">Растение: ${plant}</div>
-                            <span class="valve-status ${statusClass}">${statusText}</span>
-                        </div>`;
-                }
-            }
-
-            // ===== ОБРАБОТКА КЛИКА ПО ЗАЩЁЛКЕ (РУЧНОЙ ПОЛИВ) =====
-            window.handleValveToggle = function(valveId, event) {
-                event?.stopPropagation();
-                const toggle = document.querySelector(`.valve-item[data-valve="${valveId}"] .valve-toggle`);
-                if (!toggle) return;
-                const isNowOn = !toggle.classList.contains('on');
-                toggle.classList.toggle('on');
-                db[valveId].active = isNowOn ? 1 : 0;
-                saveData();
-                
-                if (isNowOn) {
-                    const valveData = db[valveId];
-                    const t = valveData.task;
-                    const waterOp = t.operations?.find(op => op.type === 'WATER');
-                    addLogEntry({
-                        valve: valveId, type: 'manual',
-                        duration: waterOp?.duration_sec || t.max_duration_sec || 30,
-                        volume: waterOp?.volume_ml || t.max_volume_ml || 200,
-                        status: 'completed'
-                    });
-                    showNotification(`Клапан ${valveId}: ручной полив`);
-                }
-                if (valveId === currentValve) applyUI(valveId);
-                renderSidebar();
-            };
-
-            window.switchValve = function(id) {
-                collectUI(currentValve);
-                currentValve = id;
-                renderSidebar();
-                if (window.initValveEditButtons) window.initValveEditButtons();
-                applyUI(id);
-                updateFormLogic();
-            };
-
-            // ===== ПРИМЕНЕНИЕ ДАННЫХ В ФОРМУ (С ПОЛНЫМ ОТОБРАЖЕНИЕМ ЗАДАЧ) =====
-            function applyUI(id) {
-                const d = db[id]; if (!d) return;
-                const t = d.task, s = d.sensor;
-                const setVal = (id, val) => { const el = document.getElementById(id); if(el) el.value = val ?? ''; };
-                
-                setVal('input-valve-select', id);
-                setVal('input-schedule-type', t.schedule_type);
-                setVal('input-time', t.schedule_time || '');
-                setVal('input-days', t.schedule_days || '');
-                setVal('input-interval', t.schedule_interval_min || '');
-                setVal('input-priority', t.priority);
-                setVal('input-cycles', t.cycle_repeat);
-                setVal('input-task-duration', t.max_duration_sec);
-                setVal('input-max-volume', t.max_volume_ml);
-
-                if (db[id]?.task?.schedule_type === 'weekly' && db[id]?.task?.weekly_days) {
-                    const daysInput = document.getElementById('input-days');
-                    if (daysInput && daysInput.value) {
-                        generateWeeklyDayFields(daysInput.value);
-                    }
-                }
-
-                // === РЕНДЕР ОПЕРАЦИЙ С ПОЛНЫМ ОТОБРАЖЕНИЕМ ПАРАМЕТРОВ ===
-                const opsList = document.getElementById('operations-list');
-                if (opsList) {
-                    opsList.innerHTML = '';
-                    t.operations.forEach((op, idx) => {
-                        // Показываем ТОЛЬКО задачи типа TASK_SUMMARY
-                        if (op.type !== 'TASK_SUMMARY') return;
-                        
-                        const details = op.details || {};
-                        const waterDuration = details.limits?.duration || '—';
-                        const waterVolume = details.limits?.volume || '—';
-                        
-                        const content = `
-                            <div style="background:linear-gradient(135deg, #28a745 0%, #20c997 100%); color:white; padding:16px; border-radius:12px; margin:8px 0; box-shadow:0 2px 8px rgba(0,0,0,0.15);">
-                                <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px;">
-                                    <h4 style="margin:0; font-size:15px;">${op.label || 'Задача'}</h4>
-                                    <button class="btn-delete" onclick="deleteOperation(${idx})" 
-                                            style="background:rgba(255,255,255,0.2); border:none; color:white; 
-                                                border-radius:50%; width:28px; height:28px; cursor:pointer; 
-                                                font-size:18px; line-height:1; display:flex; align-items:center; justify-content:center;">
-                                        ×
-                                    </button>
-                                </div>
-                                
-                                <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:10px; font-size:13px;">
-                                    <div>
-                                        <b>Расписание:</b><br>
-                                        <span style="opacity:0.9;">${details.schedule || '—'}</span>
-                                    </div>
-                                    <div>
-                                        <b>Приоритет:</b><br>
-                                        <span style="opacity:0.9;">${details.priority || '—'}</span>
-                                    </div>
-                                    <div>
-                                        <b>Циклы:</b><br>
-                                        <span style="opacity:0.9;">${details.cycles || '—'}</span>
-                                    </div>
-                                    <div>
-                                        <b>Длит.:</b><br>
-                                        <span style="opacity:0.9;">${waterDuration}</span>
-                                    </div>
-                                    <div>
-                                        <b>Объём:</b><br>
-                                        <span style="opacity:0.9;">${waterVolume}</span>
-                                    </div>
-                                    <div>
-                                        <b>Добавлено:</b><br>
-                                        <span style="opacity:0.9;">${op.timestamp || ''}</span>
-                                    </div>
-                                </div>
-                                
-                                ${op._weeklyDays ? `
-                                <div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.2); font-size:12px;">
-                                    <b>Настройки по дням:</b><br>
-                                    <span style="opacity:0.85;">${Object.keys(op._weeklyDays).length} дн. с индивидуальными параметрами</span>
-                                </div>` : ''}
-                            </div>`;
-                        
-                        opsList.insertAdjacentHTML('beforeend', content);
-                    });
-                    
-                    // Если задач нет
-                    if (t.operations.filter(op => op.type === 'TASK_SUMMARY').length === 0) {
-                        opsList.innerHTML = '<div style="text-align:center; padding:30px; color:#64748b; font-style:italic;">Задач пока нет. Добавьте первую задачу выше.</div>';
-                    }
-                }
-
-                // Датчик
-                const sensorToggle = document.getElementById('input-sensor-active');
-                if (sensorToggle) s.active ? sensorToggle.classList.add('on') : sensorToggle.classList.remove('on');
-                setVal('input-sensor-interval', s.check_interval_min);
-                setVal('input-target-moisture', s.target_moisture_percent);
-                setVal('input-sensor-duration', s.max_watering_duration_sec);
-                setVal('input-min-pause', s.min_pause_hours);
-                setVal('input-last-moisture', s.last_moisture_percent);
-            }
-
-            // ===== ОБНОВЛЕНИЕ ПАРАМЕТРА ОПЕРАЦИИ =====
-            window.updateOperationParam = function(opIdx, param, value) {
-                const numVal = parseFloat(value);
-                if (!isNaN(numVal)) {
-                    db[currentValve].task.operations[opIdx][param] = numVal;
-                    debounceSave();
-                }
-            };
-
-            // ===== ДОБАВЛЕНИЕ ЗАДАЧИ С ПОЛНЫМ НАБОРОМ ПАРАМЕТРОВ =====
-            window.addTaskOperation = function() {
-                const getVal = (id) => document.getElementById(id)?.value || '';
-                const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
-                
-                const valve = getVal('input-valve-select') || currentValve;
-                const scheduleType = getVal('input-schedule-type') || 'daily';
-                const scheduleTime = getVal('input-time') || '08:00';
-                const scheduleDays = getVal('input-days') || '';
-                const interval = getVal('input-interval') || '60';
-                const priority = getNum('input-priority', 5);
-                const cycles = getNum('input-cycles', 1);
-                const maxDuration = getNum('input-task-duration', 600);
-                const maxVolume = getNum('input-max-volume', 1000);
-
-                const waterVolume = getNum('input-water-volume', 200);
-                const waterDuration = getNum('input-water-duration', 30);
-
-                let scheduleDesc = '';
-                switch(scheduleType) {
-                    case 'daily': 
-                        scheduleDesc = `Ежедневно в ${scheduleTime}`; 
-                        break;
-                    case 'weekly': 
-                        scheduleDesc = `Еженедельно: дни ${scheduleDays || '—'}`; 
-                        break;
-                    case 'interval': 
-                        scheduleDesc = `Каждые ${interval} мин`; 
-                        break;
-                    case 'once': 
-                        scheduleDesc = `Однократно: ${scheduleTime}`; 
-                        break;
-                    case 'sunrise': 
-                        scheduleDesc = 'На рассвете (авто)'; 
-                        break;
-                    case 'sunset': 
-                        scheduleDesc = 'На закате (авто)'; 
-                        break;
-                    default: 
-                        scheduleDesc = scheduleType;
-                }
-                
-                let dailyConfigs = null;
-                if (scheduleType === 'weekly' && scheduleDays) {
-                    const days = scheduleDays.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
-                    dailyConfigs = {};
-                    
-                    days.forEach(dayId => {
-                        const timeInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-time`);
-                        const volInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-vol`);
-                        const durInput = document.querySelector(`.weekly-day-row[data-day="${dayId}"] .wd-dur`);
-                        
-                        if (timeInput && volInput && durInput) {
-                            dailyConfigs[dayId] = {
-                                time: timeInput.value || '08:00',
-                                volume: parseInt(volInput.value) || waterVolume,
-                                duration: parseInt(durInput.value) || waterDuration
-                            };
-                        }
-                    });
-                }
-                
-                // Создаём задачу
-                const task = {
-                    type: 'TASK_SUMMARY',
-                    label: `Задача для Клапана ${valve}`,
-                    details: {
-                        schedule: scheduleDesc,
-                        priority: priority,
-                        cycles: cycles,
-                        limits: { 
-                            duration: waterDuration + ' сек',
-                            volume: waterVolume + ' мл'
-                        }
-                    },
-                    timestamp: new Date().toLocaleString('ru-RU'),
-                    _params: {
-                        valve: parseInt(valve),
-                        schedule_type: scheduleType,
-                        schedule_time: scheduleTime,
-                        schedule_days: scheduleDays,
-                        schedule_interval_min: parseInt(interval),
-                        duration_sec: waterDuration,
-                        volume_ml: waterVolume,
-                        priority: priority,
-                        cycles: cycles,
-                        max_duration_sec: maxDuration,
-                        max_volume_ml: maxVolume
-                    }
-                };
-                
-                if (dailyConfigs && Object.keys(dailyConfigs).length > 0) {
-                    task._dailyConfigs = dailyConfigs;
-                    task.details.schedule += ` (${Object.keys(dailyConfigs).length} дн. с индив. параметрами)`;
-                }
-                
-                db[currentValve].task.operations.push(task);
-                applyUI(currentValve);
-                saveData();
-                
-                const daysCount = dailyConfigs ? Object.keys(dailyConfigs).length : 0;
-                showNotification(`Задача добавлена${daysCount > 0 ? ` (${daysCount} дн.)` : ''}: ${waterVolume} мл / ${waterDuration} сек`);
-                console.log('Добавлена задача:', task);
-            };
-
-            window.addOperation = function() {
-                const type = prompt('Тип: WATER, PAUSE, SENSOR_CHECK', 'WATER')?.toUpperCase();
-                if (!type || !['WATER','PAUSE','SENSOR_CHECK'].includes(type)) return;
-                const defaults = {
-                    WATER: { type:'WATER', duration_sec:30, volume_ml:200 },
-                    PAUSE: { type:'PAUSE', pause_duration_sec:60 },
-                    SENSOR_CHECK: { type:'SENSOR_CHECK', target_moisture_percent:65, volume_ml:150 }
-                };
-                db[currentValve].task.operations.push({ ...defaults[type] });
-                applyUI(currentValve);
-                saveData();
-            };
-
-            window.deleteOperation = function(idx) {
-                if(!confirm('Удалить задачу?')) return;
-                db[currentValve].task.operations.splice(idx, 1);
-                applyUI(currentValve);
-                saveData();
-                showNotification('Задача удалена');
-            };
-
-           // ===== ЛОГИКА ПОЛЕЙ =====
-            window.updateFormLogic = function() {
-                const type = document.getElementById('input-schedule-type')?.value;
-                if (!type) return;
-                
-                const timeGroup = document.getElementById('group-time');
-                const daysGroup = document.getElementById('group-days');
-                const intervalGroup = document.getElementById('group-interval');
-                const weeklyContainer = document.getElementById('weekly-details-container');
-                
-                const toggle = (el, show) => {
-                    if (!el) return;
-                    el.style.display = show ? 'block' : 'none';
-                    el.querySelectorAll('input')?.forEach(inp => inp.disabled = !show);
-                };
-                
-                // Скрыть всё
-                toggle(timeGroup, false);
-                toggle(daysGroup, false);
-                toggle(intervalGroup, false);
-                if (weeklyContainer) { 
-                    weeklyContainer.style.display = 'none'; 
-                    weeklyContainer.innerHTML = ''; 
-                }
-                
-                switch(type) {
-                    case 'daily':
-                    case 'once':
-                        toggle(timeGroup, true);
-                        break;
-                    case 'weekly':
-                        toggle(timeGroup, true);
-                        toggle(daysGroup, true);
-                        if (weeklyContainer) {
-                            const daysInput = document.getElementById('input-days');
-                            if (daysInput?.value.trim()) {
-                                generateWeeklyDayFields(daysInput.value);
-                            } else {
-                                weeklyContainer.style.display = 'block';
-                                weeklyContainer.innerHTML = '<div style="padding:10px; color:#64748b; font-style:italic;">Введите дни недели выше (например: 1,3,5)</div>';
-                            }
-                        }
-                        break;
-                    case 'interval':
-                        toggle(intervalGroup, true);
-                        break;
-                    case 'sunrise':
-                    case 'sunset':
-                        showNotification('Время определяется автоматически');
-                        break;
-                }
-            };
-
-            // ===== ГЕНЕРАЦИЯ ПОЛЕЙ ДЛЯ КАЖДОГО ДНЯ (WEEKLY MODE) =====
-            function generateWeeklyDayFields(daysStr) {
-                const container = document.getElementById('weekly-details-container');
-                if (!container) return;
-                
-                const days = daysStr.split(',').map(d=>parseInt(d.trim())).filter(d=>d>=1&&d<=7);
-                if (days.length === 0) { 
-                    container.style.display = 'none'; 
-                    container.innerHTML = '';
-                    return; 
-                }
-            
-                container.style.display = 'block';
-                
-                const WEEKDAYS = {1:'Пн',2:'Вт',3:'Ср',4:'Чт',5:'Пт',6:'Сб',7:'Вс'};
-                
-                let html = `<div style="background:rgba(33,200,95,0.1); padding:15px; border-radius:12px; margin:15px 0;">
-                    <strong style="color:var(--accent-green); display:block; margin-bottom:12px;">
-                        Индивидуальные настройки для каждого дня:
-                    </strong>
-                </div>`;
-                
-                days.forEach(dayId => {
-                    const existingConfig = db[currentValve]?.task?.weekly_days?.[dayId] || {};
-                    const defaultTime = existingConfig.time || '08:00';
-                    const defaultVolume = existingConfig.volume || 200;
-                    const defaultDuration = existingConfig.duration || 30;
-                    
-                    html += `
-                    <div class="weekly-day-row" data-day="${dayId}" style="
-                        display:grid; grid-template-columns: 70px 1fr 1fr 1fr; gap:10px;
-                        align-items:end; margin:10px 0; padding:15px; background:var(--card-bg);
-                        border-radius:12px; border:2px solid rgba(33,200,95,0.3);
-                        box-shadow:0 2px 8px rgba(0,0,0,0.08);
-                    ">
-                        <div style="font-weight:700; color:var(--accent-green); font-size:15px;">
-                            ${WEEKDAYS[dayId]}
-                        </div>
-                        <div>
-                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Время</label>
-                            <input type="time" class="wd-time" value="${defaultTime}" 
-                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
-                        </div>
-                        <div>
-                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Объём (мл)</label>
-                            <input type="number" class="wd-vol" value="${defaultVolume}" min="10" max="5000" step="10"
-                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
-                        </div>
-                        <div>
-                            <label style="font-size:11px; opacity:0.8; display:block; margin-bottom:5px; font-weight:600;">Длит. (сек)</label>
-                            <input type="number" class="wd-dur" value="${defaultDuration}" min="1" max="600"
-                                style="width:100%; padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.15); font-size:14px;">
-                        </div>
-                    </div>`;
-                });
-                
-                container.innerHTML = html;
-                
-                // Авто-сохранение
-                container.querySelectorAll('.wd-time, .wd-vol, .wd-dur').forEach(inp => {
-                    inp.onchange = saveWeeklyConfig;
-                    inp.oninput = debounce(() => saveWeeklyConfig(), 500);
-                });
-            }
-
-            function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn.apply(this,a), ms); }; }
-
-            // Удаление дня из weekly-расписания
-            window.removeWeeklyDay = function(dayId) {
-                const input = document.getElementById('input-days');
-                if (!input) return;
-                
-                const days = input.value.split(',')
-                    .map(d => parseInt(d.trim()))
-                    .filter(d => d !== dayId);
-                
-                input.value = days.join(',');
-                
-                // Удаляем из БД
-                if (db[currentValve]?.task?.weekly_days?.[dayId]) {
-                    delete db[currentValve].task.weekly_days[dayId];
-                }
-                
-                saveData();
-                updateFormLogic(); // Перерисовать форму
-                showNotification(`День ${dayId} удалён`);
-            };
-
-            // Сохранение конфигурации дней в БД
-            function saveWeeklyConfig() {
-                const container = document.getElementById('weekly-details-container');
-                if (!container || !db[currentValve]) return;
-                
-                if (!db[currentValve].task.weekly_days) {
-                    db[currentValve].task.weekly_days = {};
-                }
-                
-                container.querySelectorAll('.weekly-day-row').forEach(row => {
-                    const dayId = parseInt(row.dataset.day);
-                    db[currentValve].task.weekly_days[dayId] = {
-                        time: row.querySelector('.wd-time')?.value || '08:00',
-                        volume: parseInt(row.querySelector('.wd-volume')?.value) || 200,
-                        duration: parseInt(row.querySelector('.wd-duration')?.value) || 60
-                    };
-                });
-                
-                debounceSave();
-            }
-
-            // Debounce-утилита (если ещё нет в коде)
-            function debounce(func, wait) {
-                let timeout;
-                return function(...args) {
-                    clearTimeout(timeout);
-                    timeout = setTimeout(() => func.apply(this, args), wait);
-                };
-            }
-
-            // ===== ЖУРНАЛ =====
-            function renderJournal(filterValve = null) {
-                const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
-                const tbody = document.getElementById('journal-tbody');
-                const emptyMsg = document.getElementById('journal-empty');
-                if (!tbody) return;
-                const filtered = filterValve ? logs.filter(l => l.valve === filterValve) : logs;
-                tbody.innerHTML = '';
-                if(filtered.length === 0) { if(emptyMsg) emptyMsg.style.display = 'block'; return; }
-                if(emptyMsg) emptyMsg.style.display = 'none';
-                filtered.sort((a,b)=>new Date(b.ts)-new Date(a.ts)).forEach(log => {
-                    const statusClass = log.status==='completed'?'status-success':(log.status==='failed'?'status-fail':'status-pending');
-                    const typeText = {schedule:'Расписание', sensor:'Датчик', manual:'Вручную'}[log.type]||log.type;
-                    tbody.innerHTML += `<tr><td>${new Date(log.ts).toLocaleString('ru-RU')}</td><td><b>Клапан ${log.valve}</b></td><td>${typeText}</td><td>${log.duration} сек</td><td>${log.volume} мл</td><td><span class="status-badge ${statusClass}">{{completed:'Успешно',failed:'Провалено',pending:'В ожидании'}[log.status]||'?'}</span></td></tr>`;
-                });
-            }
-            function addLogEntry(data) {
-                if(!data?.valve) return;
-                const logs = JSON.parse(localStorage.getItem(LOG_KEY)||'[]');
-                logs.push({ ts:new Date().toISOString(), valve:data.valve, type:data.type, duration:data.duration, volume:data.volume, status:data.status||'completed' });
-                localStorage.setItem(LOG_KEY, JSON.stringify(logs));
-                renderJournal();
-            }
-            window.filterJournalByValve = function(valveId) {
-                const select = document.getElementById('journal-valve-filter');
-                const valve = valveId!==undefined ? parseInt(valveId) : (select?parseInt(select.value):null);
-                renderJournal(valve&&valve>0?valve:null);
-            };
-            window.switchTab = function(tabName) {
-                document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-                document.querySelector(`.tab[data-tab="${tabName}"]`)?.classList.add('active');
-                document.getElementById('configPanel').style.display = tabName==='config'?'block':'none';
-                document.getElementById('journalPanel').style.display = tabName==='journal'?'block':'none';
-                if(tabName==='journal') { ensureJournalFilter(); renderJournal(); }
-            };
-            function ensureJournalFilter() {
-                const panel = document.getElementById('journalPanel'); if(!panel||document.getElementById('journal-valve-filter')) return;
-                panel.insertAdjacentHTML('afterbegin', `<div style="margin:12px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;"><label style="font-size:0.9em; color:var(--text-secondary);">Фильтр:</label><select id="journal-valve-filter" onchange="filterJournalByValve(this.value)" style="padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:var(--card-bg); color:var(--text);">${[0,1,2,3,4,5,6,7,8].map(v=>`<option value="${v}">${v===0?'Все клапаны':'Клапан '+v}</option>`).join('')}</select><button onclick="filterJournalByValve(0)" style="padding:6px 12px; background:var(--accent-green); color:white; border:none; border-radius:6px; cursor:pointer;">Сброс</button></div>`);
-            }
-
-            // ===== СБОР ДАННЫХ ИЗ ФОРМЫ =====
-            function collectUI(id) {
-                const d = db[id]; if(!d) return;
-                const toggle = document.querySelector(`.valve-item[data-valve="${id}"] .valve-toggle`);
-                if(toggle) d.active = toggle.classList.contains('on')?1:0;
-                const t = d.task, s = d.sensor;
-                const getVal = (id)=>document.getElementById(id)?.value;
-                const getNum = (id,def)=>{const v=parseInt(getVal(id)); return isNaN(v)?def:v;};
-                t.schedule_type = getVal('input-schedule-type')||'daily';
-                t.priority = getNum('input-priority',5); t.cycle_repeat = getNum('input-cycles',1);
-                t.max_duration_sec = getNum('input-task-duration',600); t.max_volume_ml = getNum('input-max-volume',1000);
-                const isDisabled = (id)=>document.getElementById(id)?.disabled;
-                t.schedule_time = isDisabled('input-time')?null:getVal('input-time');
-                t.schedule_days = isDisabled('input-days')?'':getVal('input-days');
-                t.schedule_interval_min = isDisabled('input-interval')?0:getNum('input-interval',0);
-                // Операции уже сохранены в db, не перезаписываем их из UI
-                const sensorToggle = document.getElementById('input-sensor-active');
-                s.active = sensorToggle?.classList.contains('on')?1:0;
-                s.check_interval_min = getNum('input-sensor-interval',30);
-                s.target_moisture_percent = getNum('input-target-moisture',65);
-                s.max_watering_duration_sec = getNum('input-sensor-duration',180);
-                s.min_pause_hours = getNum('input-min-pause',2);
-                s.last_moisture_percent = getNum('input-last-moisture',0);
-                if (db[id]?.task?.schedule_type === 'weekly') {
-                    const container = document.getElementById('weekly-details-container');
-                    if (container && db[id]?.task) {
-                        if (!db[id].task.weekly_days) db[id].task.weekly_days = {};
-                        container.querySelectorAll('.weekly-day-row').forEach(row => {
-                            const dayId = parseInt(row.dataset.day);
-                            db[id].task.weekly_days[dayId] = {
-                                time: row.querySelector('.wd-time')?.value || '08:00',
-                                volume: parseInt(row.querySelector('.wd-volume')?.value) || 200,
-                                duration: parseInt(row.querySelector('.wd-duration')?.value) || 60
-                            };
-                        });
-                    }
-                }
-            }
-
-            // ===== СОБЫТИЯ =====
-            function setupListeners() {
-                const themeBtn = document.getElementById('themeSwitcher'); if(themeBtn) themeBtn.onclick = toggleTheme;
-                const sched = document.getElementById('input-schedule-type'); if(sched) sched.onchange = ()=>{updateFormLogic(); debounceSave();};
-                document.querySelectorAll('.tab').forEach(tab=>tab.onclick=function(){switchTab(this.dataset.tab);});
-                const sensTog = document.getElementById('input-sensor-active'); if(sensTog) sensTog.onclick=function(){this.classList.toggle('on'); debounceSave();};
-                const valveSel = document.getElementById('input-valve-select'); if(valveSel) valveSel.onchange=function(){switchValve(+this.value);};
-                document.querySelectorAll('#configPanel input,#configPanel select,#configPanel textarea').forEach(el=>{el.onchange=debounceSave; el.oninput=debounceSave;});
-                const addTaskBtn = findBtn('Добавить задачу'); if(addTaskBtn) addTaskBtn.onclick=(e)=>{e.preventDefault(); addTaskOperation();};
-                const addOpBtn = findBtn('Добавить операцию'); if(addOpBtn) addOpBtn.onclick=(e)=>{e.preventDefault(); addOperation();};
-                const saveBtn = findBtn('Сохранить все'); if(saveBtn) saveBtn.onclick=(e)=>{e.preventDefault(); saveAllData();};
-                const applyBtn = findBtn('Применить ко всем'); if(applyBtn) applyBtn.onclick=(e)=>{e.preventDefault(); applyToAll();};
-                const schedType = document.getElementById('input-schedule-type');
-                if (schedType) {
-                    schedType.onchange = function() {
-                        updateFormLogic();
-                        debounceSave();
-                    };
-                }
-                setTimeout(updateFormLogic, 100);
-            }
-            function findBtn(text){return Array.from(document.querySelectorAll('button,input[type="button"],.btn')).find(b=>b.textContent?.trim().includes(text)||b.value?.includes(text));}
-            function makeAllButtonsClickable(){document.querySelectorAll('button,input[type="button"],input[type="submit"],a[role="button"],.btn,.valve-toggle').forEach(btn=>{if(btn.onclick||btn.href)return; btn.style.cursor='pointer'; btn.addEventListener('click',e=>{const txt=btn.textContent?.trim()||btn.value||''; if(['Добавить задачу','Добавить операцию','Сохранить все','Применить ко всем'].some(t=>txt.includes(t)))return; console.log('Клик:',txt);});});}
-            function showNotification(msg){const ex=document.getElementById('gs-notify'); if(ex)ex.remove(); const n=document.createElement('div'); n.id='gs-notify'; n.style.cssText='position:fixed;top:20px;right:20px;background:var(--accent-green,#28a745);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);font-family:system-ui,sans-serif;'; n.textContent=msg; document.body.appendChild(n); setTimeout(()=>{n.style.opacity='0'; n.style.transition='opacity .3s'; setTimeout(()=>n.remove(),300);},2500);}
-            window.loadUserToHeader=function(){const d=JSON.parse(localStorage.getItem('userData')); if(!d)return; const ut=document.querySelector('.user-pill .user-text'); if(ut)ut.textContent=d.username; const ad=document.querySelector('.user-pill .avatar-dark'), al=document.querySelector('.user-pill .avatar-light'); if(ad)ad.src=d.avatar; if(al)al.src=d.avatar;};
-            window.addEventListener('beforeunload',()=>{stopScheduleSimulation(); collectUI(currentValve); saveData();});
-            document.addEventListener('DOMContentLoaded',()=>{init(); loadUserToHeader();});
-        })();
-
-        (function() {
-            const STORAGE_PREFIX = 'valve_cfg_';
-            let currentValveNum = null;
-            let currentEditor = null;
-
-            const getVal = (v, p) => localStorage.getItem(`${STORAGE_PREFIX}${v}_${p}`) || '';
-            const setVal = (v, p, val) => localStorage.setItem(`${STORAGE_PREFIX}${v}_${p}`, val);
-
-            // Обновление отображения на карточке клапана
-            function updateValveCardDisplay(valveNum) {
-                const valveItem = document.querySelector(`.valve-item[data-valve="${valveNum}"]`);
-                if (!valveItem) return;
-                
-                const maxDur = getVal(valveNum, 'max_duration');
-                const maxVol = getVal(valveNum, 'max_volume');
-                
-                const infoElements = valveItem.querySelectorAll('.valve-info');
-                infoElements.forEach(el => {
-                    const text = el.textContent.trim();
-                    if (text.startsWith('Макс:')) {
-                        el.textContent = `Макс: ${maxDur || '—'} сек`;
-                    } else if (text.startsWith('Лимит:')) {
-                        const volText = maxVol ? `${maxVol} мл` : '—';
-                        el.textContent = `Лимит: ${volText}`;
-                    }
-                });
-            }
-
-            // Добавление кнопки редактирования в карточку клапана
-            function injectEditButton(valveNum) {
-                const valveItem = document.querySelector(`.valve-item[data-valve="${valveNum}"]`);
-                if (!valveItem) return false;
-                
-                if (valveItem.querySelector('.edit-valve-btn')) return true;
-                
-                valveItem.style.position = 'relative';
-                
-                const btn = document.createElement('button');
-                btn.className = 'edit-valve-btn';
-                btn.type = 'button';
-                btn.innerHTML = '✏️';
-                btn.title = `Настроить параметры клапана ${valveNum}`;
-                btn.setAttribute('aria-label', `Редактировать клапан ${valveNum}`);
-                btn.dataset.valve = valveNum;
-                btn.style.cssText = `
-                    position: absolute;
-                    bottom: 12px;
-                    right: 12px;
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 50%;
-                    border: none;
-                    background: rgba(33, 200, 95, 0.85);
-                    color: white;
-                    font-size: 16px;
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    opacity: 0;
-                    transition: all 0.25s ease;
-                    z-index: 15;
-                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-                    padding: 0;
-                    line-height: 1;
-                `;
-                
-                valveItem.addEventListener('mouseenter', () => {
-                    btn.style.opacity = '1';
-                });
-                valveItem.addEventListener('mouseleave', () => {
-                    if (!currentEditor || currentValveNum !== valveNum) {
-                        btn.style.opacity = '0';
-                    }
-                });
-                
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    openEditor(valveNum, btn);
-                });
-                
-                valveItem.appendChild(btn);
-                return true;
-            }
-
-            // Открытие редактора
-            function openEditor(valveNum, triggerBtn) {
-                closeAllEditors();
-                currentValveNum = valveNum;
-                
-                const backdrop = document.createElement('div');
-                backdrop.className = 'valve-editor-backdrop';
-                backdrop.style.cssText = `
-                    position: fixed;
-                    top: 0; left: 0;
-                    width: 100%; height: 100%;
-                    background-color: rgba(15, 24, 43, 0.6);
-                    backdrop-filter: blur(8px);
-                    -webkit-backdrop-filter: blur(8px);
-                    z-index: 2147483639;
-                `;
-                document.body.appendChild(backdrop);
-
-                const editor = document.createElement('div');
-                editor.className = 'valve-editor-mini';
-                editor.style.cssText = `
-                    position: fixed;
-                    background: var(--card-bg, #ffffff);
-                    padding: 24px 28px;
-                    border-radius: 32px;
-                    width: 90%;
-                    max-width: 320px;
-                    box-shadow: 0 0 30px var(--glow-soft, rgba(33, 200, 95, 0.3));
-                    animation: modalFadeIn 0.3s ease;
-                    z-index: 2147483640;
-                    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-                    color: var(--text-main, #000);
-                `;
-                
-                const rect = triggerBtn.getBoundingClientRect();
-                const editorWidth = 320;
-                const editorHeight = 280;
-                let left = rect.right - editorWidth;
-                let top = rect.top - editorHeight - 10;
-                
-                if (left < 10) left = 10;
-                if (top < 10) top = rect.bottom + 10;
-                
-                editor.style.left = `${left}px`;
-                editor.style.top = `${top}px`;
-                
-                editor.innerHTML = `
-                    <div class="valve-editor-title" style="
-                        color: var(--accent-green, #21C85F);
-                        font-size: 18px;
-                        font-weight: 600;
-                        margin-bottom: 18px;
-                        text-align: center;
-                    ">Клапан ${valveNum}</div>
-                    <div class="valve-editor-field" style="margin-bottom: 14px;">
-                        <label style="
-                            display: block;
-                            font-size: 13px;
-                            color: var(--text-main, #333);
-                            opacity: 0.85;
-                            margin-bottom: 6px;
-                        ">Макс. длительность (сек)</label>
-                        <input type="number" id="ved-max-dur" min="0" placeholder="300" 
-                               value="${getVal(valveNum, 'max_duration')}" style="
-                            width: 100%;
-                            padding: 12px 16px;
-                            border-radius: 24px;
-                            border: 2px solid var(--accent-green, #21C85F);
-                            background: transparent;
-                            font-size: 14px;
-                            color: var(--accent-green, #21C85F);
-                            box-sizing: border-box;
-                            outline: none;
-                        ">
-                    </div>
-                    <div class="valve-editor-field" style="margin-bottom: 14px;">
-                        <label style="
-                            display: block;
-                            font-size: 13px;
-                            color: var(--text-main, #333);
-                            opacity: 0.85;
-                            margin-bottom: 6px;
-                        ">Лимит объёма (мл)</label>
-                        <input type="number" id="ved-max-vol" min="0" placeholder="5000" 
-                               value="${getVal(valveNum, 'max_volume')}" style="
-                            width: 100%;
-                            padding: 12px 16px;
-                            border-radius: 24px;
-                            border: 2px solid var(--accent-green, #21C85F);
-                            background: transparent;
-                            font-size: 14px;
-                            color: var(--accent-green, #21C85F);
-                            box-sizing: border-box;
-                            outline: none;
-                        ">
-                    </div>
-                    <div class="valve-editor-actions" style="
-                        display: flex;
-                        gap: 10px;
-                        margin-top: 20px;
-                    ">
-                        <button class="valve-cancel-btn" style="
-                            flex: 1;
-                            padding: 12px;
-                            border-radius: 24px;
-                            border: none;
-                            font-size: 14px;
-                            font-weight: 600;
-                            cursor: pointer;
-                            transition: all 0.3s ease;
-                            background: rgba(255, 255, 255, 0.15);
-                            color: var(--text-main, #333);
-                            border: 1px solid rgba(255, 255, 255, 0.2);
-                        ">Отмена</button>
-                        <button class="valve-save-btn" style="
-                            flex: 1;
-                            padding: 12px;
-                            border-radius: 24px;
-                            border: none;
-                            font-size: 14px;
-                            font-weight: 600;
-                            cursor: pointer;
-                            transition: all 0.3s ease;
-                            background: var(--accent-green, #21C85F);
-                            color: #ffffff;
-                        ">Сохранить</button>
-                    </div>
-                `;
-                
-                document.body.appendChild(editor);
-                currentEditor = { editor, backdrop, triggerBtn };
-
-                setTimeout(() => editor.querySelector('input').focus(), 100);
-
-                editor.querySelector('.valve-save-btn').addEventListener('click', () => {
-                    const dur = document.getElementById('ved-max-dur').value.trim();
-                    const vol = document.getElementById('ved-max-vol').value.trim();
-                    setVal(valveNum, 'max_duration', dur);
-                    setVal(valveNum, 'max_volume', vol);
-                    
-                    updateValveCardDisplay(valveNum);
-                    
-                    triggerBtn.style.background = '#4CAF50';
-                    setTimeout(() => triggerBtn.style.background = '', 300);
-                    
-                    closeEditor();
-                });
-
-                editor.querySelector('.valve-cancel-btn').addEventListener('click', closeEditor);
-                backdrop.addEventListener('click', closeEditor);
-                
-                const onEsc = (e) => { if (e.key === 'Escape') closeEditor(); };
-                document.addEventListener('keydown', onEsc, { once: true });
-            }
-
-            function closeEditor() {
-                if (currentEditor) {
-                    currentEditor.editor?.remove();
-                    currentEditor.backdrop?.remove();
-                    currentEditor = null;
-                }
-                currentValveNum = null;
-            }
-
-            function closeAllEditors() {
-                document.querySelectorAll('.valve-editor-mini, .valve-editor-backdrop').forEach(el => el.remove());
-                currentEditor = null;
-                currentValveNum = null;
-            }
-
-            // Инициализация кнопок для всех клапанов
-            function initValveEditButtons() {
-                console.log('Добавляю кнопки редактирования для клапанов...');
-                let added = 0;
-                for (let i = 1; i <= 8; i++) {
-                    if (injectEditButton(i)) {
-                        added++;
-                        updateValveCardDisplay(i);
-                    }
-                }
-                console.log(`обавлено кнопок: ${added}/8`);
-            }
-
-            // Делаем функцию глобально доступной
-            window.initValveEditButtons = initValveEditButtons;
-
-            // Запуск после загрузки DOM
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initValveEditButtons);
-            } else {
-                setTimeout(initValveEditButtons, 500);
-            }
-            
-            setTimeout(initValveEditButtons, 1500);
-            setTimeout(initValveEditButtons, 3000);
-        })();
-
-        // ===== РУЧНОЕ УПРАВЛЕНИЕ КЛАПАНОМ — ВСТРОЕННАЯ ВЕРСИЯ =====
-        (function() {
-            'use strict';
-            
-            // ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
-            const DB_KEY = 'greenShelfWateringDB';
-            const LOG_KEY = 'greenShelfWateringLog';
-            let db = {};
-            let manualState = { isActive: false, startTime: null, valveId: null, timerId: null, flowRate: 8.33 };
-            
-            // ===== ЗАГРУЗКА ДАННЫХ =====
-            function loadData() {
-                const saved = localStorage.getItem(DB_KEY);
-                const DEFAULT_DB = {
-                    1: { active: 1, task: { operations: [] } },
-                    2: { active: 0, task: { operations: [] } },
-                    3: { active: 1, task: { operations: [] } },
-                    4: { active: 0, task: { operations: [] } },
-                    5: { active: 1, task: { operations: [] } },
-                    6: { active: 0, task: { operations: [] } },
-                    7: { active: 0, task: { operations: [] } },
-                    8: { active: 1, task: { operations: [] } }
-                };
-                db = saved ? JSON.parse(saved) : DEFAULT_DB;
-            }
-            function saveData() { localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-            
-            // ===== ФОРМАТИРОВАНИЕ ВРЕМЕНИ =====
-            function fmt(sec) {
-                const m = Math.floor(sec/60).toString().padStart(2,'0');
-                const s = (sec%60).toString().padStart(2,'0');
-                return `${m}:${s}`;
-            }
-            
-            // ===== ОБНОВЛЕНИЕ ПАНЕЛИ =====
-            function updatePanel() {
-                const st = document.getElementById('manual-status');
-                const tm = document.getElementById('manual-timer');
-                const vl = document.getElementById('manual-volume');
-                const on = document.getElementById('btn-manual-on');
-                const off = document.getElementById('btn-manual-off');
-                if (!st || !tm || !vl || !on || !off) return;
-                
-                if (manualState.isActive) {
-                    const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
-                    tm.textContent = fmt(elapsed);
-                    vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
-                    st.textContent = 'Работает'; st.style.color = '#22c55e';
-                    on.disabled = true; off.disabled = false;
-                    on.style.opacity = '0.5'; off.style.opacity = '1';
-                } else {
-                    tm.textContent = '00:00'; vl.textContent = '—';
-                    st.textContent = 'Ожидание'; st.style.color = 'var(--accent-green)';
-                    on.disabled = false; off.disabled = true;
-                    on.style.opacity = '1'; off.style.opacity = '0.5';
-                }
-            }
-            
-            // ===== ВКЛЮЧИТЬ =====
-            window.startWatering = function() {
-                if (manualState.isActive) return;
-                const sel = document.getElementById('manual-valve-select');
-                if (!sel) return;
-                
-                manualState.valveId = parseInt(sel.value);
-                manualState.startTime = Date.now();
-                manualState.isActive = true;
-                
-                if (db[manualState.valveId]) { db[manualState.valveId].active = 1; saveData(); }
-                
-                // МГНОВЕННОЕ обновление переключателя в сайдбаре
-                const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
-                if (toggle) toggle.classList.add('on');
-                
-                // Таймер обновляет UI каждый тик
-                manualState.timerId = setInterval(() => {
-                    const elapsed = Math.floor((Date.now() - manualState.startTime) / 1000);
-                    const tm = document.getElementById('manual-timer');
-                    const vl = document.getElementById('manual-volume');
-                    if (tm) tm.textContent = fmt(elapsed);
-                    if (vl) vl.textContent = Math.round(elapsed * manualState.flowRate) + ' мл';
-                }, 1000);
-                
-                updatePanel();
-                console.log('▶ ВКЛЮЧЕН клапан', manualState.valveId);
-            };
-            
-            // ===== ВЫКЛЮЧИТЬ + ЖУРНАЛ =====
-            window.stopWatering = function() {
-                if (!manualState.isActive) return;
-                
-                clearInterval(manualState.timerId);
-                const duration = Math.floor((Date.now() - manualState.startTime) / 1000);
-                const volume = Math.round(duration * manualState.flowRate);
-                
-                manualState.isActive = false;
-                manualState.timerId = null;
-                
-                if (db[manualState.valveId]) { db[manualState.valveId].active = 0; saveData(); }
-                
-                const toggle = document.querySelector(`.valve-item[data-valve="${manualState.valveId}"] .valve-toggle`);
-                if (toggle) toggle.classList.remove('on');
-                
-                // Запись в журнал
-                const logs = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
-                logs.push({
-                    ts: new Date().toISOString(),
-                    valve: manualState.valveId,
-                    type: 'manual',
-                    duration: duration,
-                    volume: volume,
-                    status: 'completed'
-                });
-                localStorage.setItem(LOG_KEY, JSON.stringify(logs));
-                
-                // Обновление журнала на странице
-                const tbody = document.getElementById('journal-tbody');
-                const empty = document.getElementById('journal-empty');
-                if (tbody) {
-                    if (empty) empty.style.display = 'none';
-                    const row = `<tr><td>${new Date().toLocaleString('ru-RU')}</td><td>Клапан ${manualState.valveId}</td><td>Вручную</td><td>${fmt(duration)}</td><td>${volume} мл</td><td><span class="status-badge status-success">Успешно</span></td></tr>`;
-                    tbody.insertAdjacentHTML('afterbegin', row);
-                }
-                
-                updatePanel();
-                alert(`Клапан ${manualState.valveId}: ${fmt(duration)}, ~${volume} мл — записано в журнал`);
-                console.log('■ ВЫКЛЮЧЕН клапан', manualState.valveId);
-            };
-            
-            // ===== ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК =====
-            window.switchTab = function(tabName) {
-                // Скрыть все панели
-                document.getElementById('configPanel').style.display = 'none';
-                document.getElementById('journalPanel').style.display = 'none';
-                document.getElementById('manualPanel').style.display = 'none';
-                
-                // Убрать active у всех табов
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                
-                // Показать нужное
-                if (tabName === 'manual') {
-                    document.getElementById('manualPanel').style.display = 'block';
-                    document.querySelector('.tab[data-tab="manual"]').classList.add('active');
-                    updatePanel();
-                } else if (tabName === 'config') {
-                    document.getElementById('configPanel').style.display = 'block';
-                    document.querySelector('.tab[data-tab="config"]').classList.add('active');
-                } else if (tabName === 'journal') {
-                    document.getElementById('journalPanel').style.display = 'block';
-                    document.querySelector('.tab[data-tab="journal"]').classList.add('active');
-                }
-            };
-            
-            // ===== ИНИЦИАЛИЗАЦИЯ ПОСЛЕ ЗАГРУЗКИ =====
-            document.addEventListener('DOMContentLoaded', function() {
-                loadData();
-                
-                // Прямая привязка кнопок через onclick в HTML уже работает, но добавим для надёжности:
-                const btnOn = document.getElementById('btn-manual-on');
-                const btnOff = document.getElementById('btn-manual-off');
-                if (btnOn) btnOn.onclick = function(e) { e.preventDefault(); window.startWatering(); };
-                if (btnOff) btnOff.onclick = function(e) { e.preventDefault(); window.stopWatering(); };
-                
-                // Привязка табов
-                document.querySelectorAll('.tab').forEach(tab => {
-                    tab.onclick = function(e) {
-                        e.preventDefault();
-                        window.switchTab(this.dataset.tab);
-                    };
-                });
-                
-                // Показать первую панель по умолчанию
-                window.switchTab('config');
-                
-                console.log('Модуль полива инициализирован');
-            });
-        })();
-    </script>
-    </body>
-    </html>
-    )rawliteral";
-// ===================== ИНИЦИАЛИЗАЦИЯ БД =====================
-void initDatabase() {
-  if (sqlite3_open("/sd/watering.db", &db) != SQLITE_OK) {
-    Serial.println("❌ Ошибка открытия БД");
-    return;
-  }
-
-  const char* schema = R"SQL(
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS valves (
-      id INTEGER PRIMARY KEY, pin_number INTEGER, max_duration_sec INTEGER DEFAULT 300,
-      daily_limit_ml REAL, active INTEGER DEFAULT 1, moisture_mode INTEGER DEFAULT 0, created_ts INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS watering_tasks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, suspended INTEGER DEFAULT 0, active INTEGER DEFAULT 1,
-      valve_id INTEGER, schedule_type TEXT NOT NULL, schedule_time TEXT, schedule_interval_min INTEGER,
-      schedule_days TEXT, last_executed_ts INTEGER, next_execution_ts INTEGER,
-      priority INTEGER DEFAULT 5, cycle_repeat INTEGER DEFAULT 1,
-      max_duration_sec INTEGER, max_volume_ml REAL, created_ts INTEGER, updated_ts INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS watering_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, valve_id INTEGER,
-      duration_sec INTEGER, volume_ml REAL, status TEXT DEFAULT 'completed',
-      error_text TEXT, triggered_by TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS moisture_sensors (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      valve_id INTEGER NOT NULL,
-      active INTEGER DEFAULT 1,
-      check_interval_min INTEGER DEFAULT 30,
-      target_moisture_percent REAL DEFAULT 40.0,
-      max_watering_duration_sec INTEGER DEFAULT 180,
-      min_pause_hours INTEGER DEFAULT 2,
-      last_moisture_percent REAL DEFAULT 0,
-      last_check_ts INTEGER,
-      last_watering_ts INTEGER,
-      sensor_ok INTEGER DEFAULT 1,
-      failed_checks INTEGER DEFAULT 0,
-      created_ts INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS manual_watering (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      valve_id INTEGER NOT NULL,
-      start_ts INTEGER NOT NULL,
-      duration_sec INTEGER NOT NULL,
-      volume_ml REAL,
-      finished_ts INTEGER,
-      status TEXT DEFAULT 'completed',
-      error_text TEXT,
-      created_ts INTEGER
-    );
-  )SQL";
-
-  char *err = nullptr;
-  sqlite3_exec(db, schema, nullptr, nullptr, &err);
-  if (err) {
-    Serial.printf("SQL Error: %s\n", err);
-    sqlite3_free(err);
-  } else {
-    Serial.println("✅ БД готова");
-  }
+// === НОВАЯ ФУНКЦИЯ: Синхронизация времени с ESP32 ===
+async function syncTime() {
+    try {
+        await fetch('/api/sync_time', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ time: Math.floor(Date.now() / 1000) })
+        });
+    } catch(e) {}
 }
+// ====================================================
 
-bool startWatering(int valve, unsigned long durationSec, const char* triggered_by = "manual") {
-  if (valve < 0 || valve >= NUM_VALVES || valveStates[valve]) return false;
-
-  // Проверка конфликта (клапан уже работает)
-  if (valveStates[valve]) {
-    Serial.printf("⚠️ Клапан %d уже работает\n", valve+1);
-    return false;
-  }
-
-  mosfet.digitalWrite(valve, HIGH);
-  valveStates[valve] = true;
-  valveStartTime[valve] = millis();
-  valveDuration[valve] = durationSec * 1000UL;
-
-  logWatering(valve + 1, durationSec, "started", triggered_by);
-  Serial.printf("🚰 Запущен полив клапана %d на %lu сек (%s)\n", valve+1, durationSec, triggered_by);
-  return true;
-}
-
-void updateWateringTimers() {
-  unsigned long now = millis();
-  for (int i = 0; i < NUM_VALVES; i++) {
-    if (valveStates[i] && (now - valveStartTime[i] >= valveDuration[i])) {
-      mosfet.digitalWrite(i, LOW);
-      valveStates[i] = false;
-      logWatering(i + 1, valveDuration[i]/1000, "completed", "timer");
-      Serial.printf("✅ Клапан %d закрыт по таймеру\n", i+1);
+async function init() {
+    loadTheme();
+    setupThemeToggle();
+    await loadFromDB();
+    await loadSchedules();
+    renderSidebar();
+    renderJournal();
+    renderSchedules();
+    setupListeners();
+    startClock();
+    syncWithESP();
+    
+    syncTime(); // Синхронизируем время при загрузке
+    setInterval(syncTime, 60000); // Обновляем время каждую минуту
+    
+    const dtInput = document.getElementById('input-datetime');
+    if (dtInput) {
+        const now = new Date();
+        now.setMinutes(now.getMinutes() + 1);
+        const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        dtInput.value = local;
     }
-  }
 }
 
-// ===================== ЛОГИРОВАНИЕ =====================
-void logWatering(int valve_id, unsigned long duration_sec, const char* status, const char* triggered_by) {
-  char sql[512];
-  snprintf(sql, sizeof(sql),
-    "INSERT INTO watering_log (ts, valve_id, duration_sec, status, triggered_by) "
-    "VALUES (strftime('%%s','now'), %d, %lu, '%s', '%s');",
-    valve_id, duration_sec, status, triggered_by);
-
-  char *err = nullptr;
-  sqlite3_exec(db, sql, nullptr, nullptr, &err);
-  if (err) {
-    Serial.printf("Log error: %s\n", err);
-    sqlite3_free(err);
-  }
+function loadTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.body.className = 'theme-' + savedTheme;
 }
 
-// ===================== ПРОВЕРКА КОНФЛИКТОВ =====================
-bool checkScheduleConflict(int valve_id, time_t start_time, unsigned long duration_sec) {
-  // Проверка, что клапан сейчас не работает
-  if (valveStates[valve_id-1]) return true;
-
-  // Здесь можно добавить SQL-запрос на пересечение расписаний
-  return false;
-}
-
-// ===================== ОСНОВНАЯ ПРОВЕРКА РАСПИСАНИЯ =====================
-void checkSchedule() {
-  if (millis() - lastScheduleCheck < SCHEDULE_INTERVAL) return;
-  lastScheduleCheck = millis();
-
-  Serial.println("📅 Проверка расписания...");
-
-  const char* query = 
-    "SELECT id, valve_id, schedule_type, schedule_time, schedule_interval_min, "
-    "next_execution_ts, max_duration_sec FROM watering_tasks "
-    "WHERE active = 1 AND suspended = 0 ORDER BY priority DESC;";
-
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db, query, -1, &stmt, nullptr) != SQLITE_OK) return;
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    int task_id = sqlite3_column_int(stmt, 0);
-    int valve_id = sqlite3_column_int(stmt, 1);
-    const char* type = (const char*)sqlite3_column_text(stmt, 2);
-    unsigned long duration = sqlite3_column_int(stmt, 6);
-// ===================== РАСЧЁТ next_execution_ts =====================
-time_t calculateNextExecution(sqlite3_stmt *stmt) {
-  const char* schedule_type = (const char*)sqlite3_column_text(stmt, 2);  // schedule_type
-  const char* schedule_time = (const char*)sqlite3_column_text(stmt, 3); // "HH:MM"
-  int interval_min = sqlite3_column_int(stmt, 4);                        // interval
-  const char* schedule_days = (const char*)sqlite3_column_text(stmt, 5); // "1,3,5"
-
-  time_t now = time(nullptr);
-  struct tm t = *localtime(&now);
-
-  if (strcmp(schedule_type, "once") == 0) {
-    // Однократно — не пересчитываем
-    return sqlite3_column_int64(stmt, 9); // next_execution_ts из БД
-  }
-
-  if (strcmp(schedule_type, "daily") == 0 || strcmp(schedule_type, "sunrise") == 0 || strcmp(schedule_type, "sunset") == 0) {
-    int hour = 8, minute = 0;
-    if (schedule_time) sscanf(schedule_time, "%d:%d", &hour, &minute);
-    
-    t.tm_hour = hour;
-    t.tm_min = minute;
-    t.tm_sec = 0;
-    
-    time_t next = mktime(&t);
-    if (next <= now) next += 86400; // следующий день
-    return next;
-  }
-
-  if (strcmp(schedule_type, "weekly") == 0) {
-    int hour = 8, minute = 0;
-    if (schedule_time) sscanf(schedule_time, "%d:%d", &hour, &minute);
-    
-    int targetDays[7] = {0};
-    int count = 0;
-    if (schedule_days) {
-      char buf[32];
-      strncpy(buf, schedule_days, sizeof(buf));
-      char *token = strtok(buf, ",");
-      while (token && count < 7) {
-        targetDays[count++] = atoi(token) % 7; // 0=Sunday в tm_wday
-      }
+function setupThemeToggle() {
+    const themeSwitcher = document.querySelector('.theme-switcher');
+    if (themeSwitcher) {
+        themeSwitcher.addEventListener('click', () => {
+            const isDark = document.body.classList.contains('theme-dark');
+            const newTheme = isDark ? 'light' : 'dark';
+            document.body.className = 'theme-' + newTheme;
+            localStorage.setItem('theme', newTheme);
+        });
     }
-    
-    for (int i = 0; i < 7; i++) {
-      t.tm_hour = hour;
-      t.tm_min = minute;
-      t.tm_sec = 0;
-      time_t candidate = mktime(&t);
-      
-      if (candidate > now) {
-        for (int d = 0; d < count; d++) {
-          if (t.tm_wday == targetDays[d]) return candidate;
+}
+
+function startClock() {
+    function updateClock() {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const timeStr = now.toLocaleTimeString('ru-RU');
+        document.getElementById('ntpClock').textContent = `${dateStr} ${timeStr}`;
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+}
+
+async function loadFromDB() {
+    try {
+        const [valvesRes, journalRes] = await Promise.all([
+            fetch('/api/valves'),
+            fetch('/api/journal')
+        ]);
+        const valvesData = await valvesRes.json();
+        const journalData = await journalRes.json();
+        appState.valves = {};
+        valvesData.forEach(v => {
+            appState.valves[v.id] = { active: v.active, plant_name: v.plant_name };
+        });
+        appState.journal = journalData;
+        document.getElementById('espStatus').className = 'esp-status online';
+        document.getElementById('espStatus').innerHTML = '<span class="esp-dot"></span>Подключён';
+    } catch (e) {
+        console.error('Ошибка загрузки из БД', e);
+        document.getElementById('espStatus').className = 'esp-status offline';
+        document.getElementById('espStatus').innerHTML = '<span class="esp-dot"></span>Нет связи';
+    }
+}
+
+async function loadSchedules() {
+    try {
+        const res = await fetch('/api/schedules');
+        appState.schedules = await res.json();
+    } catch (e) {
+        console.error('Ошибка загрузки расписания', e);
+        appState.schedules = [];
+    }
+}
+
+async function saveScheduleToDB(schedule) {
+    try {
+        const res = await fetch('/api/schedules', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(schedule)
+        });
+        const data = await res.json();
+        if (data.ok) {
+            await loadSchedules();
+            renderSchedules();
+            showNotification('Задача добавлена в расписание');
         }
-      }
-      t.tm_mday++;
-      mktime(&t); // нормализация
+    } catch(e) {
+        console.error('Ошибка сохранения расписания', e);
     }
-    return now + 86400; // fallback
-  }
-
-  if (strcmp(schedule_type, "interval") == 0) {
-    if (interval_min <= 0) interval_min = 60;
-    return now + (interval_min * 60);
-  }
-
-  return now + 3600; // fallback
 }
 
-// ===================== ОБНОВЛЕНИЕ В БД =====================
-void updateNextExecutionTime(int task_id, time_t next_ts) {
+async function deleteScheduleFromDB(id) {
+    try {
+        await fetch(`/api/schedules?id=${id}`, { method: 'DELETE' });
+        await loadSchedules();
+        renderSchedules();
+        showNotification('Задача удалена из расписания');
+    } catch(e) {
+        console.error('Ошибка удаления расписания', e);
+    }
+}
+
+async function saveValveToDB(valveId, data) {
+    try {
+        await fetch('/api/valves', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ id: valveId, ...data })
+        });
+        appState.valves[valveId] = { ...appState.valves[valveId], ...data };
+    } catch(e) {
+        console.error('Ошибка сохранения клапана', e);
+    }
+}
+
+async function addJournalEntryToDB(entry) {
+    try {
+        await fetch('/api/journal', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(entry)
+        });
+        await loadFromDB();
+        renderJournal();
+    } catch(e) {
+        console.error('Ошибка записи в журнал', e);
+    }
+}
+
+async function clearJournalInDB(valveId) {
+    try {
+        const url = valveId === 0 ? '/api/journal?all=1' : `/api/journal?valve_id=${valveId}`;
+        await fetch(url, { method: 'DELETE' });
+        await loadFromDB();
+        renderJournal();
+    } catch(e) {
+        console.error('Ошибка очистки журнала', e);
+    }
+}
+
+function renderSidebar() {
+    const container = document.getElementById('valvesSidebar');
+    if (!container) return;
+    container.innerHTML = '';
+    for (let i = 1; i <= 8; i++) {
+        const d = appState.valves[i] || { active: 0, plant_name: '—'};
+        const statusText = d.active ? 'Active' : 'Неактивен';
+        const statusClass = d.active ? '' : 'inactive';
+        container.innerHTML += `
+            <div class="valve-item ${appState.currentValve === i ? 'active' : ''}" data-valve="${i}" onclick="switchValve(${i})">
+                <div class="valve-header"><span class="valve-title"><span class="valve-number">${i}</span>Клапан ${i}</span></div>
+                <div class="valve-info">Растение: ${d.plant_name}</div>
+                <span class="valve-status ${statusClass}">${statusText}</span>
+            </div>`;
+    }
+}
+
+function renderJournal() {
+    const filterValve = parseInt(document.getElementById('journal-valve-filter').value) || 0;
+    const filtered = filterValve === 0 ? appState.journal : appState.journal.filter(l => l.valve_id === filterValve);
+    const totalVolume = filtered.reduce((sum, log) => sum + (Number(log.volume_ml) || 0), 0);
+    document.getElementById('journal-total-volume').textContent = totalVolume.toFixed(2) + ' мл';
+    document.getElementById('journal-count').textContent = filtered.length;
+    const tbody = document.getElementById('journal-tbody');
+    const emptyMsg = document.getElementById('journal-empty');
+    tbody.innerHTML = '';
+    if (filtered.length === 0) { emptyMsg.style.display = 'block'; return; }
+    emptyMsg.style.display = 'none';
+    filtered.sort((a, b) => new Date(b.ts) - new Date(a.ts)).forEach(log => {
+        const statusClass = log.status === 'completed' ? 'status-success' : 'status-fail';
+        const typeText = { schedule: 'Расписание', sensor: 'Датчик', manual: 'Вручную', once: 'Однократно' }[log.type] || log.type;
+        const volStr = Number(log.volume_ml).toFixed(2);
+        tbody.innerHTML += `<tr>
+            <td>${new Date(log.ts).toLocaleString('ru-RU')}</td>
+            <td><b>Клапан ${log.valve_id}</b></td>
+            <td>${typeText}</td>
+            <td>${log.duration_sec} сек</td>
+            <td>${volStr} мл</td>
+            <td><span class="status-badge ${statusClass}">${log.status === 'completed' ? 'Успешно' : 'Провалено'}</span></td>
+        </tr>`;
+    });
+}
+
+function renderSchedules() {
+    const container = document.getElementById('operations-list');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!appState.schedules || appState.schedules.length === 0) {
+        container.innerHTML = '<div style="text-align:center;padding:30px;color:#64748b;font-style:italic;">Задач пока нет.</div>';
+        return;
+    }
+    appState.schedules.forEach(s => {
+        const typeLabels = { 'daily': 'Ежедневно', 'weekly': 'Еженедельно', 'interval': 'Интервал', 'once': 'Однократно', 'sunrise': 'Рассвет', 'sunset': 'Закат' };
+        const typeLabel = typeLabels[s.type] || s.type;
+        let scheduleInfo = '';
+        if (s.type === 'once') {
+            const dt = new Date(s.schedule_time);
+            scheduleInfo = `<b>Когда:</b> ${dt.toLocaleString('ru-RU')}`;
+        } else {
+            scheduleInfo = `<b>Время:</b> ${s.schedule_time}`;
+        }
+        container.innerHTML += `
+            <div class="schedule-card">
+                <button class="schedule-delete-btn" onclick="deleteScheduleFromDB(${s.id})" title="Удалить задачу">×</button>
+                <div class="schedule-card-header">
+                    <div class="schedule-card-title">
+                        <span class="valve-number">${s.valve_id}</span>
+                        Клапан ${s.valve_id}
+                    </div>
+                    <span class="schedule-type-badge">${typeLabel}</span>
+                </div>
+                <div class="schedule-card-body">
+                    <div>${scheduleInfo}</div>
+                    <div><b>Объём:</b> ${Number(s.volume_ml).toFixed(2)} мл</div>
+                    <div><b>Длит.:</b> ${s.duration_sec} сек</div>
+                    <div><b>Приоритет:</b> ${s.priority}</div>
+                </div>
+            </div>`;
+    });
+}
+
+function switchValve(id) {
+    appState.currentValve = id;
+    renderSidebar();
+    document.getElementById('input-valve-select').value = id;
+}
+
+async function startWatering() {
+    if (appState.manualState.isActive) return;
+    const sel = document.getElementById('manual-valve-select');
+    appState.manualState.valveId = parseInt(sel.value);
+    try {
+        const res = await fetch(`/valve?id=${appState.manualState.valveId - 1}&state=1`);
+        if (!(await res.json()).ok) throw new Error('Ошибка');
+    } catch (e) {
+        showNotification('Контроллер недоступен');
+        return;
+    }
+    appState.manualState.startTime = Date.now();
+    appState.manualState.isActive = true;
+    await saveValveToDB(appState.manualState.valveId, { active: 1 });
+    renderSidebar();
+    appState.manualState.timerId = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - appState.manualState.startTime) / 1000);
+        const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+        const s = (elapsed % 60).toString().padStart(2, '0');
+        document.getElementById('manual-timer').textContent = `${m}:${s}`;
+        fetch('/flowmeter')
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok && appState.manualState.isActive) {
+                    const vol = (data.volume_ml || 0).toFixed(2);
+                    document.getElementById('manual-volume').textContent = vol + ' мл';
+                }
+            })
+            .catch(() => {});
+    }, 1000);
+    document.getElementById('manual-status').textContent = 'Работает';
+    document.getElementById('manual-status').style.color = '#22c55e';
+    document.getElementById('manual-volume').textContent = '0.00 мл';
+    document.getElementById('btn-manual-on').disabled = true;
+    document.getElementById('btn-manual-off').disabled = false;
+    showNotification(`Клапан ${appState.manualState.valveId} открыт`);
+}
+
+async function stopWatering() {
+    if (!appState.manualState.isActive) return;
+    let realVolumeMl = 0;
+    let pulses = 0;
+    try { await fetch(`/valve?id=${appState.manualState.valveId - 1}&state=0`); } catch(e) {}
+    try {
+        const flowRes = await fetch('/flowmeter');
+        const flowData = await flowRes.json();
+        if (flowData.ok) {
+            pulses = flowData.pulses || 0;
+            realVolumeMl = flowData.volume_ml || 0;
+        }
+    } catch(e) {}
+    clearInterval(appState.manualState.timerId);
+    const duration = Math.floor((Date.now() - appState.manualState.startTime) / 1000);
+    appState.manualState.isActive = false;
+    await saveValveToDB(appState.manualState.valveId, { active: 0 });
+    renderSidebar();
+    const volRounded = Number(realVolumeMl.toFixed(2));
+    const entry = {
+        ts: new Date().toISOString(),
+        valve_id: appState.manualState.valveId,
+        type: 'manual',
+        duration_sec: duration,
+        volume_ml: volRounded,
+        status: 'completed'
+    };
+    await addJournalEntryToDB(entry);
+    document.getElementById('manual-timer').textContent = '00:00';
+    document.getElementById('manual-volume').textContent = volRounded.toFixed(2) + ' мл';
+    document.getElementById('manual-status').textContent = 'Ожидание';
+    document.getElementById('manual-status').style.color = 'var(--accent-green)';
+    document.getElementById('btn-manual-on').disabled = false;
+    document.getElementById('btn-manual-off').disabled = true;
+    showNotification(`Клапан ${appState.manualState.valveId}: ${Math.floor(duration/60)}м ${duration%60}с, ${volRounded.toFixed(2)} мл`);
+}
+
+function clearValveJournal() {
+    const filterValve = parseInt(document.getElementById('journal-valve-filter').value) || 0;
+    const count = filterValve === 0 ? appState.journal.length : appState.journal.filter(l => l.valve_id === filterValve).length;
+    if (count === 0) { showNotification('Журнал уже пуст'); return; }
+    if (!confirm(`Удалить ${count} записей?`)) return;
+    clearJournalInDB(filterValve).then(() => {
+        showNotification(filterValve === 0 ? 'Журнал полностью очищен' : `Записи клапана ${filterValve} удалены`);
+    });
+}
+
+function saveAllData() { showNotification('Настройки сохранены в БД'); }
+
+function showNotification(msg) {
+    const ex = document.getElementById('gs-notify'); if (ex) ex.remove();
+    const n = document.createElement('div');
+    n.id = 'gs-notify';
+    n.style.cssText = 'position:fixed;top:20px;right:20px;background:var(--accent-green);color:#fff;padding:12px 24px;border-radius:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.2);transition:opacity .3s;';
+    n.textContent = msg;
+    document.body.appendChild(n);
+    setTimeout(() => { n.style.opacity = '0'; setTimeout(() => n.remove(), 300); }, 2500);
+}
+
+function updateFormLogic() {
+    const type = document.getElementById('input-schedule-type')?.value;
+    if (!type) return;
+    const timeGroup = document.getElementById('group-time');
+    const datetimeGroup = document.getElementById('group-datetime');
+    const daysGroup = document.getElementById('group-days');
+    const intervalGroup = document.getElementById('group-interval');
+    const cyclesGroup = document.getElementById('group-cycles');
+    const weeklyContainer = document.getElementById('weekly-details-container');
+    const toggle = (el, show) => { if (!el) return; el.style.display = show ? 'block' : 'none'; };
+    
+    toggle(timeGroup, false);
+    toggle(datetimeGroup, false);
+    toggle(daysGroup, false);
+    toggle(intervalGroup, false);
+    toggle(cyclesGroup, true);
+    if (weeklyContainer) { weeklyContainer.style.display = 'none'; weeklyContainer.innerHTML = ''; }
+    
+    switch (type) {
+        case 'daily': toggle(timeGroup, true); break;
+        case 'once': toggle(datetimeGroup, true); toggle(timeGroup, false); toggle(cyclesGroup, false); break;
+        case 'weekly': toggle(timeGroup, true); toggle(daysGroup, true); break;
+        case 'interval': toggle(intervalGroup, true); break;
+    }
+}
+
+async function addTaskOperation() {
+    const getVal = (id) => document.getElementById(id)?.value || '';
+    const getNum = (id, def) => { const v = parseInt(getVal(id)); return isNaN(v) ? def : v; };
+    const valve = parseInt(getVal('input-valve-select')) || 1;
+    const scheduleType = getVal('input-schedule-type') || 'daily';
+    const priority = getNum('input-priority', 5);
+    const waterVolume = getNum('input-water-volume', 200);
+    const waterDuration = getNum('input-water-duration', 30);
+    let scheduleTime = '';
+    if (scheduleType === 'once') {
+        const dtVal = getVal('input-datetime');
+        if (!dtVal) {
+            showNotification('Укажите дату и время выполнения');
+            return;
+        }
+        scheduleTime = new Date(dtVal).toISOString();
+    } else {
+        scheduleTime = getVal('input-time') || '08:00';
+    }
+    const schedule = {
+        valve_id: valve,
+        type: scheduleType,
+        schedule_time: scheduleTime,
+        volume_ml: waterVolume,
+        duration_sec: waterDuration,
+        priority: priority,
+        status: 'pending'
+    };
+    await saveScheduleToDB(schedule);
+}
+
+function setupListeners() {
+    document.querySelectorAll('.tab').forEach(tab => tab.onclick = function() {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+        document.getElementById('manualPanel').style.display = this.dataset.tab === 'manual' ? 'block' : 'none';
+        document.getElementById('configPanel').style.display = this.dataset.tab === 'config' ? 'block' : 'none';
+        document.getElementById('journalPanel').style.display = this.dataset.tab === 'journal' ? 'block' : 'none';
+        if (this.dataset.tab === 'journal') renderJournal();
+    });
+    document.getElementById('journal-valve-filter').onchange = renderJournal;
+    const schedType = document.getElementById('input-schedule-type');
+    if (schedType) schedType.onchange = () => updateFormLogic();
+    updateFormLogic();
+}
+
+async function syncWithESP() {
+    setInterval(async () => {
+        try {
+            const res = await fetch('/states');
+            const data = await res.json();
+            let changed = false;
+            data.states.forEach((state, idx) => {
+                const id = idx + 1;
+                if (appState.valves[id] && appState.valves[id].active !== (state ? 1 : 0)) {
+                    appState.valves[id].active = state ? 1 : 0;
+                    changed = true;
+                }
+            });
+            if (changed) renderSidebar();
+        } catch(e) {}
+    }, 3000);
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
+)rawliteral";
+
+void handleRoot() {
+  server.send_P(200, "text/html; charset=utf-8", PAGE_HTML);
+}
+
+void handleApiValvesGet() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  const char* sql = "SELECT id, plant_name, active FROM valves ORDER BY id;";
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      JsonObject obj = arr.add<JsonObject>();
+      obj["id"] = sqlite3_column_int(stmt, 0);
+      obj["plant_name"] = (const char*)sqlite3_column_text(stmt, 1);
+      obj["active"] = sqlite3_column_int(stmt, 2);
+    }
+    sqlite3_finalize(stmt);
+  }
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleApiValvesPost() {
+  if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  JsonDocument doc;
+  deserializeJson(doc, server.arg("plain"));
+  const char* sql = "UPDATE valves SET plant_name=?, active=? WHERE id=?;";
+  sqlite3_stmt* stmt;
+  sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+  sqlite3_bind_text(stmt, 1, doc["plant_name"] | "—", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 2, doc["active"] | 0);
+  sqlite3_bind_int(stmt, 3, doc["id"] | 1);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleApiJournalGet() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  const char* sql = "SELECT ts, valve_id, type, duration_sec, volume_ml, status FROM journal ORDER BY id DESC;";
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      JsonObject obj = arr.add<JsonObject>();
+      obj["ts"] = (const char*)sqlite3_column_text(stmt, 0);
+      obj["valve_id"] = sqlite3_column_int(stmt, 1);
+      obj["type"] = (const char*)sqlite3_column_text(stmt, 2);
+      obj["duration_sec"] = sqlite3_column_int(stmt, 3);
+      obj["volume_ml"] = sqlite3_column_double(stmt, 4);
+      obj["status"] = (const char*)sqlite3_column_text(stmt, 5);
+    }
+    sqlite3_finalize(stmt);
+  }
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
+
+void handleApiJournalPost() {
+  if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  JsonDocument doc;
+  deserializeJson(doc, server.arg("plain"));
+  const char* sql = "INSERT INTO journal (ts, valve_id, type, duration_sec, volume_ml, status) VALUES (?, ?, ?, ?, ?, ?);";
+  sqlite3_stmt* stmt;
+  sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+  sqlite3_bind_text(stmt, 1, doc["ts"] | "", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 2, doc["valve_id"] | 0);
+  sqlite3_bind_text(stmt, 3, doc["type"] | "manual", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 4, doc["duration_sec"] | 0);
+  sqlite3_bind_double(stmt, 5, doc["volume_ml"] | 0.0);
+  sqlite3_bind_text(stmt, 6, doc["status"] | "completed", -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(stmt) == SQLITE_DONE) {
+    long long newId = sqlite3_last_insert_rowid(db);
+    Serial.println();
+    Serial.printf("ID записи : %-42lld \n", newId);
+    Serial.printf("Время : %-42s \n", (const char*)(doc["ts"] | "N/A"));
+    Serial.printf("Клапан : %-42d \n", doc["valve_id"] | 0);
+    Serial.printf("Тип : %-42s \n", (const char*)(doc["type"] | "N/A"));
+    Serial.printf("Длительность : %-39d \n", doc["duration_sec"] | 0);
+    Serial.printf("Объём : %-39.2f\n", (double)(doc["volume_ml"] | 0.0));
+    Serial.printf("Статус : %-42s\n", (const char*)(doc["status"] | "N/A"));
+    Serial.println();
+  }
+  sqlite3_finalize(stmt);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleApiJournalDelete() {
+  int valveId = server.arg("valve_id").toInt();
+  int all = server.arg("all").toInt();
   char sql[256];
-  snprintf(sql, sizeof(sql),
-    "UPDATE watering_tasks SET next_execution_ts = %lld, updated_ts = strftime('%%s','now') "
-    "WHERE id = %d;", (long long)next_ts, task_id);
-  
-  char *err = nullptr;
-  sqlite3_exec(db, sql, nullptr, nullptr, &err);
-  if (err) {
-    Serial.printf("Update next_ts error: %s\n", err);
-    sqlite3_free(err);
+  if (all == 1) strcpy(sql, "DELETE FROM journal;");
+  else snprintf(sql, sizeof(sql), "DELETE FROM journal WHERE valve_id = %d;", valveId);
+  char* errMsg = NULL;
+  if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) == SQLITE_OK) {
+    Serial.printf("[SQLite] Журнал очищен (valve_id=%d, all=%d)\n", valveId, all);
+    server.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    Serial.printf("[SQLite] Ошибка очистки: %s\n", errMsg);
+    sqlite3_free(errMsg);
+    server.send(500, "application/json", "{\"ok\":false}");
   }
 }
-// ===================== УЛУЧШЕННЫЙ checkSchedule() =====================
-void checkSchedule() {
-  if (millis() - lastScheduleCheck < SCHEDULE_INTERVAL) return;
-  lastScheduleCheck = millis();
 
-  Serial.println("📅 Проверка расписания...");
+void handleApiSchedulesGet() {
+  JsonDocument doc;
+  JsonArray arr = doc.to<JsonArray>();
+  const char* sql = "SELECT id, valve_id, type, schedule_time, volume_ml, duration_sec, priority, status FROM schedules WHERE status='pending' ORDER BY schedule_time ASC;";
+  sqlite3_stmt* stmt;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      JsonObject obj = arr.add<JsonObject>();
+      obj["id"] = sqlite3_column_int(stmt, 0);
+      obj["valve_id"] = sqlite3_column_int(stmt, 1);
+      obj["type"] = (const char*)sqlite3_column_text(stmt, 2);
+      obj["schedule_time"] = (const char*)sqlite3_column_text(stmt, 3);
+      obj["volume_ml"] = sqlite3_column_double(stmt, 4);
+      obj["duration_sec"] = sqlite3_column_int(stmt, 5);
+      obj["priority"] = sqlite3_column_int(stmt, 6);
+      obj["status"] = (const char*)sqlite3_column_text(stmt, 7);
+    }
+    sqlite3_finalize(stmt);
+  }
+  String output;
+  serializeJson(doc, output);
+  server.send(200, "application/json", output);
+}
 
-  const char* query = 
-    "SELECT id, valve_id, schedule_type, schedule_time, schedule_interval_min, "
-    "schedule_days, next_execution_ts, max_duration_sec FROM watering_tasks "
-    "WHERE active = 1 AND suspended = 0 AND (next_execution_ts <= strftime('%%s','now') OR next_execution_ts IS NULL) "
-    "ORDER BY priority DESC;";
+void handleApiSchedulesPost() {
+  if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  JsonDocument doc;
+  deserializeJson(doc, server.arg("plain"));
+  const char* sql = "INSERT INTO schedules (valve_id, type, schedule_time, volume_ml, duration_sec, priority, status) VALUES (?, ?, ?, ?, ?, ?, 'pending');";
+  sqlite3_stmt* stmt;
+  sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+  sqlite3_bind_int(stmt, 1, doc["valve_id"] | 1);
+  sqlite3_bind_text(stmt, 2, doc["type"] | "once", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(stmt, 3, doc["schedule_time"] | "", -1, SQLITE_TRANSIENT);
+  sqlite3_bind_double(stmt, 4, doc["volume_ml"] | 0.0);
+  sqlite3_bind_int(stmt, 5, doc["duration_sec"] | 30);
+  sqlite3_bind_int(stmt, 6, doc["priority"] | 5);
+  if (sqlite3_step(stmt) == SQLITE_DONE) {
+    long long newId = sqlite3_last_insert_rowid(db);
+    Serial.println();
+    Serial.println("======================================================");
+    Serial.println("     НОВАЯ ЗАДАЧА ДОБАВЛЕНА В РАСПИСАНИЕ");
+    Serial.println("======================================================");
+    Serial.printf(" ID задачи : %-42lld \n", newId);
+    Serial.printf(" Клапан    : %-42d \n", doc["valve_id"] | 0);
+    Serial.printf(" Тип       : %-42s \n", (const char*)(doc["type"] | "N/A"));
+    Serial.printf(" Время     : %-42s \n", (const char*)(doc["schedule_time"] | "N/A"));
+    Serial.printf(" Объём     : %-39.2f мл \n", (double)(doc["volume_ml"] | 0.0));
+    Serial.printf(" Длит.     : %-39d сек \n", doc["duration_sec"] | 0);
+    Serial.printf(" Приоритет : %-42d \n", doc["priority"] | 5);
+    Serial.println("======================================================");
+    Serial.println();
+    server.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    server.send(500, "application/json", "{\"ok\":false}");
+  }
+  sqlite3_finalize(stmt);
+}
 
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db, query, -1, &stmt, nullptr) != SQLITE_OK) {
-    Serial.println("❌ Ошибка запроса расписания");
+void handleApiSchedulesDelete() {
+  int id = server.arg("id").toInt();
+  if (id <= 0) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  char sql[128];
+  snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id = %d;", id);
+  char* errMsg = NULL;
+  if (sqlite3_exec(db, sql, NULL, NULL, &errMsg) == SQLITE_OK) {
+    int changes = sqlite3_changes(db);
+    Serial.printf("[SQLite] Задача расписания #%d удалена (изменено строк: %d)\n", id, changes);
+    server.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    Serial.printf("[SQLite] Ошибка удаления задачи: %s\n", errMsg);
+    sqlite3_free(errMsg);
+    server.send(500, "application/json", "{\"ok\":false}");
+  }
+}
+
+// === НОВЫЙ ОБРАБОТЧИК: Синхронизация времени ===
+void handleApiSyncTime() {
+    if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) {
+        server.send(400, "application/json", "{\"ok\":false}");
+        return;
+    }
+    lastClientTimeSec = doc["time"] | 0;
+    lastSyncMillis = millis();
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+// =================================================
+
+void handleValve() {
+  if (!server.hasArg("id") || !server.hasArg("state")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing args\"}");
     return;
   }
-
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
-    int task_id = sqlite3_column_int(stmt, 0);
-    int valve_id = sqlite3_column_int(stmt, 1);
-    unsigned long duration = sqlite3_column_int(stmt, 7);
-
-    time_t next_ts = calculateNextExecution(stmt);
-
-    if (!checkScheduleConflict(valve_id, next_ts, duration)) {
-      if (startWatering(valve_id - 1, duration, "schedule")) {
-        updateNextExecutionTime(task_id, calculateNextExecution(stmt)); // пересчёт на следующий раз
-        logWatering(valve_id, duration, "completed", "schedule");
-      }
-    } else {
-      Serial.printf("⚠️ Конфликт расписания для клапана %d\n", valve_id);
-      logWatering(valve_id, duration, "skipped", "conflict");
-    }
+  int id = server.arg("id").toInt();
+  int st = server.arg("state").toInt();
+  if (id < 0 || id >= NUM_VALVES) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"bad id\"}");
+    return;
   }
-
-  sqlite3_finalize(stmt);
-}
-    if (true) {  // заменить на реальное условие
-      if (!checkScheduleConflict(valve_id, time(nullptr), duration)) {
-        startWatering(valve_id - 1, duration, "schedule");
-      } else {
-        Serial.printf("⚠️ Конфликт расписания для клапана %d\n", valve_id);
-        logWatering(valve_id, duration, "skipped", "conflict");
-      }
-    }
+  if (st) {
+    flowmetr = 0;
+    mosfet.digitalWrite(id, HIGH);
+    valveStates[id] = true;
+    Serial.printf("Клапан %d -> OPEN (расходометр обнулён)\n", id);
+  } else {
+    mosfet.digitalWrite(id, LOW);
+    valveStates[id] = false;
+    Serial.printf("Клапан %d -> CLOSE\n", id);
   }
-  sqlite3_finalize(stmt);
+  server.send(200, "application/json", "{\"ok\":true}");
 }
-// ===================== ДАТЧИКИ ВЛАЖНОСТИ =====================
-void checkMoistureSensors() {
-  if (millis() - lastMoistureCheck < MOISTURE_INTERVAL) return;
-  lastMoistureCheck = millis();
 
+void handleAll() {
+  if (!server.hasArg("state")) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  int st = server.arg("state").toInt();
   for (int i = 0; i < NUM_VALVES; i++) {
-    int raw = analogRead(MOISTURE_PINS[i]);
-    int moisture = map(raw, 0, 4095, 0, 100);
-
-    // Можно читать настройки из таблицы moisture_sensors
-    if (moisture < DRY_THRESHOLD) {
-      startWatering(i, 120, "sensor");
-    }
+    mosfet.digitalWrite(i, st ? HIGH : LOW);
+    valveStates[i] = st ? true : false;
   }
-}
-// ===================== API =====================
-void handleValve() {
-  if (server.hasArg("id") && server.hasArg("state")) {
-    int id = server.arg("id").toInt() - 1;
-    int state = server.arg("state").toInt();
-    if (id >= 0 && id < NUM_VALVES) {
-      if (state) startWatering(id, 180, "manual");
-      else {
-        mosfet.digitalWrite(id, LOW);
-        valveStates[id] = false;
-        logWatering(id+1, 0, "stopped", "manual");
-      }
-      server.send(200, "application/json", "{\"ok\":true}");
-      return;
-    }
-  }
-  server.send(400, "application/json", "{\"ok\":false}");
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
-// ===================== SETUP =====================
+void handleStates() {
+  String json = "{\"states\":[";
+  for (int i = 0; i < NUM_VALVES; i++) {
+    json += valveStates[i] ? "true" : "false";
+    if (i < NUM_VALVES - 1) json += ",";
+  }
+  json += "]}";
+  server.send(200, "application/json", json);
+}
+
+void handleFlowmeter() {
+  noInterrupts();
+  uint32_t pulses = flowmetr;
+  interrupts();
+  float volumeMl = pulses * FLOW_RATE_ML;
+  String json = "{\"ok\":true,\"pulses\":" + String(pulses) + ",\"volume_ml\":" + String(volumeMl, 2) + "}";
+  server.send(200, "application/json", json);
+}
+
+void ISR_Flow() {
+  flowmetr++;
+}
+
+// === ФУНКЦИИ АВТОМАТИЧЕСКОГО ВЫПОЛНЕНИЯ РАСПИСАНИЯ ===
+void startScheduleExecution(int scheduleId, int valveId, float targetVolume, uint32_t maxDuration) {
+    if (currentExec.active) return;
+    
+    Serial.printf("[Schedule] Запуск задачи %d для клапана %d\n", scheduleId, valveId);
+    
+    flowmetr = 0;
+    if (valveId > 0 && valveId <= NUM_VALVES) {
+        mosfet.digitalWrite(valveId - 1, HIGH);
+        valveStates[valveId - 1] = true;
+    }
+    
+    currentExec.active = true;
+    currentExec.scheduleId = scheduleId;
+    currentExec.valveId = valveId;
+    currentExec.startTime = millis();
+    currentExec.targetVolume = targetVolume;
+    currentExec.maxDuration = maxDuration;
+    currentExec.lastFlowCheck = millis();
+    
+    char sql[128];
+    snprintf(sql, sizeof(sql), "UPDATE valves SET active=1 WHERE id=%d;", valveId);
+    sqlite3_exec(db, sql, NULL, NULL, NULL);
+}
+
+void finishScheduleExecution(bool success, const char* reason) {
+    if (!currentExec.active) return;
+    
+    Serial.printf("[Schedule] Задача %d завершена: %s\n", currentExec.scheduleId, reason);
+    
+    if (currentExec.valveId > 0 && currentExec.valveId <= NUM_VALVES) {
+        mosfet.digitalWrite(currentExec.valveId - 1, LOW);
+        valveStates[currentExec.valveId - 1] = false;
+    }
+    
+    noInterrupts();
+    uint32_t pulses = flowmetr;
+    interrupts();
+    float finalVolume = pulses * FLOW_RATE_ML;
+    
+    uint32_t duration = (millis() - currentExec.startTime) / 1000;
+    
+    char sql[128];
+    snprintf(sql, sizeof(sql), "UPDATE valves SET active=0 WHERE id=%d;", currentExec.valveId);
+    sqlite3_exec(db, sql, NULL, NULL, NULL);
+    
+    sqlite3_stmt* stmt;
+    const char* insertSQL = "INSERT INTO journal (ts, valve_id, type, duration_sec, volume_ml, status) VALUES (?, ?, 'schedule', ?, ?, ?);";
+    if (sqlite3_prepare_v2(db, insertSQL, -1, &stmt, NULL) == SQLITE_OK) {
+        char ts[32];
+        uint32_t now = getCurrentTimeSec();
+        time_t rawtime = now;
+        struct tm * timeinfo = gmtime(&rawtime);
+        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", timeinfo);
+        
+        sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(stmt, 2, currentExec.valveId);
+        sqlite3_bind_int(stmt, 3, duration);
+        sqlite3_bind_double(stmt, 4, finalVolume);
+        sqlite3_bind_text(stmt, 5, success ? "completed" : "failed", -1, SQLITE_TRANSIENT);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+    
+    snprintf(sql, sizeof(sql), "DELETE FROM schedules WHERE id=%d;", currentExec.scheduleId);
+    sqlite3_exec(db, sql, NULL, NULL, NULL);
+    
+    currentExec.active = false;
+    currentExec.scheduleId = -1;
+}
+
+void checkAndExecuteSchedules() {
+    if (currentExec.active) {
+        uint32_t elapsed = (millis() - currentExec.startTime) / 1000;
+        
+        if (millis() - currentExec.lastFlowCheck >= 1000) {
+            currentExec.lastFlowCheck = millis();
+            noInterrupts();
+            uint32_t pulses = flowmetr;
+            interrupts();
+            float currentVolume = pulses * FLOW_RATE_ML;
+            
+            if (currentExec.targetVolume > 0 && currentVolume >= currentExec.targetVolume) {
+                finishScheduleExecution(true, "Объём достигнут");
+                return;
+            }
+            if (elapsed >= currentExec.maxDuration) {
+                finishScheduleExecution(true, "Время вышло");
+                return;
+            }
+        }
+        return;
+    }
+
+    uint32_t now = getCurrentTimeSec();
+    if (now == 0) return;
+
+    static uint32_t lastCheck = 0;
+    if (millis() - lastCheck < 5000) return;
+    lastCheck = millis();
+
+    const char* sql = "SELECT id, valve_id, schedule_time, volume_ml, duration_sec FROM schedules WHERE status='pending' AND type='once';";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            int id = sqlite3_column_int(stmt, 0);
+            int valveId = sqlite3_column_int(stmt, 1);
+            const char* scheduleTimeStr = (const char*)sqlite3_column_text(stmt, 2);
+            float volume = sqlite3_column_double(stmt, 3);
+            int duration = sqlite3_column_int(stmt, 4);
+            
+            struct tm tm = {0};
+            if (sscanf(scheduleTimeStr, "%d-%d-%dT%d:%d:%d", 
+                &tm.tm_year, &tm.tm_mon, &tm.tm_mday, 
+                &tm.tm_hour, &tm.tm_min, &tm.tm_sec) == 6) {
+                
+                tm.tm_year -= 1900;
+                tm.tm_mon -= 1;
+                
+                time_t targetTime = mktime(&tm);
+                
+                if (now >= targetTime) {
+                    sqlite3_finalize(stmt);
+                    startScheduleExecution(id, valveId, volume, duration);
+                    return;
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+}
+// ====================================================
+
 void setup() {
   Serial.begin(115200);
   delay(2000);
-
+  
+  // Установка временной зоны в UTC для корректного парсинга времени из JS
+  setenv("TZ", "UTC0", 1);
+  tzset();
+  
   mosfet.begin();
   mosfet.digitalWrite(ALL, LOW);
-
-  // Тест клапанов
   for (int i = 0; i < NUM_VALVES; i++) {
-    mosfet.digitalWrite(i, HIGH); delay(350); mosfet.digitalWrite(i, LOW);
+    mosfet.digitalWrite(i, HIGH);
+    delay(300);
+    mosfet.digitalWrite(i, LOW);
   }
-
-  if (SD.begin(PIN_CS_SD)) Serial.println("✅ SD OK");
+  if (!SD.begin(PIN_CS_SD)) {
+    Serial.printf("\nFlash-память не обнаружена\n");
+  } else {
+    uint8_t cardType = SD.cardType();
+    if (cardType != CARD_NONE) {
+      uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+      Serial.printf("SD: %llu MB\n", cardSize);
+    }
+  }
   initDatabase();
-  configTime(3 * 3600, 0, "pool.ntp.org");
+  pinMode(0, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(0), ISR_Flow, RISING);
+  Serial.printf("\nТочка доступа Wifi:\n");
   WiFi.AP.begin();
   WiFi.AP.config(ap_ip, ap_ip, ap_subnet, ap_leaseStart, ap_dns);
   WiFi.AP.create(AP_SSID, AP_PASS);
-
-  server.on("/", [](){ server.send_P(200, "text/html", MAIN_HTML); });
-  server.on("/api/valve", HTTP_GET, handleValve);
-
+  if (!WiFi.AP.waitStatusBits(ESP_NETIF_STARTED_BIT, 1000)) {
+    Serial.printf("\tнедоступна\n");
+    return;
+  }
+  Serial.println(WiFi.AP);
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/valves", HTTP_GET, handleApiValvesGet);
+  server.on("/api/valves", HTTP_POST, handleApiValvesPost);
+  server.on("/api/journal", HTTP_GET, handleApiJournalGet);
+  server.on("/api/journal", HTTP_POST, handleApiJournalPost);
+  server.on("/api/journal", HTTP_DELETE, handleApiJournalDelete);
+  server.on("/api/schedules", HTTP_GET, handleApiSchedulesGet);
+  server.on("/api/schedules", HTTP_POST, handleApiSchedulesPost);
+  server.on("/api/schedules", HTTP_DELETE, handleApiSchedulesDelete);
+  server.on("/api/sync_time", HTTP_POST, handleApiSyncTime); // Регистрация синхронизации времени
+  server.on("/valve", HTTP_GET, handleValve);
+  server.on("/all", HTTP_GET, handleAll);
+  server.on("/states", HTTP_GET, handleStates);
+  server.on("/flowmeter", HTTP_GET, handleFlowmeter);
   server.begin();
-  Serial.println("🌐 Сервер запущен: http://192.168.5.1");
+  Serial.println("HTTP-сервер запущен: http://192.168.5.1");
 }
 
-// ===================== LOOP =====================
 void loop() {
   server.handleClient();
-  updateWateringTimers();
-  checkMoistureSensors();
-  checkSchedule();
-  delay(10);
+  checkAndExecuteSchedules(); // Проверка и выполнение расписания на стороне ESP32
+  delay(2);
 }
