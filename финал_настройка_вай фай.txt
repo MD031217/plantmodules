@@ -1,0 +1,855 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+
+WebServer server(80);
+Preferences prefs;
+
+const char* apSSID = "GreenShelf_Setup";
+const char* apPASS = "12345678"; // Минимум 8 символов
+
+const char settings_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Первичные настройки</title>
+    <style>
+        :root { --card-radius: 24px; --transition-speed: 0.4s; }
+        body.theme-dark {
+            --page-bg: #0F182B; --text-main: #00674B; --accent-green: #21C85F;
+            --card-bg: rgba(255, 255, 255, 0.95); --glow-color: rgba(33, 200, 95, 0.6);
+            --glow-soft: rgba(33, 200, 95, 0.3); --user-pill-bg: #1a2d45;
+            --user-pill-text: #a0aab5; --nav-bg: #21C85F;
+            --nav-btn-bg: rgba(255, 255, 255, 0.25); --label-bg: rgba(33, 200, 95, 0.15);
+            --label-text: #21C85F; --footer-bg: #21C85F; --switcher-bg: #1a2d45;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.35);
+            --body-bg: var(--page-bg); --title-color: var(--text-main);
+            --green-primary: var(--accent-green); --green-hover: #1aab4e;
+            --green-glow: var(--accent-green); --card-glow: var(--glow-color);
+            --card-shadow: 0 0 20px var(--glow-soft); --subtitle-color: #7f8c8d;
+            --network-row-bg: var(--label-bg); --network-row-border: transparent;
+            --manual-section-bg: var(--card-bg); --input-border: rgba(33, 200, 95, 0.4);
+            --input-focus-border: var(--accent-green); --input-bg: #ffffff;
+            --label-color: #95a5a6; --btn-scan-bg: var(--accent-green);
+            --btn-scan-text: #ffffff; --btn-connect-bg: var(--accent-green);
+            --btn-connect-text: #ffffff; --btn-disconnect-bg: #ffffff;
+            --btn-disconnect-text: #0a4d3a; --footer-text: #ffffff;
+            --modal-overlay: rgba(15, 24, 43, 0.6); --modal-blur: blur(8px);
+            --section-list-bg: var(--label-bg); --section-list-shadow: var(--card-internal-shadow);
+            --plus-icon-bg: var(--accent-green); --section-glow: var(--glow-color);
+            --empty-row-bg: rgba(33, 200, 95, 0.12); --modal-bg: var(--card-bg);
+            --modal-input-bg: #ffffff; --footer-column-title: #ffffff;
+            --footer-column-text: rgba(255,255,255,0.9); --footer-copy: rgba(255,255,255,0.8);
+        }
+        body.theme-light {
+            --page-bg: #E8F0F2; --text-main: #00674B; --accent-green: #10B981;
+            --card-bg: #ffffff; --glow-color: rgba(16, 185, 129, 0.4);
+            --glow-soft: rgba(16, 185, 129, 0.2); --user-pill-bg: #ffffff;
+            --user-pill-text: #8899aa; --nav-bg: #10B981;
+            --nav-btn-bg: rgba(255, 255, 255, 0.3); --label-bg: rgba(16, 185, 129, 0.15);
+            --label-text: #10B981; --footer-bg: #10B981; --switcher-bg: #ffffff;
+            --card-internal-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
+            --body-bg: var(--page-bg); --title-color: var(--text-main);
+            --green-primary: var(--accent-green); --green-hover: #0d9668;
+            --green-glow: var(--accent-green); --card-glow: var(--glow-soft);
+            --card-shadow: 0 0 18px var(--glow-soft); --subtitle-color: #7f8c8d;
+            --network-row-bg: var(--label-bg); --network-row-border: transparent;
+            --manual-section-bg: var(--card-bg); --input-border: rgba(16, 185, 129, 0.35);
+            --input-focus-border: var(--accent-green); --input-bg: #ffffff;
+            --label-color: #a0a0a0; --btn-scan-bg: #78d5b2; --btn-scan-text: #0a4d3a;
+            --btn-connect-bg: var(--accent-green); --btn-connect-text: #ffffff;
+            --btn-disconnect-bg: #ffffff; --btn-disconnect-text: #0a4d3a;
+            --footer-text: #ffffff; --modal-overlay: rgba(232, 240, 242, 0.7);
+            --modal-blur: blur(8px); --section-list-bg: var(--label-bg);
+            --section-list-shadow: var(--card-internal-shadow);
+            --plus-icon-bg: var(--accent-green); --section-glow: var(--glow-soft);
+            --empty-row-bg: rgba(16, 185, 129, 0.1); --modal-bg: var(--card-bg);
+            --modal-input-bg: #ffffff; --footer-column-title: #ffffff;
+            --footer-column-text: rgba(255,255,255,0.9); --footer-copy: rgba(255,255,255,0.8);
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: var(--body-bg); color: var(--title-color); min-height: 100vh;
+            transition: background var(--transition-speed) ease, color var(--transition-speed) ease;
+            line-height: 1.5;
+        }
+
+        body.setup-mode .user-pill,
+        body.setup-mode .nav-btn:not(.active) {
+            pointer-events: none !important;
+            opacity: 0.4 !important;
+            cursor: not-allowed !important;
+            filter: grayscale(0.6) !important;
+        }
+        
+        /* Блокировка раздела ручного добавления, если это НЕ режим настройки (не 192.168.10.1) */
+        body:not(.setup-mode) .manual-section {
+            pointer-events: none !important;
+            opacity: 0.5 !important;
+            filter: grayscale(0.6) !important;
+            cursor: not-allowed !important;
+        }
+
+        body.setup-mode .btn-scan,
+        body.setup-mode .btn-connect,
+        body.setup-mode .btn-add-network {
+            pointer-events: auto !important;
+            opacity: 1 !important;
+            cursor: pointer !important;
+            filter: none !important;
+        }
+
+        .mode-toggle { display: none !important; position: absolute; opacity: 0; pointer-events: none; }
+        .page-wrapper { display: flex; flex-direction: column; min-height: calc(100vh - 200px); }
+        .page-wrapper > .main-content { flex: 1 0 auto; }
+        .top-sticky-wrapper { position: sticky; top: 0; z-index: 1000; width: 100%; background: transparent; pointer-events: none; }
+        .top-sticky-wrapper > * { pointer-events: auto; }
+        .site-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 20px 40px; background: transparent; backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px); pointer-events: auto; position: relative; z-index: 2;
+        }
+        .user-pill {
+            display: flex; align-items: center; text-decoration: none;
+            background: var(--user-pill-bg); border-radius: 50px;
+            padding: 8px 16px 8px 8px; gap: 10px; width: 145px; height: 44px;
+            box-shadow: 0 0 8px var(--glow-soft); animation: userPulse 3s infinite alternate; flex-shrink: 0;
+        }
+        @keyframes userPulse { 0% { box-shadow: 0 0 6px var(--glow-soft); } 100% { box-shadow: 0 0 16px var(--glow-color); } }
+        .user-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; display: none; }
+        body.theme-dark .avatar-dark { display: block; } body.theme-light .avatar-light { display: block; }
+        .user-text { font-size: 14px; font-weight: 400; color: var(--user-pill-text); letter-spacing: 0.5px; }
+        .logo-container { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; }
+        .main-logo { height: 100px; display: none; transition: height 0.3s ease; }
+        body.theme-dark .logo-dark { display: block; } body.theme-light .logo-light { display: block; }
+        .theme-switcher {
+            width: 48px; height: 48px; background: var(--switcher-bg); border-radius: 14px;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            box-shadow: 0 0 10px var(--glow-soft); animation: switcherPulse 3s infinite alternate; flex-shrink: 0;
+        }
+        @keyframes switcherPulse { 0% { box-shadow: 0 0 8px var(--glow-soft); } 100% { box-shadow: 0 0 18px var(--glow-color); } }
+        .theme-icon-img { width: 24px; height: 24px; filter: invert(1); }
+        .theme-light .theme-icon-img { filter: invert(0); }
+        .navigation {
+            display: flex; justify-content: center; align-items: center; gap: 8px;
+            background: var(--nav-bg); border-radius: 40px; padding: 6px;
+            margin: 0px 30px 35px 30px; height: 52px; pointer-events: auto;
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+        }
+        .nav-btn {
+            color: #ffffff; text-decoration: none; font-size: 18px; font-weight: 600;
+            padding: 8px 22px; border-radius: 30px; transition: all 0.3s ease; white-space: nowrap;
+            position: relative; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px); border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .nav-btn:hover, .nav-btn.active {
+            background: rgba(255, 255, 255, 0.35); backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .main-content { max-width: 1100px; width: 100%; margin: 0 auto; padding: 0 30px 40px; }
+        .scan-card {
+            background: var(--card-bg); border-radius: var(--card-radius); padding: 60px 40px 50px;
+            text-align: center; box-shadow: var(--card-shadow); margin-bottom: 30px;
+            transition: background var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+            position: relative;
+        }
+        .scan-card::before {
+            content: ''; position: absolute; inset: -2px; border-radius: calc(var(--card-radius) + 2px);
+            box-shadow: 0 0 25px var(--card-glow); z-index: -1;
+            transition: box-shadow var(--transition-speed) ease;
+        }
+        .wifi-icon { width: 150px; height: 150px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; }
+        .wifi-img { width: 100%; height: 100%; object-fit: contain; display: none; transition: opacity var(--transition-speed) ease; }
+        body.theme-dark .wifi-dark { display: block; } body.theme-light .wifi-light { display: block; }
+        .scan-title { font-size: 26px; font-weight: 700; color: var(--title-color); margin-bottom: 10px; transition: color var(--transition-speed) ease; }
+        .scan-subtitle { font-size: 16px; color: var(--subtitle-color); margin-bottom: 30px; transition: color var(--transition-speed) ease; }
+        .btn-scan {
+            display: inline-block; background: var(--btn-scan-bg); color: var(--btn-scan-text);
+            border: none; border-radius: 40px; padding: 16px 50px; font-size: 18px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15); letter-spacing: 0.3px;
+        }
+        .btn-scan:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
+        .btn-scan:active { transform: translateY(0); }
+        .btn-scan:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
+        
+        .btn-return-ap {
+            display: none;
+            margin: 15px auto 0;
+            background: #ffffff;
+            color: #e55a5a;
+            border: 1.5px solid #ffb3b3;
+            border-radius: 40px;
+            padding: 14px 40px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
+        }
+        .btn-return-ap:hover {
+            transform: scale(1.03);
+            background: #fff5f5;
+            color: #d32f2f;
+            border-color: #ff8a8a;
+            box-shadow: 0 0 25px rgba(229, 90, 90, 0.6), 0 0 10px rgba(229, 90, 90, 0.4);
+        }
+
+        .network-list-section {
+            background: var(--section-list-bg); border-radius: 16px; padding: 20px;
+            margin-top: 35px; box-shadow: var(--section-list-shadow);
+            transition: background var(--transition-speed) ease;
+        }
+        .network-item {
+            display: flex; align-items: center; padding: 16px 20px; border-radius: 14px;
+            margin-bottom: 12px; background: var(--network-row-bg);
+            transition: background var(--transition-speed) ease;
+        }
+        .network-item:last-child { margin-bottom: 0; } .network-item.empty { background: var(--empty-row-bg); }
+        .network-icon { width: 22px; height: 22px; margin-right: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        .wifi-img-small { width: 100%; height: 100%; object-fit: contain; display: none; }
+        body.theme-dark .wifi-dark { display: block; } body.theme-light .wifi-light { display: block; }
+        .network-name { font-size: 16px; font-weight: 600; color: var(--title-color); min-width: 80px; transition: color var(--transition-speed) ease; }
+        .network-security { font-size: 15px; color: var(--subtitle-color); flex: 1; padding-left: 10px; transition: color var(--transition-speed) ease; }
+        .btn-connect, .btn-disconnect {
+            border: none; border-radius: 30px; padding: 8px 24px; font-size: 14px;
+            font-weight: 600; cursor: pointer; transition: all 0.25s ease; white-space: nowrap; flex-shrink: 0;
+        }
+        .btn-connect { background: var(--btn-connect-bg); color: var(--btn-connect-text); }
+        .btn-connect:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        .btn-disconnect { background: var(--btn-disconnect-bg); color: var(--btn-disconnect-text); box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+        .btn-disconnect:hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.15); }
+        .btn-add-network {
+            display: inline-block; background: var(--btn-scan-bg); color: var(--btn-scan-text);
+            border: none; border-radius: 40px; padding: 12px 32px; font-size: 16px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15); letter-spacing: 0.3px;
+        }
+        .btn-add-network:hover { transform: translateY(-2px); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.2); filter: brightness(1.05); }
+        .btn-add-network:active { transform: translateY(0); }
+        .btn-add-network:disabled { opacity: 0.7; cursor: not-allowed; transform: none !important; }
+        .manual-section {
+            background: var(--manual-section-bg); border-radius: var(--card-radius); padding: 50px 50px 55px;
+            box-shadow: var(--card-shadow); margin-bottom: 30px;
+            transition: background var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+            position: relative;
+        }
+        .manual-section::before {
+            content: ''; position: absolute; inset: -2px; border-radius: calc(var(--card-radius) + 2px);
+            box-shadow: 0 0 20px var(--card-glow); z-index: -1;
+            transition: box-shadow var(--transition-speed) ease;
+        }
+        .manual-title {
+            display: flex; align-items: center; font-size: 24px; font-weight: 700;
+            color: var(--title-color); margin-bottom: 30px; transition: color var(--transition-speed) ease;
+        }
+        .plus-icon {
+            width: 28px; height: 28px; background: var(--plus-icon-bg); border-radius: 50%;
+            display: inline-flex; align-items: center; justify-content: center; margin-right: 12px;
+            flex-shrink: 0; transition: background var(--transition-speed) ease;
+        }
+        .plus-icon svg { width: 16px; height: 16px; }
+        .plus-icon svg line { stroke: #ffffff; stroke-width: 2.5; stroke-linecap: round; }
+        .manual-form { display: grid; grid-template-columns: 1fr 1fr; gap: 24px 40px; }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group.full-width { grid-column: 1 / -1; }
+        .form-label { font-size: 16px; color: var(--label-color); margin-bottom: 10px; font-weight: 400; transition: color var(--transition-speed) ease; }
+        .form-input, .form-select {
+            border: 2px solid var(--input-border); border-radius: 20px; padding: 16px 22px;
+            font-size: 16px; color: var(--title-color); background: var(--input-bg);
+            outline: none; transition: border-color 0.3s ease, background var(--transition-speed) ease, color var(--transition-speed) ease;
+        }
+        .form-input::placeholder { color: var(--label-color); }
+        .form-input:focus, .form-select:focus { border-color: var(--input-focus-border); }
+        .site-footer { background: var(--footer-bg); color: var(--footer-text); padding: 36px 40px 0; transition: background var(--transition-speed) ease; flex-shrink: 0; }
+        .footer-columns { display: grid; grid-template-columns: 1.3fr 1fr 0.8fr; gap: 30px; max-width: 900px; margin: 0 auto; padding-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.2); }
+        .footer-column-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; color: var(--footer-column-title); }
+        .footer-column-text { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
+        .footer-column-list { list-style: none; padding: 0; }
+        .footer-column-list li { font-size: 14px; line-height: 1.7; color: var(--footer-column-text); }
+        .footer-copyright { text-align: center; padding: 16px 0 12px; font-size: 14px; color: var(--footer-copy); max-width: 900px; margin: 0 auto; }
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; background: var(--modal-overlay);
+            backdrop-filter: var(--modal-blur); -webkit-backdrop-filter: var(--modal-blur);
+            z-index: 2000; align-items: center; justify-content: center;
+            transition: background var(--transition-speed) ease;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-card {
+            background: var(--modal-bg); border-radius: 20px; padding: 28px 32px;
+            width: 90%; max-width: 480px; box-shadow: 0 8px 40px rgba(0,0,0,0.15);
+            position: relative; transition: background var(--transition-speed) ease;
+        }
+        .modal-network-row {
+            display: flex; align-items: center; padding: 10px 14px; border-radius: 14px;
+            background: var(--network-row-bg); margin-bottom: 18px;
+            transition: background var(--transition-speed) ease;
+        }
+        .modal-network-name { font-size: 15px; font-weight: 600; color: var(--title-color); transition: color var(--transition-speed) ease; }
+        .modal-network-security { font-size: 14px; color: var(--subtitle-color); margin-left: 16px; transition: color var(--transition-speed) ease; }
+        .modal-label { font-size: 14px; color: var(--label-color); margin-bottom: 8px; display: block; transition: color var(--transition-speed) ease; }
+        .modal-input-wrapper { position: relative; display: flex; align-items: center; }
+        .modal-input {
+            width: 100%; border: 2px solid var(--input-border); border-radius: 16px;
+            padding: 12px 48px 12px 18px; font-size: 15px; color: var(--title-color);
+            background: var(--modal-input-bg); outline: none;
+            transition: border-color 0.3s ease, background var(--transition-speed) ease, color var(--transition-speed) ease;
+        }
+        .modal-input:focus { border-color: var(--input-focus-border); }
+        .modal-eye-btn {
+            position: absolute; right: 14px; background: none; border: none;
+            cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center;
+        }
+        #eyeImg { width: 22px; height: 22px; object-fit: contain; }
+        body.theme-dark .theme-light-only { display: none !important; }
+        body.theme-light .theme-dark-only { display: none !important; }
+
+        .modal-actions {
+            display: flex; gap: 12px; justify-content: center; margin-top: 24px;
+        }
+        .btn-cancel-return {
+            background: var(--btn-disconnect-bg);
+            color: var(--btn-disconnect-text);
+            border: 1.5px solid var(--input-border);
+            border-radius: 30px;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-cancel-return:hover {
+            transform: scale(1.03);
+            filter: brightness(0.95);
+        }
+        .btn-confirm-return {
+            background: #ffffff;
+            color: #e55a5a;
+            border: 1.5px solid #ffb3b3;
+            border-radius: 30px;
+            padding: 12px 24px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(229, 90, 90, 0.25);
+        }
+        .btn-confirm-return:hover {
+            transform: scale(1.03);
+            background: #fff5f5;
+            color: #d32f2f;
+            border-color: #ff8a8a;
+            box-shadow: 0 0 25px rgba(229, 90, 90, 0.6), 0 0 10px rgba(229, 90, 90, 0.4);
+        }
+
+        @media (max-width: 700px) {
+            .page-wrapper { min-height: calc(100vh - 170px); }
+            .site-header { padding: 14px 16px; }
+            .main-logo { height: 60px; }
+            .user-pill { width: 110px; height: 38px; padding: 6px 10px 6px 6px; gap: 7px; }
+            .user-avatar { width: 26px; height: 26px; }
+            .user-text { font-size: 12px; }
+            .theme-switcher { width: 40px; height: 40px; border-radius: 12px; }
+            .navigation { margin: 0 12px 24px; height: 44px; gap: 4px; }
+            .nav-btn { font-size: 14px; padding: 6px 14px; }
+            .main-content { padding: 0 14px 30px; max-width: 100%; }
+            .scan-card { padding: 40px 24px 30px; }
+            .manual-section { padding: 25px 20px 30px; }
+            .wifi-icon { width: 72px; height: 56px; }
+            .scan-title { font-size: 20px; }
+            .scan-subtitle { font-size: 13px; }
+            .btn-scan { padding: 12px 36px; font-size: 15px; }
+            .network-item { padding: 10px 12px; flex-wrap: wrap; gap: 6px 0; }
+            .network-name { font-size: 13px; min-width: 60px; }
+            .network-security { font-size: 12px; padding-left: 4px; }
+            .btn-connect, .btn-disconnect { font-size: 12px; padding: 5px 14px; }
+            .manual-title { font-size: 18px; }
+            .manual-form { grid-template-columns: 1fr; gap: 14px; }
+            .footer-columns { grid-template-columns: 1fr; gap: 20px; }
+            .site-footer { padding: 28px 20px 0; }
+            .modal-card { padding: 22px 20px; margin: 0 14px; }
+        }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+        .scan-card { animation: fadeInUp 0.5s ease forwards; }
+        .manual-section { animation: fadeInUp 0.5s ease 0.15s forwards; opacity: 0; animation-fill-mode: forwards; }
+        .site-footer { animation: fadeInUp 0.5s ease 0.3s forwards; opacity: 0; animation-fill-mode: forwards; }
+        .network-item { animation: fadeInUp 0.35s ease forwards; opacity: 0; }
+        .network-item:nth-child(1) { animation-delay: 0.1s; }
+        .network-item:nth-child(2) { animation-delay: 0.2s; }
+        .network-item:nth-child(3) { animation-delay: 0.3s; }
+        #connectStatus { margin-top: 12px; font-size: 14px; text-align: center; min-height: 20px; }
+        #connectStatus.success { color: var(--accent-green); }
+        #connectStatus.error { color: var(--danger); }
+    </style>
+</head>
+<body class="theme-dark">
+    <div class="top-sticky-wrapper">
+        <header class="site-header">
+            <a href="profile.html" class="user-pill" aria-label="Профиль">
+                <img src="/image/dpol.png" alt="" class="user-avatar avatar-dark">
+                <img src="/image/lpol.png" alt="" class="user-avatar avatar-light">
+                <span class="user-text">User_login</span>
+            </a>
+            <div class="logo-container">
+                <img src="/image/light.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="/image/dark.png" alt="Зелёная полка" class="main-logo logo-light">
+            </div>
+            <label class="theme-switcher" for="themeToggle" aria-label="Сменить тему">
+                <img src="/image/тема.png" alt="" class="theme-icon-img">
+            </label>
+        </header>
+        <input type="checkbox" id="themeToggle" class="mode-toggle">
+        <nav class="navigation">
+            <a href="index.html" class="nav-btn">Главная</a>
+            <a href="myplant.html" class="nav-btn">Мои растения</a>
+            <a href="settings.html" class="nav-btn active">Настройки</a>
+        </nav>
+    </div>
+    <div class="page-wrapper">
+        <main class="main-content">
+            <div class="scan-card">
+                <div class="wifi-icon">
+                    <img src="/image/light_big.png" alt="WiFi" class="wifi-img wifi-light">
+                    <img src="/image/dark_big.png" alt="WiFi" class="wifi-img wifi-dark">
+                </div>
+                <h1 class="scan-title">Сканирование сетей</h1>
+                <p class="scan-subtitle">Нажмите кнопку ниже для сканирования доступных Wi-Fi сетей</p>
+                <button class="btn-scan" id="scanBtn">Начать сканирование</button>
+                <button class="btn-return-ap" id="returnApBtn">Вернуться к настройкам Wi-Fi</button>
+                <div class="network-list-section" id="networkList" style="display: none;"></div>
+            </div>
+
+            <div class="manual-section">
+                <h2 class="manual-title">
+                    <span class="plus-icon">
+                        <svg viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">
+                            <line x1="7" y1="1" x2="7" y2="13"/>
+                            <line x1="1" y1="7" x2="13" y2="7"/>
+                        </svg>
+                    </span>
+                    Добавить сеть вручную
+                </h2>
+                <div class="manual-form">
+                    <div class="form-group">
+                        <label class="form-label">Название сети (SSID)</label>
+                        <input type="text" id="wifiSsid" class="form-input" placeholder="">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Тип безопасности</label>
+                        <select id="wifiSec" class="form-select">
+                            <option value="WPA2">WPA/WPA2-Personal</option>
+                            <option value="WPA">WPA-Personal</option>
+                            <option value="WEP">WEP</option>
+                            <option value="OPEN">Открытая (без пароля)</option>
+                        </select>
+                    </div>
+                    <div class="form-group full-width" id="passGroup">
+                        <label class="form-label">Пароль</label>
+                        <input type="password" id="wifiPass" class="form-input" placeholder="">
+                    </div>
+                    <div class="form-group full-width" style="margin-top: 16px; display: flex; justify-content: flex-end;">
+                        <button type="button" class="btn-add-network" id="addNetworkBtn">Добавить</button>
+                    </div>
+                </div>
+                <div id="connectStatus"></div>
+            </div>
+        </main>
+        <footer class="site-footer">
+            <div class="footer-columns">
+                <div>
+                    <h3 class="footer-column-title">Зелёная полка</h3>
+                    <p class="footer-column-text">Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.</p>
+                </div>
+                <div>
+                    <h3 class="footer-column-title">Модули</h3>
+                    <ul class="footer-column-list">
+                        <li>Освещения растений</li>
+                        <li>Сбор данных о растениях</li>
+                        <li>Полив растений</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="footer-column-title">Контакты</h3>
+                    <ul class="footer-column-list">
+                        <li>Почта</li>
+                        <li>Наши сети</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-copyright">2026 Зелёная полка</div>
+        </footer>
+    </div>
+
+    <div class="modal-overlay" id="passwordModal">
+        <div class="modal-card">
+            <div class="modal-network-row">
+                <div class="network-icon">
+                    <img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
+                    <img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                </div>
+                <span class="modal-network-name" id="modalNetworkName">iPhone</span>
+                <span class="modal-network-security">Защищено</span>
+            </div>
+            <label class="modal-label">Введите код безопасности</label>
+            <div class="modal-input-wrapper">
+                <input type="password" class="modal-input" id="modalPasswordInput">
+                <button type="button" class="modal-eye-btn" id="eyeBtn">
+                    <img src="/image/Open.png" id="eyeImg" alt="Показать пароль">
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="returnApModal">
+        <div class="modal-card" style="text-align: center;">
+            <div class="wifi-icon" style="width: 64px; height: 64px; margin: 0 auto 15px;">
+                <img src="/image/light_big.png" alt="WiFi" class="wifi-img wifi-light" style="width:100%; height:100%;">
+                <img src="/image/dark_big.png" alt="WiFi" class="wifi-img wifi-dark" style="width:100%; height:100%;">
+            </div>
+            <h3 style="font-size: 20px; font-weight: 700; color: var(--title-color); margin-bottom: 12px;">Возврат к настройкам Wi-Fi</h3>
+            <p style="font-size: 15px; color: var(--subtitle-color); margin-bottom: 24px; line-height: 1.5;">
+                Для возврата к настройкам вам необходимо вручную подключиться к сети <strong>"GreenShelf_Setup"</strong> на вашем устройстве.<br><br>
+                После подключения вы будете автоматически перенаправлены на эту страницу.
+            </p>
+            <div class="modal-actions">
+                <button class="btn-cancel-return" id="cancelReturnApBtn">Отмена</button>
+                <button class="btn-confirm-return" id="confirmReturnApBtn">Понятно, перейти</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[JS] DOM loaded, initializing...');
+            const isSetupMode = window.location.hostname === '192.168.10.1' || window.location.hostname === '';
+            if (isSetupMode) {
+                document.body.classList.add('setup-mode');
+                console.log('[Mode] Setup mode (192.168.10.1) detected. Header/Nav links disabled.');
+            } else {
+                console.log('[Mode] Normal mode detected (' + window.location.hostname + '). All elements enabled.');
+            }
+
+            const returnApBtn = document.getElementById('returnApBtn');
+            const returnApModal = document.getElementById('returnApModal');
+            const cancelReturnApBtn = document.getElementById('cancelReturnApBtn');
+            const confirmReturnApBtn = document.getElementById('confirmReturnApBtn');
+
+            if (returnApBtn) {
+                if (!isSetupMode) {
+                    returnApBtn.style.display = 'block';
+                    returnApBtn.style.margin = '15px auto 0';
+                    
+                    returnApBtn.addEventListener('click', function() {
+                        returnApModal.classList.add('active');
+                    });
+                }
+            }
+
+            if (cancelReturnApBtn) {
+                cancelReturnApBtn.addEventListener('click', function() {
+                    returnApModal.classList.remove('active');
+                });
+            }
+
+            if (confirmReturnApBtn) {
+                confirmReturnApBtn.addEventListener('click', function() {
+                    returnApModal.classList.remove('active');
+                    window.location.href = 'http://192.168.10.1/settings.html';
+                });
+            }
+
+            if (returnApModal) {
+                returnApModal.addEventListener('click', (e) => {
+                    if (e.target === e.currentTarget) {
+                        returnApModal.classList.remove('active');
+                    }
+                });
+            }
+
+            (function () {
+                const toggle = document.getElementById('themeToggle');
+                const body = document.body;
+                const KEY = 'theme'; 
+                const saved = localStorage.getItem(KEY) || 'dark';
+                body.classList.remove('theme-dark', 'theme-light');
+                body.classList.add('theme-' + saved);
+                if (toggle) toggle.checked = (saved === 'light');
+                if (toggle) {
+                    toggle.addEventListener('change', function () {
+                        const next = toggle.checked ? 'light' : 'dark';
+                        body.classList.remove('theme-dark', 'theme-light');
+                        body.classList.add('theme-' + next);
+                        localStorage.setItem(KEY, next);
+                    });
+                }
+            })();
+
+            const passwordInput = document.getElementById('modalPasswordInput');
+            const eyeBtn = document.getElementById('eyeBtn');
+            const eyeImg = document.getElementById('eyeImg');
+            let passwordVisible = false;
+            function updateEyeSource() {
+                if (passwordVisible) { eyeImg.src = '/image/Closed.png'; eyeImg.alt = 'Скрыть пароль'; }
+                else { eyeImg.src = '/image/Open.png'; eyeImg.alt = 'Показать пароль'; }
+            }
+            if(eyeBtn) eyeBtn.addEventListener('click', function() {
+                passwordVisible = !passwordVisible;
+                passwordInput.type = passwordVisible ? 'text' : 'password';
+                updateEyeSource(); 
+            });
+            function openModal(networkName) {
+                const modal = document.getElementById('passwordModal');
+                document.getElementById('modalNetworkName').textContent = networkName;
+                modal.classList.add('active');
+                passwordVisible = false;
+                passwordInput.type = 'password';
+                updateEyeSource(); 
+            }
+            const modalOverlay = document.getElementById('passwordModal');
+            if(modalOverlay) {
+                modalOverlay.addEventListener('click', (e) => {
+                    if (e.target === e.currentTarget) closeModal();
+                });
+            }
+            function closeModal() {
+                document.getElementById('passwordModal').classList.remove('active');
+            }
+            window.openModal = openModal;
+            window.closeModal = closeModal;
+
+            function loadUserToHeader() {
+                try {
+                    const data = JSON.parse(localStorage.getItem('userData'));
+                    if (!data) return; 
+                    const userText = document.querySelector('.user-pill .user-text');
+                    if (userText) userText.textContent = data.username;
+                    const avDark = document.querySelector('.user-pill .avatar-dark');
+                    const avLight = document.querySelector('.user-pill .avatar-light');
+                    if (avDark) avDark.src = data.avatar;
+                    if (avLight) avLight.src = data.avatar;
+                } catch(e) { console.log('[User] No saved user data'); }
+            }
+            loadUserToHeader();
+
+            const scanBtn = document.getElementById('scanBtn');
+            const networkList = document.getElementById('networkList');
+            const addNetworkBtn = document.getElementById('addNetworkBtn');
+            const ssidInput = document.getElementById('wifiSsid');
+            const passInput = document.getElementById('wifiPass');
+            const secSelect = document.getElementById('wifiSec');
+            const statusDiv = document.getElementById('connectStatus');
+            const passGroup = document.getElementById('passGroup');
+
+            if (secSelect) {
+                secSelect.addEventListener('change', function() {
+                    if (this.value === 'OPEN') {
+                        passGroup.style.display = 'none';
+                        passInput.value = '';
+                    } else {
+                        passGroup.style.display = '';
+                    }
+                });
+            }
+
+            if(scanBtn) scanBtn.addEventListener('click', async () => {
+                scanBtn.disabled = true;
+                scanBtn.textContent = 'Сканирование...';
+                networkList.style.display = 'block';
+                networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Поиск сетей...</span></div>';
+                
+                try {
+                    const res = await fetch('/api/scan', { cache: 'no-store' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const nets = await res.json();
+                    
+                    if (!nets.length) {
+                        networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--subtitle-color); padding:10px;">Сети не найдены</span></div>';
+                    } else {
+                        networkList.innerHTML = nets.map(n => {
+                            const sec = n.encryption !== 'OPEN' ? 'Защищено' : 'Открытая';
+                            const escapedSsid = n.ssid.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                            return `
+                                <div class="network-item">
+                                    <div class="network-icon">
+                                        <img src="/image/light_small.png" alt="WiFi" class="wifi-img-small wifi-light">
+                                        <img src="/image/dark_small.png" alt="WiFi" class="wifi-img-small wifi-dark">
+                                    </div>
+                                    <span class="network-name">${escapedSsid}</span>
+                                    <span class="network-security">${sec}</span>
+                                    <button class="btn-connect" onclick="selectNetwork('${escapedSsid}', '${n.encryption}')">Выбрать</button>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                } catch (e) {
+                    networkList.innerHTML = '<div class="network-item empty"><span style="color:var(--danger); padding:10px;">Ошибка: ' + e.message + '</span></div>';
+                } finally {
+                    scanBtn.disabled = false;
+                    scanBtn.textContent = 'Обновить список';
+                }
+            });
+
+            window.selectNetwork = function(ssid, encryption) {
+                ssidInput.value = ssid;
+                secSelect.value = encryption || 'WPA2';
+                if (encryption === 'OPEN') {
+                    passGroup.style.display = 'none';
+                    passInput.value = '';
+                } else {
+                    passGroup.style.display = '';
+                    passInput.focus();
+                }
+                document.querySelector('.manual-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+
+            if(addNetworkBtn) addNetworkBtn.addEventListener('click', async () => {
+                const ssid = ssidInput.value.trim();
+                const pass = passInput.value;
+                const sec = secSelect.value;
+                
+                if (!ssid) { alert('Введите название сети'); return; }
+                if (sec !== 'OPEN' && !pass) { alert('Введите пароль для защищённой сети'); return; }
+
+                addNetworkBtn.disabled = true;
+                addNetworkBtn.textContent = 'Подключение...';
+                statusDiv.textContent = '';
+                statusDiv.className = '';
+
+                const formData = new URLSearchParams();
+                formData.append('ssid', ssid);
+                formData.append('pass', pass);
+                formData.append('sec', sec);
+
+                try {
+                    const res = await fetch('/api/configure', {
+                        method: 'POST',
+                        body: formData,
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                    });
+                    const data = await res.json();
+
+                    if (data.status === 'success') {
+                        statusDiv.textContent = 'Подключено! Переход в профиль...';
+                        statusDiv.textContent = 'Сейчас обязательно подключитесь к выбранной сети на своём устройстве!';
+                        statusDiv.className = 'success';
+                        setTimeout(() => {
+                            window.location.href = 'http://' + data.ip + '/settings.html';
+                        }, 1500);
+                    } else {
+                        statusDiv.textContent = (data.message || 'Ошибка подключения');
+                        statusDiv.className = 'error';
+                        addNetworkBtn.textContent = 'Добавить';
+                    }
+                } catch (e) {
+                    statusDiv.textContent = 'Ошибка соединения: ' + e.message;
+                    statusDiv.className = 'error';
+                    addNetworkBtn.textContent = 'Добавить';
+                } finally {
+                    if (statusDiv.className !== 'success') {
+                        addNetworkBtn.disabled = false;
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+)rawliteral";
+
+void handleScan() {
+    int n = WiFi.scanNetworks();
+    String json = "[";
+    for (int i = 0; i < n; ++i) {
+        String ssid = WiFi.SSID(i);
+        ssid.replace("\"", "\\\"");
+        String enc = WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "OPEN" : "WPA2";
+        json += "{\"ssid\":\"" + ssid + "\",\"encryption\":\"" + enc + "\"}";
+        if (i < n - 1) json += ",";
+    }
+    json += "]";
+    WiFi.scanDelete();
+    server.send(200, "application/json", json);
+}
+
+void handleConfigure() {
+    if (!server.hasArg("ssid")) {
+        server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Отсутствует SSID\"}");
+        return;
+    }
+    
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
+    
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+    
+    WiFi.disconnect(true);
+    delay(500);
+
+    if (pass.length() > 0) {
+        WiFi.begin(ssid.c_str(), pass.c_str());
+    } else {
+        WiFi.begin(ssid.c_str());
+    }
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 50) {
+        delay(500);
+        attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        String ip = WiFi.localIP().toString();
+        server.send(200, "application/json", "{\"status\":\"success\",\"ip\":\"" + ip + "\",\"message\":\"Подключено!\"}");
+    } else {
+        server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Не удалось подключиться. Проверьте пароль.\"}");
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    prefs.begin("wifi-config", false);
+
+    IPAddress local_IP(192, 168, 10, 1);
+    IPAddress gateway(192, 168, 10, 1);
+    IPAddress subnet(255, 255, 255, 0);
+    
+    WiFi.softAPConfig(local_IP, gateway, subnet); 
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(apSSID, apPASS);
+    
+    Serial.println("[WiFi] AP started: " + String(apSSID) + " | IP: " + WiFi.softAPIP().toString());
+    
+    String s = prefs.getString("ssid", ""), p = prefs.getString("pass", "");
+    if (s.length() > 0) {
+        if (p.length() > 0) {
+            WiFi.begin(s.c_str(), p.c_str());
+        } else {
+            WiFi.begin(s.c_str());
+        }
+        if (WiFi.waitForConnectResult(5000) == WL_CONNECTED) {
+            Serial.println("[WiFi] STA connected: " + WiFi.localIP().toString());
+        }
+    }
+    
+    server.on("/settings.html", HTTP_GET, [](){
+        server.send(200, "text/html", settings_html);
+    });
+    server.on("/api/scan", HTTP_GET, handleScan);
+    server.on("/api/configure", HTTP_POST, handleConfigure);
+    server.on("/", HTTP_GET, [](){
+        server.sendHeader("Location", "/settings.html", true);
+        server.send(302);
+    });
+    
+    server.begin();
+    Serial.println("[Setup] Web server started on port 80");
+}
+
+void loop() {
+    server.handleClient();
+}
