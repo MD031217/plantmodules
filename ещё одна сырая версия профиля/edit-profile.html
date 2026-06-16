@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Редактирование профиля - Зелёная полка</title>
+    <link rel="stylesheet" href="profile-style.css">
+    <style>
+        /* Дополнительные стили для новой структуры */
+        .edit-profile-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 40px;
+            margin-bottom: 30px;
+        }
+        
+        .edit-avatar-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .edit-avatar-section .avatar {
+            width: 150px;
+            height: 150px;
+            border-radius: 18px;
+            object-fit: cover;
+        }
+        
+        .edit-avatar-section .btn-edit {
+            padding: 8px 20px;
+            font-size: 14px;
+        }
+        
+        .edit-avatar-section .upload-limit {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+        }
+        
+        .edit-user-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .edit-field-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .edit-field-row input {
+            flex: 1;
+            padding: 12px 45px 12px 18px;
+            border: 1.5px solid rgba(128, 128, 128, 0.3);
+            border-radius: 22px;
+            font-size: 16px;
+            background: rgba(0,0,0,0.03);
+            outline: none;
+        }
+        
+        .edit-field-row input:focus {
+            border-color: var(--accent-green);
+        }
+        
+        .edit-field-row .field-icon {
+            position: static;
+            opacity: 0.6;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        
+        .edit-section {
+            margin-bottom: 25px;
+        }
+        
+        .edit-section-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent-green);
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .edit-section-title .lock-icon {
+            font-size: 14px;
+            opacity: 0.5;
+        }
+        
+        .edit-password-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .password-input-wrapper {
+            position: relative;
+        }
+        
+        .password-input-wrapper input {
+            width: 100%;
+            padding: 12px 45px 12px 18px;
+            border: 1.5px solid rgba(128, 128, 0, 0.3);
+            border-radius: 22px;
+            font-size: 16px;
+            background: rgba(0,0,0,0.03);
+            outline: none;
+        }
+        
+        .password-input-wrapper input:focus {
+            border-color: var(--accent-green);
+        }
+        
+        .password-input-wrapper .warning-icon {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+        }
+        
+        .edit-gender-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .edit-gender-row .gender-label {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--accent-green);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .edit-timezone-row {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .edit-timezone-row .timezone-label {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent-green);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .edit-timezone-row select {
+            flex: 1;
+            max-width: 350px;
+            padding: 12px 45px 12px 18px;
+            border: 1.5px solid rgba(128, 128, 0, 0.3);
+            border-radius: 22px;
+            font-size: 16px;
+            background: rgba(0,0,0,0.03);
+            outline: none;
+            cursor: pointer;
+        }
+        
+        .edit-timezone-row select:focus {
+            border-color: var(--accent-green);
+        }
+        
+        @media (max-width: 768px) {
+            .edit-profile-header {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .edit-field-row,
+            .edit-gender-row,
+            .edit-timezone-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .edit-timezone-row select {
+                max-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body class="theme-light">
+    <div class="top-sticky-wrapper">
+        <header class="site-header">
+            <div class="user-pill">
+                <img src="Т.пол.png" alt="User" class="user-avatar avatar-dark" id="header-avatar-dark">
+                <img src="Св.пол.png" alt="User" class="user-avatar avatar-light" id="header-avatar-light">
+                <span class="user-text" id="header-username">User_login</span>
+            </div>
+            
+            <div class="logo-container">
+                <img src="Светлая.png" alt="Зелёная полка" class="main-logo logo-dark">
+                <img src="Тёмная.png" alt="Зелёная полка" class="main-logo logo-light">
+            </div>
+            
+            <div class="theme-switcher" onclick="toggleTheme()">
+                <input type="checkbox" id="theme-toggle" class="mode-toggle">
+                <label for="theme-toggle">
+                    <img src="тема.png" alt="Theme" class="theme-icon-img">
+                </label>
+            </div>
+        </header>
+        
+        <nav class="navigation">
+            <a href="#" class="nav-btn">Главная</a>
+            <a href="#" class="nav-btn">Мои растения</a>
+            <a href="#" class="nav-btn">Настройки</a>
+        </nav>
+    </div>
+
+    <div class="page-wrapper">
+        <div class="card">
+            <h1 class="card-header">Редактирование профиля</h1>
+            <div class="edit-profile-header">
+                <div class="edit-avatar-section">
+                    <img src="https://i.imgur.com/8KxHqJp.jpg" alt="Avatar" class="avatar" id="profile-avatar">
+                    <button class="btn btn-edit" onclick="openAvatarModal()">Изменить фото</button>
+                    <div class="upload-limit">Изображение до 1МБ</div>
+                </div>
+                <div class="edit-user-info">
+                    <div class="edit-field-row">
+                        <input type="text" id="edit-username" value="User_login" placeholder="Имя пользователя">
+                    </div>
+                    <div class="edit-field-row">
+                        <input type="email" id="edit-email" value="name_mail@email.com" placeholder="Email">
+                    </div>
+                    <div class="edit-gender-row" style="margin-top: 10px;">
+                        <div class="gender-label">
+                            Пол
+                        </div>
+                        <div class="gender-options">
+                            <div class="gender-opt selected" id="edit-gender-female" onclick="selectGender('female')">
+                                <span class="radio-dot"></span>
+                                <span>Женский</span>
+                            </div>
+                            <div class="gender-opt" id="edit-gender-male" onclick="selectGender('male')">
+                                <span class="radio-dot"></span>
+                                <span>Мужской</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="edit-section">
+                <div class="edit-section-title">Сменить пароль</div>
+                <div class="edit-password-inputs">
+                    <div class="password-input-wrapper">
+                        <input type="password" id="new-password" placeholder="Новый пароль">
+                        <img src="warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-1" style="display:none;">
+                    </div>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="confirm-password" placeholder="Подтверждение нового пароль">
+                        <img src="warning-icon.png" alt="Warning" class="warning-icon" id="pass-warn-2" style="display:none;">
+                    </div>
+                </div>
+            </div>
+            <div class="edit-section">
+                <div class="edit-timezone-row">
+                    <div class="timezone-label">
+                        Часовой пояс
+                    </div>
+                    <select id="edit-timezone">
+                        <option value="(UTC+05:00) Asian/Yekaterinburg" selected>(UTC+05:00) Asian/Yekaterinburg</option>
+                        <option value="(UTC+03:00) Europe/Moscow">(UTC+03:00) Europe/Moscow</option>
+                        <option value="(UTC+07:00) Asia/Novosibirsk">(UTC+07:00) Asia/Novosibirsk</option>
+                    </select>
+                </div>
+            </div>
+            <div class="card-actions" style="margin-top: 35px;">
+                <button class="btn btn-edit" onclick="saveChanges()">Сохранить изменения</button>
+                <button class="btn btn-delete" onclick="window.location.href='profile.html'">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="avatar-modal">
+        <div class="avatar-modal">
+            <button class="modal-close-btn" onclick="closeAvatarModal()">×</button>
+            <div class="modal-title">Загрузить изображение</div>
+            <div class="avatar-preview-area" id="preview-area">
+                <img src="" alt="Preview" class="modal-preview-img" id="modal-preview-img">
+                <span class="preview-label">Предпросмотр</span>
+            </div>
+            <input type="file" id="hidden-file-input" accept="image/*">
+            <div class="modal-select-link" onclick="document.getElementById('hidden-file-input').click()">Выбрать фото</div>
+            <button class="modal-save-btn" id="modal-save-btn" onclick="confirmAvatarUpload()">Сохранить</button>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <div class="footer-columns">
+            <div class="footer-column">
+                <div class="footer-column-title">Зелёная полка</div>
+                <div class="footer-column-text">
+                    Система контроля микроклимата растений соответствует приоритетам техлидерства РФ, IoT и импортозамещению.
+                </div>
+            </div>
+            <div class="footer-column">
+                <div class="footer-column-title">Модули</div>
+                <ul class="footer-column-list">
+                    <li>Освещения растений</li>
+                    <li>Сбор данных о растениях</li>
+                    <li>Полив растений</li>
+                </ul>
+            </div>
+            <div class="footer-column">
+                <div class="footer-column-title">Контакты</div>
+                <ul class="footer-column-list">
+                    <li>Почта</li>
+                    <li>Наши сети</li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-copyright">2026 Зелёная полка</div>
+    </footer>
+
+    <script>
+        let tempAvatarData = null;
+
+        function toggleTheme() {
+            document.body.classList.toggle('theme-light');
+            document.body.classList.toggle('theme-dark');
+            const theme = document.body.classList.contains('theme-dark') ? 'dark' : 'light';
+            localStorage.setItem('theme', theme);
+        }
+        function loadTheme() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            if (savedTheme === 'dark') {
+                document.body.classList.remove('theme-light');
+                document.body.classList.add('theme-dark');
+            }
+        }
+        loadTheme();
+
+        function selectGender(g) {
+            document.getElementById('edit-gender-female').classList.toggle('selected', g === 'female');
+            document.getElementById('edit-gender-male').classList.toggle('selected', g === 'male');
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const defaultData = {
+                username: 'User_login',
+                email: 'name_mail@email.com',
+                avatar: 'https://i.imgur.com/8KxHqJp.jpg',
+                gender: 'female',
+                timezone: '(UTC+05:00) Asian/Yekaterinburg'
+            };
+            const userData = JSON.parse(localStorage.getItem('userData')) || defaultData;
+
+            document.getElementById('header-avatar-dark').src = userData.avatar;
+            document.getElementById('header-avatar-light').src = userData.avatar;
+            document.getElementById('header-username').textContent = userData.username;
+
+            document.getElementById('profile-avatar').src = userData.avatar;
+            document.getElementById('edit-username').value = userData.username;
+            document.getElementById('edit-email').value = userData.email;
+            document.getElementById('edit-timezone').value = userData.timezone;
+            selectGender(userData.gender);
+        });
+
+        function openAvatarModal() {
+            document.getElementById('avatar-modal').classList.add('active');
+            document.getElementById('avatar-modal').classList.remove('has-preview');
+            document.getElementById('hidden-file-input').value = '';
+            tempAvatarData = null;
+        }
+        function closeAvatarModal() {
+            document.getElementById('avatar-modal').classList.remove('active');
+        }
+
+        document.getElementById('hidden-file-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            if (!file.type.startsWith('image/')) { alert('Выберите изображение'); return; }
+            if (file.size > 1048576) { alert('Размер не должен превышать 1МБ'); return; }
+            
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                tempAvatarData = ev.target.result;
+                document.getElementById('modal-preview-img').src = tempAvatarData;
+                document.getElementById('avatar-modal').classList.add('has-preview');
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function confirmAvatarUpload() {
+            if (tempAvatarData) {
+                document.getElementById('profile-avatar').src = tempAvatarData;
+                document.getElementById('header-avatar-dark').src = tempAvatarData;
+                document.getElementById('header-avatar-light').src = tempAvatarData;
+                closeAvatarModal();
+            }
+        }
+
+        function saveChanges() {
+            const username = document.getElementById('edit-username').value.trim();
+            const email = document.getElementById('edit-email').value.trim();
+            const pass = document.getElementById('new-password').value;
+            const conf = document.getElementById('confirm-password').value;
+            const timezone = document.getElementById('edit-timezone').value;
+            const gender = document.getElementById('edit-gender-female').classList.contains('selected') ? 'female' : 'male';
+            const avatar = tempAvatarData || document.getElementById('profile-avatar').src;
+
+            if (!username) { alert('Введите имя'); return; }
+            if (!email.includes('@')) { alert('Введите корректный email'); return; }
+            if (pass && pass.length < 6) {
+                alert('Пароль минимум 6 символов');
+                document.getElementById('pass-warn-1').style.display = 'block';
+                return;
+            }
+            if (pass && pass !== conf) {
+                alert('Пароли не совпадают');
+                document.getElementById('pass-warn-2').style.display = 'block';
+                return;
+            }
+
+            localStorage.setItem('userData', JSON.stringify({ username, email, avatar, gender, timezone }));
+            alert('Сохранено!');
+            window.location.href = 'profile.html';
+        }
+    </script>
+</body>
+</html>
